@@ -98,6 +98,23 @@ function calculateATR(ohlc, period = 14) {
   return Number(atr.toFixed(2));
 }
 
+function calculateVolumeStats(volumes) {
+  if (!Array.isArray(volumes) || volumes.length < 20) return null;
+
+  const recent = volumes.slice(-20);
+  const sma20 = recent.reduce((sum, v) => sum + v, 0) / recent.length;
+  const current = volumes[volumes.length - 1];
+
+  const ratio = current / sma20;
+
+  return {
+    current: Math.round(current),
+    sma20: Math.round(sma20),
+    ratio: Number(ratio.toFixed(2)),
+    spike: ratio >= 1.5
+  };
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -125,6 +142,7 @@ export default async function handler(req, res) {
     const globalData = await global.json();
     const chart = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=250`);    
     const chartData = await chart.json();
+    const volumes = chartData.total_volumes.map(v => v[1]);   
     const ohlc = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/ohlc?vs_currency=usd&days=90`);
     const ohlcData = await ohlc.json();
     const dailyCloses = getDailyCloses(chartData.prices);
@@ -136,6 +154,7 @@ export default async function handler(req, res) {
     const macd = calculateMACD(dailyCloses);
     const levels = calculateLevels(dailyCloses);
     const atr14 = calculateATR(ohlcData, 14);
+    const volumeStats = calculateVolumeStats(volumes);
     
     let trend = "Neutral";
 
@@ -181,7 +200,8 @@ technical: {
   trend,
   macd,
   levels,
-  atr14
+  atr14,
+  volumeStats
 },
       
       price: coin.current_price,
