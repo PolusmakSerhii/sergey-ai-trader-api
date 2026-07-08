@@ -137,6 +137,19 @@ function calculateBOS(price, swings) {
 
   return "Inside Range";
 }
+
+function calculateCHOCH(bos, ema20, ema50) {
+  if (bos === "Bullish BOS" && ema20 > ema50) {
+    return "Bullish CHOCH";
+  }
+
+  if (bos === "Bearish BOS" && ema20 < ema50) {
+    return "Bearish CHOCH";
+  }
+
+  return "No CHOCH";
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -179,6 +192,7 @@ export default async function handler(req, res) {
     const volumeStats = calculateVolumeStats(volumes);
     const swingLevels = calculateSwingLevels(dailyCloses);
     const bos = calculateBOS(coin.current_price, swingLevels);
+    const choch = calculateCHOCH(bos, ema20, ema50);
     
     let trend = "Neutral";
 
@@ -227,7 +241,8 @@ technical: {
     atr14,
     volumeStats,
     swingLevels,
-    bos
+    bos,
+    choch,
 },
       
       price: coin.current_price,
