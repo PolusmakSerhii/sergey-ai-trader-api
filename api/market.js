@@ -1,20 +1,43 @@
-function calculateRSI(prices, period = 14) {
+function getDailyCloses(prices) {
+  const days = {};
+
+  for (const item of prices) {
+    const date = new Date(item[0]).toISOString().slice(0, 10);
+    days[date] = item[1];
+  }
+
+  return Object.values(days);
+}
+
+function calculateRSI(closes, period = 14) {
+  if (!closes || closes.length <= period) return null;
+
   let gains = 0;
   let losses = 0;
 
-  for (let i = prices.length - period; i < prices.length; i++) {
-    const diff = prices[i] - prices[i - 1];
-
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
     if (diff >= 0) gains += diff;
     else losses -= diff;
   }
 
-  if (losses === 0) return 100;
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
 
-  const rs = gains / losses;
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    const gain = diff > 0 ? diff : 0;
+    const loss = diff < 0 ? -diff : 0;
+
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+  }
+
+  if (avgLoss === 0) return 100;
+
+  const rs = avgGain / avgLoss;
   return Number((100 - 100 / (1 + rs)).toFixed(2));
 }
-
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -40,11 +63,10 @@ export default async function handler(req, res) {
     
     const global = await fetch("https://api.coingecko.com/api/v3/global");
     const globalData = await global.json();
-    const chart = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=30`);
+    const chart = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=90`);    
     const chartData = await chart.json();
-    const prices = chartData.prices.map(p => p[1]);
-    const rsi14 = calculateRSI(prices, 14);  
-  
+    const dailyCloses = getDailyCloses(chartData.prices);
+    const rsi14 = calculateRSI(dailyCloses, 14);  
     res.status(200).json({
       ok: true,
       source: "CoinGecko Free API",
