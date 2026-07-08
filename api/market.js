@@ -126,6 +126,17 @@ function calculateSwingLevels(closes) {
   };
 }
 
+function calculateBOS(price, swings) {
+  if (!swings) return "Unknown";
+
+  if (price > swings.swingHigh)
+    return "Bullish BOS";
+
+  if (price < swings.swingLow)
+    return "Bearish BOS";
+
+  return "Inside Range";
+}
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -167,6 +178,7 @@ export default async function handler(req, res) {
     const atr14 = calculateATR(ohlcData, 14);
     const volumeStats = calculateVolumeStats(volumes);
     const swingLevels = calculateSwingLevels(dailyCloses);
+    const bos = calculateBOS(coin.current_price, swingLevels);
     
     let trend = "Neutral";
 
@@ -204,17 +216,18 @@ if (ema20 && ema50 && ema100 && ema200) {
       ethDominance: Number(globalData.data.market_cap_percentage.eth.toFixed(2)),
       
 technical: {
-  rsi14,
-  ema20,
-  ema50,
-  ema100,
-  ema200,
-  trend,
-  macd,
-  levels,
-  atr14,
-  volumeStats,
-  swingLevels
+    rsi14,
+    ema20,
+    ema50,
+    ema100,
+    ema200,
+    trend,
+    macd,
+    levels,
+    atr14,
+    volumeStats,
+    swingLevels,
+    bos
 },
       
       price: coin.current_price,
