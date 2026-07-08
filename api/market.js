@@ -82,6 +82,22 @@ function calculateLevels(closes) {
   };
 }
 
+function calculateATR(ohlc, period = 14) {
+  if (!Array.isArray(ohlc) || ohlc.length <= period) return null;
+
+  const recent = ohlc.slice(-period);
+
+  const ranges = recent.map(candle => {
+    const high = candle[2];
+    const low = candle[3];
+    return high - low;
+  });
+
+  const atr = ranges.reduce((sum, value) => sum + value, 0) / period;
+
+  return Number(atr.toFixed(2));
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -109,6 +125,8 @@ export default async function handler(req, res) {
     const globalData = await global.json();
     const chart = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=250`);    
     const chartData = await chart.json();
+    const ohlc = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/ohlc?vs_currency=usd&days=90`);
+    const ohlcData = await ohlc.json();
     const dailyCloses = getDailyCloses(chartData.prices);
     const rsi14 = calculateRSI(dailyCloses, 14);
     const ema20 = calculateEMA(dailyCloses, 20);
@@ -117,8 +135,9 @@ export default async function handler(req, res) {
     const ema200 = calculateEMA(dailyCloses, 200);
     const macd = calculateMACD(dailyCloses);
     const levels = calculateLevels(dailyCloses);
+    const atr14 = calculateATR(ohlcData, 14);
     
-   let trend = "Neutral";
+    let trend = "Neutral";
 
 if (ema20 && ema50 && ema100 && ema200) {
   if (
@@ -161,8 +180,10 @@ technical: {
   ema200,
   trend,
   macd,
-  levels
-},     
+  levels,
+  atr14
+},
+      
       price: coin.current_price,
       change24h: coin.price_change_percentage_24h,
       high24h: coin.high_24h,
