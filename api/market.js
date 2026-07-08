@@ -1,4 +1,6 @@
 function getDailyCloses(prices) {
+  if (!Array.isArray(prices)) return [];
+
   const days = {};
 
   for (const item of prices) {
@@ -85,13 +87,25 @@ export default async function handler(req, res) {
     const ema100 = calculateEMA(dailyCloses, 100);
     const ema200 = calculateEMA(dailyCloses, 200);
 
-    let trend = "Neutral";
+   let trend = "Neutral";
 
-    if (coin.current_price > ema20 && ema20 > ema50 && ema50 > ema100 && ema100 > ema200) {
-  trend = "Strong Bullish";
-} else if (coin.current_price < ema20 && ema20 < ema50 && ema50 < ema100 && ema100 < ema200) {
-  trend = "Strong Bearish";
-}    
+if (ema20 && ema50 && ema100 && ema200) {
+  if (
+    coin.current_price > ema20 &&
+    ema20 > ema50 &&
+    ema50 > ema100 &&
+    ema100 > ema200
+  ) {
+    trend = "Strong Bullish";
+  } else if (
+    coin.current_price < ema20 &&
+    ema20 < ema50 &&
+    ema50 < ema100 &&
+    ema100 < ema200
+  ) {
+    trend = "Strong Bearish";
+  }
+}  
     res.status(200).json({
       ok: true,
       source: "CoinGecko Free API",
