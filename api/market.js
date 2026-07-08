@@ -115,6 +115,17 @@ function calculateVolumeStats(volumes) {
   };
 }
 
+function calculateSwingLevels(closes) {
+  if (!Array.isArray(closes) || closes.length < 10) return null;
+
+  const recent = closes.slice(-30);
+
+  return {
+    swingHigh: Number(Math.max(...recent).toFixed(2)),
+    swingLow: Number(Math.min(...recent).toFixed(2))
+  };
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -155,6 +166,7 @@ export default async function handler(req, res) {
     const levels = calculateLevels(dailyCloses);
     const atr14 = calculateATR(ohlcData, 14);
     const volumeStats = calculateVolumeStats(volumes);
+    const swingLevels = calculateSwingLevels(dailyCloses);
     
     let trend = "Neutral";
 
@@ -201,7 +213,8 @@ technical: {
   macd,
   levels,
   atr14,
-  volumeStats
+  volumeStats,
+  swingLevels
 },
       
       price: coin.current_price,
