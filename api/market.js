@@ -19,7 +19,10 @@ export default async function handler(req, res) {
     const data = await response.json();
     const coin = data[0];
     const fg = await fetch("https://api.alternative.me/fng/?limit=1");
-    const fgData = await fg.json();    
+    const fgData = await fg.json(); 
+    
+    const global = await fetch("https://api.coingecko.com/api/v3/global");
+    const globalData = await global.json();
     res.status(200).json({
       ok: true,
       source: "CoinGecko Free API",
@@ -29,9 +32,12 @@ export default async function handler(req, res) {
       rank: coin.market_cap_rank,
       
       fearGreed: {
-  value: fgData.data[0].value,
-  classification: fgData.data[0].value_classification
-},   
+          value: fgData.data[0].value,
+          classification: fgData.data[0].value_classification
+},  
+      
+      btcDominance: Number(globalData.data.market_cap_percentage.btc.toFixed(2)),
+      ethDominance: Number(globalData.data.market_cap_percentage.eth.toFixed(2)),
       
       price: coin.current_price,
       change24h: coin.price_change_percentage_24h,
