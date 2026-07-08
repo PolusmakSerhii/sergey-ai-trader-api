@@ -38,6 +38,19 @@ function calculateRSI(closes, period = 14) {
   const rs = avgGain / avgLoss;
   return Number((100 - 100 / (1 + rs)).toFixed(2));
 }
+function calculateEMA(closes, period) {
+  if (!closes || closes.length < period) return null;
+
+  const k = 2 / (period + 1);
+
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+
+  for (let i = period; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
+  }
+
+  return Number(ema.toFixed(2));
+}
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -66,7 +79,9 @@ export default async function handler(req, res) {
     const chart = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=90`);    
     const chartData = await chart.json();
     const dailyCloses = getDailyCloses(chartData.prices);
-    const rsi14 = calculateRSI(dailyCloses, 14);  
+    const rsi14 = calculateRSI(dailyCloses, 14);
+    const ema20 = calculateEMA(dailyCloses, 20);
+    const ema50 = calculateEMA(dailyCloses, 50);
     res.status(200).json({
       ok: true,
       source: "CoinGecko Free API",
@@ -83,9 +98,10 @@ export default async function handler(req, res) {
       btcDominance: Number(globalData.data.market_cap_percentage.btc.toFixed(2)),
       ethDominance: Number(globalData.data.market_cap_percentage.eth.toFixed(2)),
       technical: {
-        rsi14
-      },
-      
+          rsi14,
+          ema20,
+          ema50
+      },      
       price: coin.current_price,
       change24h: coin.price_change_percentage_24h,
       high24h: coin.high_24h,
