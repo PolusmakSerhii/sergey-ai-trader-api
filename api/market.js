@@ -1,21 +1,38 @@
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
+  const map = {
+    SOLUSDT: "solana",
+    BTCUSDT: "bitcoin",
+    ETHUSDT: "ethereum",
+    BNBUSDT: "binancecoin",
+    RNDRUSDT: "render-token",
+    TAOUSDT: "bittensor"
+  };
+
+  const id = map[symbol] || "solana";
+
   try {
-    const url =
-      "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true";
+    const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${id}&price_change_percentage=24h`;
 
     const response = await fetch(url);
     const data = await response.json();
+    const coin = data[0];
 
     res.status(200).json({
       ok: true,
       source: "CoinGecko Free API",
       symbol,
-      asset: "SOL",
-      price: data.solana.usd,
-      change24h: data.solana.usd_24h_change,
-      volume24h: data.solana.usd_24h_vol,
+      coin: coin.name,
+      asset: coin.symbol.toUpperCase(),
+      rank: coin.market_cap_rank,
+      price: coin.current_price,
+      change24h: coin.price_change_percentage_24h,
+      high24h: coin.high_24h,
+      low24h: coin.low_24h,
+      volume24h: coin.total_volume,
+      marketCap: coin.market_cap,
+      circulatingSupply: coin.circulating_supply,
       time: new Date().toISOString()
     });
   } catch (error) {
