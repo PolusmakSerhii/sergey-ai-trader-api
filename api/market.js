@@ -68,6 +68,19 @@ function calculateMACD(closes) {
     macd
   };
 }
+function calculateLevels(closes) {
+  if (!closes || closes.length < 20) return null;
+
+  const recent = closes.slice(-20);
+
+  const support = Math.min(...recent);
+  const resistance = Math.max(...recent);
+
+  return {
+    support: Number(support.toFixed(2)),
+    resistance: Number(resistance.toFixed(2))
+  };
+}
 
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
@@ -103,6 +116,7 @@ export default async function handler(req, res) {
     const ema100 = calculateEMA(dailyCloses, 100);
     const ema200 = calculateEMA(dailyCloses, 200);
     const macd = calculateMACD(dailyCloses);
+    const levels = calculateLevels(dailyCloses);
     
    let trend = "Neutral";
 
@@ -138,6 +152,7 @@ if (ema20 && ema50 && ema100 && ema200) {
       
       btcDominance: Number(globalData.data.market_cap_percentage.btc.toFixed(2)),
       ethDominance: Number(globalData.data.market_cap_percentage.eth.toFixed(2)),
+      
 technical: {
   rsi14,
   ema20,
@@ -145,8 +160,9 @@ technical: {
   ema100,
   ema200,
   trend,
-  macd
-},
+  macd,
+  levels
+},     
       price: coin.current_price,
       change24h: coin.price_change_percentage_24h,
       high24h: coin.high_24h,
