@@ -9,7 +9,7 @@ export default async function handler(req, res) {
     RNDRUSDT: "render-token",
     TAOUSDT: "bittensor"
   };
-
+  
   const id = map[symbol] || "solana";
 
   try {
