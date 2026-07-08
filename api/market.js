@@ -1,3 +1,20 @@
+function calculateRSI(prices, period = 14) {
+  let gains = 0;
+  let losses = 0;
+
+  for (let i = prices.length - period; i < prices.length; i++) {
+    const diff = prices[i] - prices[i - 1];
+
+    if (diff >= 0) gains += diff;
+    else losses -= diff;
+  }
+
+  if (losses === 0) return 100;
+
+  const rs = gains / losses;
+  return Number((100 - 100 / (1 + rs)).toFixed(2));
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -23,6 +40,11 @@ export default async function handler(req, res) {
     
     const global = await fetch("https://api.coingecko.com/api/v3/global");
     const globalData = await global.json();
+    const chart = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=30`);
+    const chartData = await chart.json();
+    const prices = chartData.prices.map(p => p[1]);
+    const rsi14 = calculateRSI(prices, 14);  
+  
     res.status(200).json({
       ok: true,
       source: "CoinGecko Free API",
@@ -38,6 +60,9 @@ export default async function handler(req, res) {
       
       btcDominance: Number(globalData.data.market_cap_percentage.btc.toFixed(2)),
       ethDominance: Number(globalData.data.market_cap_percentage.eth.toFixed(2)),
+      technical: {
+        rsi14
+      },
       
       price: coin.current_price,
       change24h: coin.price_change_percentage_24h,
