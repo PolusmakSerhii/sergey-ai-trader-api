@@ -18,7 +18,8 @@ export default async function handler(req, res) {
     const response = await fetch(url);
     const data = await response.json();
     const coin = data[0];
-
+    const fg = await fetch("https://api.alternative.me/fng/?limit=1");
+    const fgData = await fg.json();    
     res.status(200).json({
       ok: true,
       source: "CoinGecko Free API",
@@ -26,6 +27,12 @@ export default async function handler(req, res) {
       coin: coin.name,
       asset: coin.symbol.toUpperCase(),
       rank: coin.market_cap_rank,
+      
+      fearGreed: {
+  value: fgData.data[0].value,
+  classification: fgData.data[0].value_classification
+},   
+      
       price: coin.current_price,
       change24h: coin.price_change_percentage_24h,
       high24h: coin.high_24h,
