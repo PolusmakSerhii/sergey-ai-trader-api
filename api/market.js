@@ -1,58 +1,21 @@
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
-  const interval = req.query.interval || "60";
-  const limit = req.query.limit || "100";
-  const base = "https://api.bybit.com";
-
-  async function getJson(url) {
-    const response = await fetch(url);
-    const text = await response.text();
-
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new Error("Источник вернул не JSON: " + text.slice(0, 120));
-    }
-
-    if (!response.ok || data.retCode !== 0) {
-      throw new Error(JSON.stringify(data));
-    }
-
-    return data;
-  }
 
   try {
-    const ticker = await getJson(`${base}/v5/market/tickers?category=linear&symbol=${symbol}`);
-    const orderbook = await getJson(`${base}/v5/market/orderbook?category=linear&symbol=${symbol}&limit=25`);
-    const klines = await getJson(`${base}/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval}&limit=${limit}`);
+    const url =
+      "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true";
 
-    const t = ticker.result.list[0];
+    const response = await fetch(url);
+    const data = await response.json();
 
     res.status(200).json({
       ok: true,
-      source: "Bybit Futures public API",
+      source: "CoinGecko Free API",
       symbol,
-      price: Number(t.lastPrice),
-      fundingRate: Number(t.fundingRate),
-      openInterest: Number(t.openInterest),
-      high24h: Number(t.highPrice24h),
-      low24h: Number(t.lowPrice24h),
-      volume24h: Number(t.volume24h),
-      turnover24h: Number(t.turnover24h),
-      orderBook: {
-        bids: orderbook.result.b,
-        asks: orderbook.result.a
-      },
-      candles: klines.result.list.map(k => ({
-        startTime: Number(k[0]),
-        open: Number(k[1]),
-        high: Number(k[2]),
-        low: Number(k[3]),
-        close: Number(k[4]),
-        volume: Number(k[5]),
-        turnover: Number(k[6])
-      })),
+      asset: "SOL",
+      price: data.solana.usd,
+      change24h: data.solana.usd_24h_change,
+      volume24h: data.solana.usd_24h_vol,
       time: new Date().toISOString()
     });
   } catch (error) {
