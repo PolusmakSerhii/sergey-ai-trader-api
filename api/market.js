@@ -150,6 +150,20 @@ function calculateCHOCH(bos, ema20, ema50) {
   return "No CHOCH";
 }
 
+function calculateLiquiditySweep(price, swings) {
+  if (!swings) return "Unknown";
+
+  if (price > swings.swingHigh * 0.998 && price < swings.swingHigh) {
+    return "Above High Liquidity";
+  }
+
+  if (price < swings.swingLow * 1.002 && price > swings.swingLow) {
+    return "Below Low Liquidity";
+  }
+
+  return "No Sweep";
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -193,6 +207,10 @@ export default async function handler(req, res) {
     const swingLevels = calculateSwingLevels(dailyCloses);
     const bos = calculateBOS(coin.current_price, swingLevels);
     const choch = calculateCHOCH(bos, ema20, ema50);
+    const liquiditySweep = calculateLiquiditySweep(
+    coin.current_price,
+    swingLevels
+);
     
     let trend = "Neutral";
 
@@ -243,6 +261,7 @@ technical: {
     swingLevels,
     bos,
     choch,
+    liquiditySweep,
 },
       
       price: coin.current_price,
