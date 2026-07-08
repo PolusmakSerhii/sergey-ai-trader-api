@@ -53,6 +53,22 @@ function calculateEMA(closes, period) {
 
   return Number(ema.toFixed(2));
 }
+
+function calculateMACD(closes) {
+  if (!closes || closes.length < 35) return null;
+
+  const ema12 = calculateEMA(closes, 12);
+  const ema26 = calculateEMA(closes, 26);
+
+  if (!ema12 || !ema26) return null;
+
+  const macd = Number((ema12 - ema26).toFixed(4));
+
+  return {
+    macd
+  };
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -86,7 +102,8 @@ export default async function handler(req, res) {
     const ema50 = calculateEMA(dailyCloses, 50);
     const ema100 = calculateEMA(dailyCloses, 100);
     const ema200 = calculateEMA(dailyCloses, 200);
-
+    const macd = calculateMACD(dailyCloses);
+    
    let trend = "Neutral";
 
 if (ema20 && ema50 && ema100 && ema200) {
@@ -127,7 +144,8 @@ technical: {
   ema50,
   ema100,
   ema200,
-  trend
+  trend,
+  macd
 },
       price: coin.current_price,
       change24h: coin.price_change_percentage_24h,
