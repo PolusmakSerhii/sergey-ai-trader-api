@@ -289,6 +289,38 @@ function calculateEqualHighLow(ohlc) {
   };
 }
 
+function calculateImbalance(ohlc) {
+  if (!Array.isArray(ohlc) || ohlc.length < 20) return null;
+
+  const recent = ohlc.slice(-20);
+  const last = recent[recent.length - 1];
+
+  const open = last[1];
+  const high = last[2];
+  const low = last[3];
+  const close = last[4];
+
+  const body = Math.abs(close - open);
+  const range = high - low;
+  const bodyRatio = range === 0 ? 0 : body / range;
+
+  let type = "No Imbalance";
+
+  if (bodyRatio > 0.6 && close > open) {
+    type = "Bullish Imbalance";
+  }
+
+  if (bodyRatio > 0.6 && close < open) {
+    type = "Bearish Imbalance";
+  }
+
+  return {
+    type,
+    bodyRatio: Number(bodyRatio.toFixed(2)),
+    candleRange: Number(range.toFixed(2))
+  };
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -342,8 +374,8 @@ export default async function handler(req, res) {
       coin.current_price,
       swingLevels
     );    
-   const equalHighLow = calculateEqualHighLow(ohlcData);  
-    
+    const equalHighLow = calculateEqualHighLow(ohlcData);  
+    const imbalance = calculateImbalance(ohlcData);    
     let trend = "Neutral";
 
 if (ema20 && ema50 && ema100 && ema200) {
@@ -398,6 +430,7 @@ technical: {
     orderBlocks,
     premiumDiscount,
     equalHighLow,
+    imbalance,
 },
       
       price: coin.current_price,
