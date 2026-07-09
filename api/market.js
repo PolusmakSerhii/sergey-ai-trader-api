@@ -558,31 +558,29 @@ function calculateRecommendation(data) {
     action = "Wait";
     risk = "Medium";
   }
+let description = `Signal: ${action}. Probability score: ${probability.score}/100. Smart Money score: ${smartMoney.score}/100. Better wait for stronger confirmation.`;
 
-  let description = "Mixed signals. Better wait for confirmation.";
+if (action === "Buy") {
+  description = `Buy setup detected. Probability score: ${probability.score}/100. Smart Money score: ${smartMoney.score}/100. Bullish conditions are present, but confirmation is still recommended.`;
+}
 
-  if (action === "Buy") {
-    description = "Market conditions show bullish signs. Buying may be considered, but confirmation is still recommended.";
-  }
+if (action === "Strong Buy") {
+  description = `Strong Buy setup detected. Probability and Smart Money signals are aligned. Confidence: ${confidence}/100.`;
+}
 
-  if (action === "Strong Buy") {
-    description = "Strong bullish alignment between probability and smart money signals.";
-  }
+if (action === "Sell") {
+  description = `Sell setup detected. Probability score: ${probability.score}/100. Smart Money score: ${smartMoney.score}/100. Bearish conditions are present, but confirmation is still recommended.`;
+}
 
-  if (action === "Sell") {
-    description = "Market conditions show bearish signs. Selling may be considered, but confirmation is still recommended.";
-  }
-
-  if (action === "Strong Sell") {
-    description = "Strong bearish alignment between probability and smart money signals.";
-  }
-
+if (action === "Strong Sell") {
+  description = `Strong Sell setup detected. Probability and Smart Money signals are aligned. Confidence: ${confidence}/100.`;
+}
+  
   return {
-    action,
-    confidence,
-    risk,
-    description,
-    tradePlan
+      action,
+      confidence,
+      risk,
+      description
   };
 }
 
