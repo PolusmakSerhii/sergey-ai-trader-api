@@ -257,6 +257,38 @@ function calculatePremiumDiscount(price, swings) {
     zone
   };
 }
+
+function calculateEqualHighLow(ohlc) {
+  if (!Array.isArray(ohlc) || ohlc.length < 10) return null;
+
+  const recent = ohlc.slice(-30);
+  const tolerance = 0.003;
+
+  const equalHighs = [];
+  const equalLows = [];
+
+  for (let i = 1; i < recent.length; i++) {
+    const prevHigh = recent[i - 1][2];
+    const currHigh = recent[i][2];
+
+    const prevLow = recent[i - 1][3];
+    const currLow = recent[i][3];
+
+    if (Math.abs(prevHigh - currHigh) / prevHigh <= tolerance) {
+      equalHighs.push(Number(currHigh.toFixed(2)));
+    }
+
+    if (Math.abs(prevLow - currLow) / prevLow <= tolerance) {
+      equalLows.push(Number(currLow.toFixed(2)));
+    }
+  }
+
+  return {
+    equalHighs: equalHighs.slice(-3),
+    equalLows: equalLows.slice(-3)
+  };
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -310,6 +342,7 @@ export default async function handler(req, res) {
       coin.current_price,
       swingLevels
     );    
+   const equalHighLow = calculateEqualHighLow(ohlcData);  
     
     let trend = "Neutral";
 
@@ -364,6 +397,7 @@ technical: {
     fvg,
     orderBlocks,
     premiumDiscount,
+    equaHighLow,
 },
       
       price: coin.current_price,
