@@ -397,7 +397,7 @@ technical: {
     fvg,
     orderBlocks,
     premiumDiscount,
-    equaHighLow,
+    equalHighLow,
 },
       
       price: coin.current_price,
