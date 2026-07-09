@@ -529,6 +529,63 @@ function calculateSmartMoneyScore(data) {
   };
 }
 
+function calculateRecommendation(data) {
+  const probability = data.probability;
+  const smartMoney = data.smartMoney;
+  const tradePlan = data.tradePlan;
+
+  if (!probability || !smartMoney || !tradePlan) return null;
+
+  let action = "Wait";
+  let risk = "Medium";
+  let confidence = Math.round((probability.score + smartMoney.score) / 2);
+
+  if (probability.signal === "Strong Buy" && smartMoney.rating === "Bullish") {
+    action = "Strong Buy";
+    risk = "Low";
+  } else if (probability.signal === "Buy" || smartMoney.rating === "Bullish") {
+    action = "Buy";
+    risk = "Medium";
+  } else if (probability.signal === "Strong Sell" && smartMoney.rating === "Bearish") {
+    action = "Strong Sell";
+    risk = "Low";
+  } else if (probability.signal === "Sell" || smartMoney.rating === "Bearish") {
+    action = "Sell";
+    risk = "Medium";
+  }
+
+  if (probability.signal === "Neutral" && smartMoney.rating === "Neutral") {
+    action = "Wait";
+    risk = "Medium";
+  }
+
+  let description = "Mixed signals. Better wait for confirmation.";
+
+  if (action === "Buy") {
+    description = "Market conditions show bullish signs. Buying may be considered, but confirmation is still recommended.";
+  }
+
+  if (action === "Strong Buy") {
+    description = "Strong bullish alignment between probability and smart money signals.";
+  }
+
+  if (action === "Sell") {
+    description = "Market conditions show bearish signs. Selling may be considered, but confirmation is still recommended.";
+  }
+
+  if (action === "Strong Sell") {
+    description = "Strong bearish alignment between probability and smart money signals.";
+  }
+
+  return {
+    action,
+    confidence,
+    risk,
+    description,
+    tradePlan
+  };
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -634,6 +691,11 @@ if (ema20 && ema50 && ema100 && ema200) {
    choch,
    mss
  }); 
+const recommendation = calculateRecommendation({
+  probability,
+  smartMoney,
+  tradePlan
+});
     
     res.status(200).json({
       ok: true,
@@ -674,7 +736,8 @@ technical: {
     mss,
     probability,
     tradePlan,
-    smartMoney
+    smartMoney,
+    recommendation
 },
       
       price: coin.current_price,
