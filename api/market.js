@@ -163,7 +163,39 @@ function calculateLiquiditySweep(price, swings) {
 
   return "No Sweep";
 }
+function calculateFVG(ohlc) {
+  if (!Array.isArray(ohlc) || ohlc.length < 3) return null;
 
+  const gaps = [];
+
+  for (let i = 2; i < ohlc.length; i++) {
+    const candle1 = ohlc[i - 2];
+    const candle3 = ohlc[i];
+
+    const candle1High = candle1[2];
+    const candle1Low = candle1[3];
+    const candle3High = candle3[2];
+    const candle3Low = candle3[3];
+
+    if (candle1High < candle3Low) {
+      gaps.push({
+        type: "Bullish FVG",
+        from: Number(candle1High.toFixed(2)),
+        to: Number(candle3Low.toFixed(2))
+      });
+    }
+
+    if (candle1Low > candle3High) {
+      gaps.push({
+        type: "Bearish FVG",
+        from: Number(candle3High.toFixed(2)),
+        to: Number(candle1Low.toFixed(2))
+      });
+    }
+  }
+
+  return gaps.slice(-3);
+}
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -211,6 +243,7 @@ export default async function handler(req, res) {
     coin.current_price,
     swingLevels
 );
+    const fvg = calculateFVG(ohlcData);
     
     let trend = "Neutral";
 
@@ -262,6 +295,7 @@ technical: {
     bos,
     choch,
     liquiditySweep,
+    fvg,
 },
       
       price: coin.current_price,
