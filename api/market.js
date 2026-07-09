@@ -320,6 +320,27 @@ function calculateImbalance(ohlc) {
     candleRange: Number(range.toFixed(2))
   };
 }
+function calculateMSS(price, swings, bos, choch) {
+  if (!swings) return null;
+
+  let mss = "No MSS";
+
+  if (
+    price > swings.swingHigh &&
+    (bos === "Bullish BOS" || choch === "Bullish CHOCH")
+  ) {
+    mss = "Bullish MSS";
+  }
+
+  if (
+    price < swings.swingLow &&
+    (bos === "Bearish BOS" || choch === "Bearish CHOCH")
+  ) {
+    mss = "Bearish MSS";
+  }
+
+  return mss;
+}
 
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
@@ -375,7 +396,14 @@ export default async function handler(req, res) {
       swingLevels
     );    
     const equalHighLow = calculateEqualHighLow(ohlcData);  
-    const imbalance = calculateImbalance(ohlcData);    
+    const imbalance = calculateImbalance(ohlcData); 
+    const mss = calculateMSS(
+      coin.current_price,
+      swingLevels,
+      bos,
+      choch
+    );    
+    
     let trend = "Neutral";
 
 if (ema20 && ema50 && ema100 && ema200) {
@@ -431,6 +459,7 @@ technical: {
     premiumDiscount,
     equalHighLow,
     imbalance,
+    mss,
 },
       
       price: coin.current_price,
