@@ -691,8 +691,7 @@ if (ema20 && ema50 && ema100 && ema200) {
  }); 
 const recommendation = calculateRecommendation({
   probability,
-  smartMoney,
-  tradePlan
+  smartMoney
 });
     
     res.status(200).json({
