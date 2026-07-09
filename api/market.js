@@ -422,6 +422,47 @@ function calculateProbabilityScore(data) {
   };
 }
 
+function calculateTradePlan(price, data) {
+  const atr = data.atr14 || 0;
+  const levels = data.levels;
+  const probability = data.probability;
+
+  if (!price || !levels || !probability) return null;
+
+  let direction = "Wait";
+  let entry = price;
+  let stopLoss = null;
+  let takeProfit = null;
+
+  if (probability.signal === "Strong Buy" || probability.signal === "Buy") {
+    direction = "Long";
+    stopLoss = price - atr;
+    takeProfit = levels.resistance;
+  }
+
+  if (probability.signal === "Strong Sell" || probability.signal === "Sell") {
+    direction = "Short";
+    stopLoss = price + atr;
+    takeProfit = levels.support;
+  }
+
+  let riskReward = null;
+
+  if (stopLoss && takeProfit) {
+    const risk = Math.abs(entry - stopLoss);
+    const reward = Math.abs(takeProfit - entry);
+    riskReward = risk === 0 ? null : Number((reward / risk).toFixed(2));
+  }
+
+  return {
+    direction,
+    entry: Number(entry.toFixed(2)),
+    stopLoss: stopLoss ? Number(stopLoss.toFixed(2)) : null,
+    takeProfit: takeProfit ? Number(takeProfit.toFixed(2)) : null,
+    riskReward
+  };
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -513,6 +554,11 @@ if (ema20 && ema50 && ema100 && ema200) {
     mss,
     imbalance
 });   
+  const tradePlan = calculateTradePlan(coin.current_price, {
+    atr14,
+    levels,
+    probability
+  });    
     
     res.status(200).json({
       ok: true,
@@ -551,7 +597,8 @@ technical: {
     equalHighLow,
     imbalance,
     mss,
-    probability
+    probability,
+    tradePlan
 },
       
       price: coin.current_price,
