@@ -462,6 +462,72 @@ function calculateTradePlan(price, data) {
     riskReward
   };
 }
+function calculateSmartMoneyScore(data) {
+  let score = 50;
+  const reasons = [];
+
+  if (data.premiumDiscount?.zone === "Discount") {
+    score += 12;
+    reasons.push("Price in discount zone");
+  }
+
+  if (data.premiumDiscount?.zone === "Premium") {
+    score -= 12;
+    reasons.push("Price in premium zone");
+  }
+
+  if (Array.isArray(data.fvg) && data.fvg.some(g => g.type === "Bullish FVG")) {
+    score += 10;
+    reasons.push("Bullish FVG detected");
+  }
+
+  if (Array.isArray(data.fvg) && data.fvg.some(g => g.type === "Bearish FVG")) {
+    score -= 10;
+    reasons.push("Bearish FVG detected");
+  }
+
+  if (Array.isArray(data.orderBlocks) && data.orderBlocks.some(b => b.type === "Bullish Order Block")) {
+    score += 10;
+    reasons.push("Bullish order block detected");
+  }
+
+  if (Array.isArray(data.orderBlocks) && data.orderBlocks.some(b => b.type === "Bearish Order Block")) {
+    score -= 10;
+    reasons.push("Bearish order block detected");
+  }
+
+  if (data.liquiditySweep === "Below Low Liquidity") {
+    score += 10;
+    reasons.push("Sell-side liquidity sweep");
+  }
+
+  if (data.liquiditySweep === "Above High Liquidity") {
+    score -= 10;
+    reasons.push("Buy-side liquidity sweep");
+  }
+
+  if (data.bos === "Bullish BOS" || data.choch === "Bullish CHOCH" || data.mss === "Bullish MSS") {
+    score += 12;
+    reasons.push("Bullish structure");
+  }
+
+  if (data.bos === "Bearish BOS" || data.choch === "Bearish CHOCH" || data.mss === "Bearish MSS") {
+    score -= 12;
+    reasons.push("Bearish structure");
+  }
+
+  score = Math.max(0, Math.min(100, score));
+
+  let rating = "Neutral";
+  if (score >= 75) rating = "Bullish";
+  if (score <= 25) rating = "Bearish";
+
+  return {
+    score,
+    rating,
+    reasons
+  };
+}
 
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
@@ -559,6 +625,15 @@ if (ema20 && ema50 && ema100 && ema200) {
     levels,
     probability
   });    
+ const smartMoney = calculateSmartMoneyScore({
+   premiumDiscount,
+   fvg,
+   orderBlocks,
+   liquiditySweep,
+   bos,
+   choch,
+   mss
+ }); 
     
     res.status(200).json({
       ok: true,
@@ -598,7 +673,8 @@ technical: {
     imbalance,
     mss,
     probability,
-    tradePlan
+    tradePlan,
+    smartMoney
 },
       
       price: coin.current_price,
