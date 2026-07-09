@@ -196,6 +196,43 @@ function calculateFVG(ohlc) {
 
   return gaps.slice(-3);
 }
+function calculateOrderBlocks(ohlc) {
+  if (!Array.isArray(ohlc) || ohlc.length < 5) return null;
+
+  const blocks = [];
+
+  for (let i = 1; i < ohlc.length - 1; i++) {
+    const prev = ohlc[i - 1];
+    const current = ohlc[i];
+    const next = ohlc[i + 1];
+
+    const currentOpen = current[1];
+    const currentHigh = current[2];
+    const currentLow = current[3];
+    const currentClose = current[4];
+
+    const nextClose = next[4];
+
+    if (currentClose < currentOpen && nextClose > currentHigh) {
+      blocks.push({
+        type: "Bullish Order Block",
+        from: Number(currentLow.toFixed(2)),
+        to: Number(currentHigh.toFixed(2))
+      });
+    }
+
+    if (currentClose > currentOpen && nextClose < currentLow) {
+      blocks.push({
+        type: "Bearish Order Block",
+        from: Number(currentLow.toFixed(2)),
+        to: Number(currentHigh.toFixed(2))
+      });
+    }
+  }
+
+  return blocks.slice(-3);
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -244,6 +281,7 @@ export default async function handler(req, res) {
     swingLevels
 );
     const fvg = calculateFVG(ohlcData);
+    const orderBlocks = calculateOrderBlocks(ohlcData);
     
     let trend = "Neutral";
 
@@ -296,6 +334,7 @@ technical: {
     choch,
     liquiditySweep,
     fvg,
+    orderBlocks,
 },
       
       price: coin.current_price,
