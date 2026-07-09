@@ -610,6 +610,7 @@ export default async function handler(req, res) {
     
     const global = await fetch("https://api.coingecko.com/api/v3/global");
     const globalData = await global.json();
+    const marketCapPercentage = globalData?.data?.market_cap_percentage || {};
     const chart = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=250`);    
     const chartData = await chart.json();
     const volumes = Array.isArray(chartData.total_volumes)
@@ -708,10 +709,17 @@ const recommendation = calculateRecommendation({
       fearGreed: {
           value: fgData.data[0].value,
           classification: fgData.data[0].value_classification
-},  
+}, 
       
-      btcDominance: Number(globalData.data.market_cap_percentage.btc.toFixed(2)),
-      ethDominance: Number(globalData.data.market_cap_percentage.eth.toFixed(2)),
+btcDominance:
+  typeof marketCapPercentage.btc === "number"
+    ? Number(marketCapPercentage.btc.toFixed(2))
+    : null,
+
+ethDominance:
+  typeof marketCapPercentage.eth === "number"
+    ? Number(marketCapPercentage.eth.toFixed(2))
+    : null,
       
 technical: {
     rsi14,
