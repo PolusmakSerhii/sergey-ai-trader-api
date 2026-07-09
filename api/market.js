@@ -342,6 +342,86 @@ function calculateMSS(price, swings, bos, choch) {
   return mss;
 }
 
+function calculateProbabilityScore(data) {
+  let score = 50;
+  const reasons = [];
+
+  if (data.trend === "Strong Bullish") {
+    score += 15;
+    reasons.push("Strong bullish trend");
+  }
+
+  if (data.trend === "Strong Bearish") {
+    score -= 15;
+    reasons.push("Strong bearish trend");
+  }
+
+  if (data.rsi14 && data.rsi14 < 30) {
+    score += 10;
+    reasons.push("RSI oversold");
+  }
+
+  if (data.rsi14 && data.rsi14 > 70) {
+    score -= 10;
+    reasons.push("RSI overbought");
+  }
+
+  if (data.macd && data.macd.macd > 0) {
+    score += 8;
+    reasons.push("MACD bullish");
+  }
+
+  if (data.macd && data.macd.macd < 0) {
+    score -= 8;
+    reasons.push("MACD bearish");
+  }
+
+  if (data.premiumDiscount?.zone === "Discount") {
+    score += 10;
+    reasons.push("Price in discount zone");
+  }
+
+  if (data.premiumDiscount?.zone === "Premium") {
+    score -= 10;
+    reasons.push("Price in premium zone");
+  }
+
+  if (data.bos === "Bullish BOS" || data.choch === "Bullish CHOCH" || data.mss === "Bullish MSS") {
+    score += 12;
+    reasons.push("Bullish market structure");
+  }
+
+  if (data.bos === "Bearish BOS" || data.choch === "Bearish CHOCH" || data.mss === "Bearish MSS") {
+    score -= 12;
+    reasons.push("Bearish market structure");
+  }
+
+  if (data.imbalance?.type === "Bullish Imbalance") {
+    score += 8;
+    reasons.push("Bullish imbalance");
+  }
+
+  if (data.imbalance?.type === "Bearish Imbalance") {
+    score -= 8;
+    reasons.push("Bearish imbalance");
+  }
+
+  score = Math.max(0, Math.min(100, score));
+
+  let signal = "Neutral";
+
+  if (score >= 80) signal = "Strong Buy";
+  else if (score >= 65) signal = "Buy";
+  else if (score <= 20) signal = "Strong Sell";
+  else if (score <= 35) signal = "Sell";
+
+  return {
+    score,
+    signal,
+    reasons
+  };
+}
+
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -423,6 +503,17 @@ if (ema20 && ema50 && ema100 && ema200) {
     trend = "Strong Bearish";
   }
 }  
+  const probability = calculateProbabilityScore({
+    trend,
+    rsi14,
+    macd,
+    premiumDiscount,
+    bos,
+    choch,
+    mss,
+    imbalance
+});   
+    
     res.status(200).json({
       ok: true,
       source: "CoinGecko Free API",
@@ -460,6 +551,7 @@ technical: {
     equalHighLow,
     imbalance,
     mss,
+    probability
 },
       
       price: coin.current_price,
