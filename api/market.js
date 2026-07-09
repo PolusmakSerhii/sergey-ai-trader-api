@@ -233,6 +233,30 @@ function calculateOrderBlocks(ohlc) {
   return blocks.slice(-3);
 }
 
+function calculatePremiumDiscount(price, swings) {
+  if (!swings) return null;
+
+  const high = swings.swingHigh;
+  const low = swings.swingLow;
+  const equilibrium = (high + low) / 2;
+
+  let zone = "Equilibrium";
+
+  if (price > equilibrium) {
+    zone = "Premium";
+  }
+
+  if (price < equilibrium) {
+    zone = "Discount";
+  }
+
+  return {
+    high: Number(high.toFixed(2)),
+    low: Number(low.toFixed(2)),
+    equilibrium: Number(equilibrium.toFixed(2)),
+    zone
+  };
+}
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
@@ -282,6 +306,10 @@ export default async function handler(req, res) {
 );
     const fvg = calculateFVG(ohlcData);
     const orderBlocks = calculateOrderBlocks(ohlcData);
+    const premiumDiscount = calculatePremiumDiscount(
+      coin.current_price,
+      swingLevels
+    );    
     
     let trend = "Neutral";
 
@@ -335,6 +363,7 @@ technical: {
     liquiditySweep,
     fvg,
     orderBlocks,
+    premiumDiscount,
 },
       
       price: coin.current_price,
