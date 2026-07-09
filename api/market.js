@@ -100,11 +100,6 @@ function calculateATR(ohlc, period = 14) {
   return Number(atr.toFixed(2));
 }
 
-  const atr = ranges.reduce((sum, value) => sum + value, 0) / period;
-
-  return Number(atr.toFixed(2));
-}
-
 function calculateVolumeStats(volumes) {
   if (!Array.isArray(volumes) || volumes.length < 20) return null;
 
