@@ -83,15 +83,22 @@ function calculateLevels(closes) {
 }
 
 function calculateATR(ohlc, period = 14) {
-  if (!Array.isArray(ohlc) || ohlc.length <= period) return null;
+  if (!Array.isArray(ohlc) || ohlc.length < period) return null;
 
   const recent = ohlc.slice(-period);
+
+  if (!Array.isArray(recent) || recent.length === 0) return null;
 
   const ranges = recent.map(candle => {
     const high = candle[2];
     const low = candle[3];
     return high - low;
   });
+
+  const atr = ranges.reduce((sum, value) => sum + value, 0) / period;
+
+  return Number(atr.toFixed(2));
+}
 
   const atr = ranges.reduce((sum, value) => sum + value, 0) / period;
 
@@ -610,10 +617,12 @@ export default async function handler(req, res) {
     const globalData = await global.json();
     const chart = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=250`);    
     const chartData = await chart.json();
-    const volumes = chartData.total_volumes.map(v => v[1]);   
+    const volumes = Array.isArray(chartData.total_volumes)
+      ? chartData.total_volumes.map(v => v[1])
+      : [];
     const ohlc = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/ohlc?vs_currency=usd&days=90`);
     const ohlcData = await ohlc.json();
-    const dailyCloses = getDailyCloses(chartData.prices);
+    const dailyCloses = getDailyCloses(chartData.prices || []);    
     const rsi14 = calculateRSI(dailyCloses, 14);
     const ema20 = calculateEMA(dailyCloses, 20);
     const ema50 = calculateEMA(dailyCloses, 50);
