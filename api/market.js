@@ -532,9 +532,8 @@ function calculateSmartMoneyScore(data) {
 function calculateRecommendation(data) {
   const probability = data.probability;
   const smartMoney = data.smartMoney;
-  const tradePlan = data.tradePlan;
 
-  if (!probability || !smartMoney || !tradePlan) return null;
+  if (!probability || !smartMoney) return null;
 
   let action = "Wait";
   let risk = "Medium";
