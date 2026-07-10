@@ -1144,9 +1144,10 @@ if (tradePlan.validTrade) {
   
 let entryTiming = {
   status: "Wait Confirmation",
+  priority: "Low",
   instruction: "Do not enter until a valid setup appears"
 };
-
+  
 if (tradePlan.validTrade) {
   const scoreDifference =
     typeof probability.scoreDifference === "number"
@@ -1159,6 +1160,7 @@ if (tradePlan.validTrade) {
   ) {
     entryTiming = {
       status: "Execute in Entry Zone",
+      priority: "High",
       instruction: `Entry is allowed only between ${tradePlan.entryZone?.from ?? "N/A"} and ${tradePlan.entryZone?.to ?? "N/A"}`
     };
   } else if (
@@ -1167,20 +1169,23 @@ if (tradePlan.validTrade) {
   ) {
     entryTiming = {
       status: "Wait Pullback",
+      priority: "Medium",
       instruction: `Wait for price to return to the entry zone ${tradePlan.entryZone?.from ?? "N/A"} - ${tradePlan.entryZone?.to ?? "N/A"}`
     };
   } else {
     entryTiming = {
-      status: "Wait Confirmation",
-      instruction: "Wait for stronger confirmation before entering"
-    };
+  status: "Wait Confirmation",
+  priority: "Low",
+  instruction: "Wait for stronger confirmation before entering"
+};
   }
 }
-  let positionSize = {
+ let positionSize = {
   riskPercent: 0,
-  leverage: "No Trade"
+  leverage: "No Trade",
+  comment: "No position should be opened"
 };
-
+  
 if (tradePlan.validTrade) {
 
   if (grade === "A+") {
