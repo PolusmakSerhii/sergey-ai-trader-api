@@ -423,111 +423,184 @@ function calculateProbabilityScore(data) {
     reasons
   };
 }
-
 function calculateTradePlan(price, data) {
-  const atr = data.atr14 || 0;
-  const levels = data.levels;
-  const probability = data.probability;
+  const atr = Number(data?.atr14) || 0;
+  const levels = data?.levels;
+  const probability = data?.probability;
 
-  if (!price || !levels || !probability) return null;
-
-  let direction = "Wait";
-  let entry = price;
-
-  let entryZoneFrom = null;
-  let entryZoneTo = null;
-
-  let stopLoss = null;
-
-  let takeProfit1 = null;
-  let takeProfit2 = null;
-  let takeProfit3 = null;
-
-  let riskReward = null;
+  if (
+    typeof price !== "number" ||
+    !Number.isFinite(price) ||
+    !levels ||
+    !probability
+  ) {
+    return null;
+  }
 
   const safeAtr = atr > 0 ? atr : price * 0.02;
+  const minimumRiskReward = 1.5;
 
-  // LONG
+  let candidateDirection = "Wait";
+
   if (
     probability.signal === "Strong Buy" ||
     probability.signal === "Buy"
   ) {
-
-    direction = "Long";
-
-    entryZoneFrom = price - safeAtr * 0.25;
-    entryZoneTo = price + safeAtr * 0.10;
-
-    stopLoss = price - safeAtr;
-
-    takeProfit1 = price + safeAtr;
-    takeProfit2 = levels.resistance;
-    takeProfit3 = price + safeAtr * 3;
+    candidateDirection = "Long";
   }
 
-  // SHORT
   if (
     probability.signal === "Strong Sell" ||
     probability.signal === "Sell"
   ) {
-
-    direction = "Short";
-
-    entryZoneFrom = price - safeAtr * 0.10;
-    entryZoneTo = price + safeAtr * 0.25;
-
-    stopLoss = price + safeAtr;
-
-    takeProfit1 = price - safeAtr;
-    takeProfit2 = levels.support;
-    takeProfit3 = price - safeAtr * 3;
+    candidateDirection = "Short";
   }
 
-  if (direction !== "Wait" && stopLoss && takeProfit2) {
+  if (candidateDirection === "Wait") {
+    return {
+      direction: "Wait",
+      candidateDirection: "Wait",
+      status: "No Signal",
+      validTrade: false,
+      rejectionReason: "Probability signal is Neutral",
+      minimumRiskReward,
+      entry: Number(price.toFixed(2)),
+      entryZone: null,
+      stopLoss: null,
+      takeProfit1: null,
+      takeProfit2: null,
+      takeProfit3: null,
+      structuralTarget: null,
+      riskReward: null,
+      riskRewardByTarget: {
+        takeProfit1: null,
+        takeProfit2: null,
+        takeProfit3: null
+      }
+    };
+  }
 
-    const risk = Math.abs(entry - stopLoss);
-    const reward = Math.abs(takeProfit2 - entry);
+  const entry = price;
 
-    riskReward =
+  let entryZoneFrom;
+  let entryZoneTo;
+  let stopLoss;
+  let takeProfit1;
+  let takeProfit2;
+  let takeProfit3;
+  let structuralTarget;
+
+  if (candidateDirection === "Long") {
+    entryZoneFrom = entry - safeAtr * 0.25;
+    entryZoneTo = entry + safeAtr * 0.1;
+
+    stopLoss = entry - safeAtr;
+
+    takeProfit1 = entry + safeAtr;
+    takeProfit2 = entry + safeAtr * 2;
+    takeProfit3 = entry + safeAtr * 3;
+
+    structuralTarget =
+      typeof levels.resistance === "number" &&
+      levels.resistance > entry
+        ? levels.resistance
+        : null;
+  }
+
+  if (candidateDirection === "Short") {
+    entryZoneFrom = entry - safeAtr * 0.1;
+    entryZoneTo = entry + safeAtr * 0.25;
+
+    stopLoss = entry + safeAtr;
+
+    takeProfit1 = entry - safeAtr;
+    takeProfit2 = entry - safeAtr * 2;
+    takeProfit3 = entry - safeAtr * 3;
+
+    structuralTarget =
+      typeof levels.support === "number" &&
+      levels.support < entry
+        ? levels.support
+        : null;
+  }
+
+  const risk = Math.abs(entry - stopLoss);
+
+  function calculateRiskReward(target) {
+    if (
+      typeof target !== "number" ||
+      !Number.isFinite(target) ||
       risk === 0
-        ? null
-        : Number((reward / risk).toFixed(2));
+    ) {
+      return null;
+    }
+
+    return Number(
+      (Math.abs(target - entry) / risk).toFixed(2)
+    );
   }
+
+  const riskReward1 = calculateRiskReward(takeProfit1);
+  const riskReward2 = calculateRiskReward(takeProfit2);
+  const riskReward3 = calculateRiskReward(takeProfit3);
+  const structuralRiskReward =
+    calculateRiskReward(structuralTarget);
+
+  const validTrade =
+    riskReward2 !== null &&
+    riskReward2 >= minimumRiskReward;
 
   return {
-    direction,
+    direction: validTrade
+      ? candidateDirection
+      : "Wait",
+
+    candidateDirection,
+
+    status: validTrade
+      ? "Valid Trade"
+      : "Rejected",
+
+    validTrade,
+
+    rejectionReason: validTrade
+      ? null
+      : `Risk/Reward is below ${minimumRiskReward}`,
+
+    minimumRiskReward,
 
     entry: Number(entry.toFixed(2)),
 
-    entryZone:
-      direction === "Wait"
-        ? null
-        : {
-            from: Number(entryZoneFrom.toFixed(2)),
-            to: Number(entryZoneTo.toFixed(2))
-          },
+    entryZone: {
+      from: Number(entryZoneFrom.toFixed(2)),
+      to: Number(entryZoneTo.toFixed(2))
+    },
 
-    stopLoss:
-      stopLoss !== null
-        ? Number(stopLoss.toFixed(2))
+    stopLoss: Number(stopLoss.toFixed(2)),
+
+    takeProfit1: Number(takeProfit1.toFixed(2)),
+    takeProfit2: Number(takeProfit2.toFixed(2)),
+    takeProfit3: Number(takeProfit3.toFixed(2)),
+
+    structuralTarget:
+      structuralTarget !== null
+        ? Number(structuralTarget.toFixed(2))
         : null,
 
-    takeProfit1:
-      takeProfit1 !== null
-        ? Number(takeProfit1.toFixed(2))
-        : null,
+    riskReward: riskReward2,
 
-    takeProfit2:
-      takeProfit2 !== null
-        ? Number(takeProfit2.toFixed(2))
-        : null,
+    riskRewardByTarget: {
+      takeProfit1: riskReward1,
+      takeProfit2: riskReward2,
+      takeProfit3: riskReward3,
+      structuralTarget: structuralRiskReward
+    },
 
-    takeProfit3:
-      takeProfit3 !== null
-        ? Number(takeProfit3.toFixed(2))
-        : null,
-
-    riskReward
+    recommendedTakeProfit: {
+      target: "takeProfit2",
+      price: Number(takeProfit2.toFixed(2)),
+      riskReward: riskReward2
+    }
   };
 }
 
