@@ -1255,8 +1255,12 @@ if (tradePlan.validTrade) {
       positionSize,
       risk,
 
-     direction: tradePlan.direction,
-     validTrade: tradePlan.validTrade,  
+     direction:
+        tradePlan.direction === "Wait"
+            ? "Neutral"
+            : tradePlan.direction,
+      
+    validTrade: tradePlan.validTrade,  
       
     entryZone: tradePlan.entryZone,
     stopLoss: tradePlan.stopLoss,
