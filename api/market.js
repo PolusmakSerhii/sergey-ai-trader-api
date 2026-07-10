@@ -1108,7 +1108,39 @@ if (tradePlan.validTrade) {
     grade = "C";
   }
 }
-  
+let setupQuality = {
+  stars: 1,
+  label: "Avoid"
+};
+
+if (tradePlan.validTrade) {
+  if (gradeScore >= 85) {
+    setupQuality = {
+      stars: 5,
+      label: "Excellent"
+    };
+  } else if (gradeScore >= 75) {
+    setupQuality = {
+      stars: 4,
+      label: "Very Good"
+    };
+  } else if (gradeScore >= 65) {
+    setupQuality = {
+      stars: 3,
+      label: "Good"
+    };
+  } else if (gradeScore >= 55) {
+    setupQuality = {
+      stars: 2,
+      label: "Average"
+    };
+  } else {
+    setupQuality = {
+      stars: 1,
+      label: "Weak"
+    };
+  }
+}  
   let action = "Wait";
   let status = "No Trade";
   let risk = "High";
@@ -1142,6 +1174,7 @@ if (tradePlan.validTrade) {
       confidence,
       grade,
       gradeScore,
+      setupQuality,
       risk,
 
      direction: tradePlan.direction,
