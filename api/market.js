@@ -423,7 +423,6 @@ function calculateProbabilityScore(data) {
     reasons
   };
 }
-
 function calculateTradePlan(price, data) {
   const atr = data.atr14 || 0;
   const levels = data.levels;
@@ -433,37 +432,99 @@ function calculateTradePlan(price, data) {
 
   let direction = "Wait";
   let entry = price;
+
+  let entryZoneFrom = null;
+  let entryZoneTo = null;
+
   let stopLoss = null;
-  let takeProfit = null;
 
-  if (probability.signal === "Strong Buy" || probability.signal === "Buy") {
-    direction = "Long";
-    stopLoss = price - atr;
-    takeProfit = levels.resistance;
-  }
-
-  if (probability.signal === "Strong Sell" || probability.signal === "Sell") {
-    direction = "Short";
-    stopLoss = price + atr;
-    takeProfit = levels.support;
-  }
+  let takeProfit1 = null;
+  let takeProfit2 = null;
+  let takeProfit3 = null;
 
   let riskReward = null;
 
-  if (stopLoss && takeProfit) {
+  const safeAtr = atr > 0 ? atr : price * 0.02;
+
+  if (
+    probability.signal === "Strong Buy" ||
+    probability.signal === "Buy"
+  ) {
+    direction = "Long";
+
+    entryZoneFrom = price - safeAtr * 0.25;
+    entryZoneTo = price + safeAtr * 0.1;
+
+    stopLoss = price - safeAtr;
+
+    takeProfit1 = price + safeAtr;
+    takeProfit2 = levels.resistance;
+    takeProfit3 = price + safeAtr * 3;
+  }
+
+  if (
+    probability.signal === "Strong Sell" ||
+    probability.signal === "Sell"
+  ) {
+    direction = "Short";
+
+    entryZoneFrom = price - safeAtr * 0.1;
+    entryZoneTo = price + safeAtr * 0.25;
+
+    stopLoss = price + safeAtr;
+
+    takeProfit1 = price - safeAtr;
+    takeProfit2 = levels.support;
+    takeProfit3 = price - safeAtr * 3;
+  }
+
+  if (direction !== "Wait" && stopLoss && takeProfit2) {
     const risk = Math.abs(entry - stopLoss);
-    const reward = Math.abs(takeProfit - entry);
-    riskReward = risk === 0 ? null : Number((reward / risk).toFixed(2));
+    const reward = Math.abs(takeProfit2 - entry);
+
+    riskReward =
+      risk === 0
+        ? null
+        : Number((reward / risk).toFixed(2));
   }
 
   return {
     direction,
+
     entry: Number(entry.toFixed(2)),
-    stopLoss: stopLoss ? Number(stopLoss.toFixed(2)) : null,
-    takeProfit: takeProfit ? Number(takeProfit.toFixed(2)) : null,
+
+    entryZone:
+      direction === "Wait"
+        ? null
+        : {
+            from: Number(entryZoneFrom.toFixed(2)),
+            to: Number(entryZoneTo.toFixed(2))
+          },
+
+    stopLoss:
+      stopLoss !== null
+        ? Number(stopLoss.toFixed(2))
+        : null,
+
+    takeProfit1:
+      takeProfit1 !== null
+        ? Number(takeProfit1.toFixed(2))
+        : null,
+
+    takeProfit2:
+      takeProfit2 !== null
+        ? Number(takeProfit2.toFixed(2))
+        : null,
+
+    takeProfit3:
+      takeProfit3 !== null
+        ? Number(takeProfit3.toFixed(2))
+        : null,
+
     riskReward
   };
 }
+
 function calculateSmartMoneyScore(data) {
   let score = 50;
   const reasons = [];
