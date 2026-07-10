@@ -1141,6 +1141,41 @@ if (tradePlan.validTrade) {
     };
   }
 }  
+  
+let entryTiming = {
+  status: "Wait Confirmation",
+  instruction: "Do not enter until a valid setup appears"
+};
+
+if (tradePlan.validTrade) {
+  const scoreDifference =
+    typeof probability.scoreDifference === "number"
+      ? probability.scoreDifference
+      : 0;
+
+  if (
+    confidence >= 75 &&
+    scoreDifference >= 20
+  ) {
+    entryTiming = {
+      status: "Execute in Entry Zone",
+      instruction: `Entry is allowed only between ${tradePlan.entryZone?.from ?? "N/A"} and ${tradePlan.entryZone?.to ?? "N/A"}`
+    };
+  } else if (
+    confidence >= 60 &&
+    scoreDifference >= 8
+  ) {
+    entryTiming = {
+      status: "Wait Pullback",
+      instruction: `Wait for price to return to the entry zone ${tradePlan.entryZone?.from ?? "N/A"} - ${tradePlan.entryZone?.to ?? "N/A"}`
+    };
+  } else {
+    entryTiming = {
+      status: "Wait Confirmation",
+      instruction: "Wait for stronger confirmation before entering"
+    };
+  }
+}  
   let action = "Wait";
   let status = "No Trade";
   let risk = "High";
@@ -1175,6 +1210,7 @@ if (tradePlan.validTrade) {
       grade,
       gradeScore,
       setupQuality,
+      entryTiming,
       risk,
 
      direction: tradePlan.direction,
