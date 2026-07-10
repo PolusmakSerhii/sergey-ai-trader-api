@@ -423,6 +423,7 @@ function calculateProbabilityScore(data) {
     reasons
   };
 }
+
 function calculateTradePlan(price, data) {
   const atr = data.atr14 || 0;
   const levels = data.levels;
@@ -446,14 +447,16 @@ function calculateTradePlan(price, data) {
 
   const safeAtr = atr > 0 ? atr : price * 0.02;
 
+  // LONG
   if (
     probability.signal === "Strong Buy" ||
     probability.signal === "Buy"
   ) {
+
     direction = "Long";
 
     entryZoneFrom = price - safeAtr * 0.25;
-    entryZoneTo = price + safeAtr * 0.1;
+    entryZoneTo = price + safeAtr * 0.10;
 
     stopLoss = price - safeAtr;
 
@@ -462,13 +465,15 @@ function calculateTradePlan(price, data) {
     takeProfit3 = price + safeAtr * 3;
   }
 
+  // SHORT
   if (
     probability.signal === "Strong Sell" ||
     probability.signal === "Sell"
   ) {
+
     direction = "Short";
 
-    entryZoneFrom = price - safeAtr * 0.1;
+    entryZoneFrom = price - safeAtr * 0.10;
     entryZoneTo = price + safeAtr * 0.25;
 
     stopLoss = price + safeAtr;
@@ -479,6 +484,7 @@ function calculateTradePlan(price, data) {
   }
 
   if (direction !== "Wait" && stopLoss && takeProfit2) {
+
     const risk = Math.abs(entry - stopLoss);
     const reward = Math.abs(takeProfit2 - entry);
 
