@@ -1183,8 +1183,8 @@ if (tradePlan.validTrade) {
  let positionSize = {
   riskPercent: 0,
   leverage: "No Trade",
-  comment: "No position should be opened"
-};
+  comment: "Do not open a position"
+ };
   
 if (tradePlan.validTrade) {
 
