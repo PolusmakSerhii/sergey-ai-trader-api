@@ -1071,7 +1071,44 @@ function calculateRecommendation(data) {
     setupScore * 0.4 +
     trendScore * 0.1
   );
+const riskReward =
+  typeof tradePlan.riskReward === "number"
+    ? tradePlan.riskReward
+    : 0;
 
+let riskRewardScore = 0;
+
+if (riskReward >= 3) {
+  riskRewardScore = 100;
+} else if (riskReward >= 2) {
+  riskRewardScore = 85;
+} else if (riskReward >= 1.5) {
+  riskRewardScore = 70;
+} else if (riskReward > 0) {
+  riskRewardScore = 40;
+}
+
+const gradeScore = Math.round(
+  probabilityScore * 0.25 +
+  smartMoneyScore * 0.2 +
+  setupScore * 0.35 +
+  riskRewardScore * 0.2
+);
+
+let grade = "D";
+
+if (tradePlan.validTrade) {
+  if (gradeScore >= 85) {
+    grade = "A+";
+  } else if (gradeScore >= 75) {
+    grade = "A";
+  } else if (gradeScore >= 65) {
+    grade = "B";
+  } else if (gradeScore >= 55) {
+    grade = "C";
+  }
+}
+  
   let action = "Wait";
   let status = "No Trade";
   let risk = "High";
@@ -1099,15 +1136,17 @@ function calculateRecommendation(data) {
       ? `${status}. Confidence: ${confidence}/100. Entry zone: ${tradePlan.entryZone?.from ?? "N/A"} - ${tradePlan.entryZone?.to ?? "N/A"}. Stop Loss: ${tradePlan.stopLoss ?? "N/A"}. TP1: ${tradePlan.takeProfit1 ?? "N/A"}. TP2: ${tradePlan.takeProfit2 ?? "N/A"}. TP3: ${tradePlan.takeProfit3 ?? "N/A"}. Recommended target: ${tradePlan.recommendedTakeProfit?.target || "N/A"} at ${tradePlan.recommendedTakeProfit?.price ?? "N/A"}. Risk/Reward: ${tradePlan.riskReward !== null && tradePlan.riskReward !== undefined ? `1:${tradePlan.riskReward}` : "N/A"}.`
       : `No Trade. ${tradePlan.rejectionReason || "No confirmed setup"}. Probability: ${probabilityScore}/100. Smart Money: ${smartMoneyScore}/100.`;
 
-  return {
-    action,
-    status,
-    confidence,
-    risk,
+    return {
+      action,
+      status,
+      confidence,
+      grade,
+      gradeScore,
+      risk,
 
-    direction: tradePlan.direction,
-    validTrade: tradePlan.validTrade,
-
+     direction: tradePlan.direction,
+     validTrade: tradePlan.validTrade,  
+      
     entryZone: tradePlan.entryZone,
     stopLoss: tradePlan.stopLoss,
 
