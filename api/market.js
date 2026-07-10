@@ -1033,56 +1033,98 @@ function calculateSmartMoneyScore(data) {
 }
 
 function calculateRecommendation(data) {
-  const probability = data.probability;
-  const smartMoney = data.smartMoney;
+  const probability = data?.probability;
+  const smartMoney = data?.smartMoney;
+  const tradePlan = data?.tradePlan;
 
-  if (!probability || !smartMoney) return null;
+  if (!probability || !smartMoney || !tradePlan) {
+    return null;
+  }
+
+  const probabilityScore =
+    typeof probability.score === "number"
+      ? probability.score
+      : 0;
+
+  const smartMoneyScore =
+    typeof smartMoney.score === "number"
+      ? smartMoney.score
+      : 50;
+
+  const setupScore =
+    typeof tradePlan.setupScore === "number"
+      ? tradePlan.setupScore
+      : 0;
+
+  let trendScore = 50;
+
+  if (
+    data.trend === "Strong Bullish" ||
+    data.trend === "Strong Bearish"
+  ) {
+    trendScore = 80;
+  }
+
+  const confidence = Math.round(
+    probabilityScore * 0.3 +
+    smartMoneyScore * 0.2 +
+    setupScore * 0.4 +
+    trendScore * 0.1
+  );
 
   let action = "Wait";
-  let risk = "Medium";
-  let confidence = Math.round((probability.score + smartMoney.score) / 2);
+  let status = "No Trade";
+  let risk = "High";
 
-  if (probability.signal === "Strong Buy" && smartMoney.rating === "Bullish") {
-    action = "Strong Buy";
-    risk = "Low";
-  } else if (probability.signal === "Buy" || smartMoney.rating === "Bullish") {
-    action = "Buy";
-    risk = "Medium";
-  } else if (probability.signal === "Strong Sell" && smartMoney.rating === "Bearish") {
-    action = "Strong Sell";
-    risk = "Low";
-  } else if (probability.signal === "Sell" || smartMoney.rating === "Bearish") {
-    action = "Sell";
-    risk = "Medium";
+  if (
+    tradePlan.validTrade &&
+    tradePlan.direction === "Long"
+  ) {
+    action = confidence >= 75 ? "Strong Buy" : "Buy";
+    status = "Valid Long Setup";
+    risk = confidence >= 75 ? "Low" : "Medium";
   }
 
-  if (probability.signal === "Neutral" && smartMoney.rating === "Neutral") {
-    action = "Wait";
-    risk = "Medium";
+  if (
+    tradePlan.validTrade &&
+    tradePlan.direction === "Short"
+  ) {
+    action = confidence >= 75 ? "Strong Sell" : "Sell";
+    status = "Valid Short Setup";
+    risk = confidence >= 75 ? "Low" : "Medium";
   }
-let description = `Signal: ${action}. Probability score: ${probability.score}/100. Smart Money score: ${smartMoney.score}/100. Better wait for stronger confirmation.`;
 
-if (action === "Buy") {
-  description = `Buy setup detected. Probability score: ${probability.score}/100. Smart Money score: ${smartMoney.score}/100. Bullish conditions are present, but confirmation is still recommended.`;
-}
+  const description =
+    tradePlan.validTrade
+      ? `${status}. Confidence: ${confidence}/100. Entry zone: ${tradePlan.entryZone?.from ?? "N/A"} - ${tradePlan.entryZone?.to ?? "N/A"}. Stop Loss: ${tradePlan.stopLoss ?? "N/A"}. TP1: ${tradePlan.takeProfit1 ?? "N/A"}. TP2: ${tradePlan.takeProfit2 ?? "N/A"}. TP3: ${tradePlan.takeProfit3 ?? "N/A"}. Recommended target: ${tradePlan.recommendedTakeProfit?.target || "N/A"} at ${tradePlan.recommendedTakeProfit?.price ?? "N/A"}. Risk/Reward: ${tradePlan.riskReward !== null && tradePlan.riskReward !== undefined ? `1:${tradePlan.riskReward}` : "N/A"}.`
+      : `No Trade. ${tradePlan.rejectionReason || "No confirmed setup"}. Probability: ${probabilityScore}/100. Smart Money: ${smartMoneyScore}/100.`;
 
-if (action === "Strong Buy") {
-  description = `Strong Buy setup detected. Probability and Smart Money signals are aligned. Confidence: ${confidence}/100.`;
-}
-
-if (action === "Sell") {
-  description = `Sell setup detected. Probability score: ${probability.score}/100. Smart Money score: ${smartMoney.score}/100. Bearish conditions are present, but confirmation is still recommended.`;
-}
-
-if (action === "Strong Sell") {
-  description = `Strong Sell setup detected. Probability and Smart Money signals are aligned. Confidence: ${confidence}/100.`;
-}
-  
   return {
-      action,
-      confidence,
-      risk,
-      description
+    action,
+    status,
+    confidence,
+    risk,
+
+    direction: tradePlan.direction,
+    validTrade: tradePlan.validTrade,
+
+    entryZone: tradePlan.entryZone,
+    stopLoss: tradePlan.stopLoss,
+
+    takeProfit1: tradePlan.takeProfit1,
+    takeProfit2: tradePlan.takeProfit2,
+    takeProfit3: tradePlan.takeProfit3,
+
+    recommendedTakeProfit:
+      tradePlan.recommendedTakeProfit,
+
+    riskReward: tradePlan.riskReward,
+
+    reasons: Array.isArray(tradePlan.reasons)
+      ? tradePlan.reasons
+      : [],
+
+    description
   };
 }
 
@@ -1226,10 +1268,14 @@ if (ema20 && ema50 && ema100 && ema200) {
     imbalance
   });
     
-  const recommendation = calculateRecommendation({
-    probability,
-    smartMoney
-  });
+ const recommendation = calculateRecommendation({
+  probability,
+  smartMoney,
+  tradePlan,
+  trend,
+  macd,
+  premiumDiscount
+});
     
     res.status(200).json({
       ok: true,
