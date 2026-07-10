@@ -345,84 +345,234 @@ function calculateMSS(price, swings, bos, choch) {
 }
 
 function calculateProbabilityScore(data) {
-  let score = 50;
-  const reasons = [];
+  let longScore = 0;
+  let shortScore = 0;
 
+  const longReasons = [];
+  const shortReasons = [];
+
+  const fvg = Array.isArray(data.fvg) ? data.fvg : [];
+  const orderBlocks = Array.isArray(data.orderBlocks)
+    ? data.orderBlocks
+    : [];
+
+  const equalHighs = Array.isArray(data.equalHighLow?.equalHighs)
+    ? data.equalHighLow.equalHighs
+    : [];
+
+  const equalLows = Array.isArray(data.equalHighLow?.equalLows)
+    ? data.equalHighLow.equalLows
+    : [];
+
+  const macdValue =
+    typeof data.macd?.macd === "number"
+      ? data.macd.macd
+      : 0;
+
+  // TREND
   if (data.trend === "Strong Bullish") {
-    score += 15;
-    reasons.push("Strong bullish trend");
+    longScore += 18;
+    longReasons.push("Strong bullish trend");
   }
 
   if (data.trend === "Strong Bearish") {
-    score -= 15;
-    reasons.push("Strong bearish trend");
+    shortScore += 18;
+    shortReasons.push("Strong bearish trend");
   }
 
-  if (data.rsi14 && data.rsi14 < 30) {
-    score += 10;
-    reasons.push("RSI oversold");
+  // RSI
+  if (typeof data.rsi14 === "number") {
+    if (data.rsi14 < 30) {
+      longScore += 10;
+      longReasons.push("RSI oversold");
+    }
+
+    if (data.rsi14 > 70) {
+      shortScore += 10;
+      shortReasons.push("RSI overbought");
+    }
+
+    if (data.rsi14 >= 50 && data.rsi14 <= 65) {
+      longScore += 4;
+      longReasons.push("RSI bullish momentum");
+    }
+
+    if (data.rsi14 >= 35 && data.rsi14 < 50) {
+      shortScore += 4;
+      shortReasons.push("RSI bearish momentum");
+    }
   }
 
-  if (data.rsi14 && data.rsi14 > 70) {
-    score -= 10;
-    reasons.push("RSI overbought");
+  // MACD
+  if (macdValue > 0) {
+    longScore += 10;
+    longReasons.push("MACD bullish");
   }
 
-  if (data.macd && data.macd.macd > 0) {
-    score += 8;
-    reasons.push("MACD bullish");
+  if (macdValue < 0) {
+    shortScore += 10;
+    shortReasons.push("MACD bearish");
   }
 
-  if (data.macd && data.macd.macd < 0) {
-    score -= 8;
-    reasons.push("MACD bearish");
-  }
-
+  // PREMIUM / DISCOUNT
   if (data.premiumDiscount?.zone === "Discount") {
-    score += 10;
-    reasons.push("Price in discount zone");
+    longScore += 8;
+    longReasons.push("Price in discount zone");
   }
 
   if (data.premiumDiscount?.zone === "Premium") {
-    score -= 10;
-    reasons.push("Price in premium zone");
+    shortScore += 8;
+    shortReasons.push("Price in premium zone");
   }
 
-  if (data.bos === "Bullish BOS" || data.choch === "Bullish CHOCH" || data.mss === "Bullish MSS") {
-    score += 12;
-    reasons.push("Bullish market structure");
+  // BOS
+  if (data.bos === "Bullish BOS") {
+    longScore += 8;
+    longReasons.push("Bullish BOS");
   }
 
-  if (data.bos === "Bearish BOS" || data.choch === "Bearish CHOCH" || data.mss === "Bearish MSS") {
-    score -= 12;
-    reasons.push("Bearish market structure");
+  if (data.bos === "Bearish BOS") {
+    shortScore += 8;
+    shortReasons.push("Bearish BOS");
   }
 
+  // CHOCH
+  if (data.choch === "Bullish CHOCH") {
+    longScore += 10;
+    longReasons.push("Bullish CHOCH");
+  }
+
+  if (data.choch === "Bearish CHOCH") {
+    shortScore += 10;
+    shortReasons.push("Bearish CHOCH");
+  }
+
+  // MSS
+  if (data.mss === "Bullish MSS") {
+    longScore += 10;
+    longReasons.push("Bullish MSS");
+  }
+
+  if (data.mss === "Bearish MSS") {
+    shortScore += 10;
+    shortReasons.push("Bearish MSS");
+  }
+
+  // LIQUIDITY SWEEP
+  if (data.liquiditySweep === "Below Low Liquidity") {
+    longScore += 8;
+    longReasons.push("Sell-side liquidity sweep");
+  }
+
+  if (data.liquiditySweep === "Above High Liquidity") {
+    shortScore += 8;
+    shortReasons.push("Buy-side liquidity sweep");
+  }
+
+  // FVG
+  if (fvg.some(item => item?.type === "Bullish FVG")) {
+    longScore += 8;
+    longReasons.push("Bullish FVG");
+  }
+
+  if (fvg.some(item => item?.type === "Bearish FVG")) {
+    shortScore += 8;
+    shortReasons.push("Bearish FVG");
+  }
+
+  // ORDER BLOCKS
+  if (
+    orderBlocks.some(
+      item => item?.type === "Bullish Order Block"
+    )
+  ) {
+    longScore += 12;
+    longReasons.push("Bullish Order Block");
+  }
+
+  if (
+    orderBlocks.some(
+      item => item?.type === "Bearish Order Block"
+    )
+  ) {
+    shortScore += 12;
+    shortReasons.push("Bearish Order Block");
+  }
+
+  // EQUAL HIGHS / LOWS
+  if (equalHighs.length > 0) {
+    shortScore += 5;
+    shortReasons.push("Equal highs liquidity");
+  }
+
+  if (equalLows.length > 0) {
+    longScore += 5;
+    longReasons.push("Equal lows liquidity");
+  }
+
+  // IMBALANCE
   if (data.imbalance?.type === "Bullish Imbalance") {
-    score += 8;
-    reasons.push("Bullish imbalance");
+    longScore += 6;
+    longReasons.push("Bullish imbalance");
   }
 
   if (data.imbalance?.type === "Bearish Imbalance") {
-    score -= 8;
-    reasons.push("Bearish imbalance");
+    shortScore += 6;
+    shortReasons.push("Bearish imbalance");
   }
 
-  score = Math.max(0, Math.min(100, score));
+  longScore = Math.min(100, longScore);
+  shortScore = Math.min(100, shortScore);
+
+  const score = Math.max(longScore, shortScore);
+  const scoreDifference = Math.abs(longScore - shortScore);
 
   let signal = "Neutral";
+  let direction = "Neutral";
+  let reasons = [];
 
-  if (score >= 80) signal = "Strong Buy";
-  else if (score >= 65) signal = "Buy";
-  else if (score <= 20) signal = "Strong Sell";
-  else if (score <= 35) signal = "Sell";
+  if (longScore >= 70 && longScore > shortScore) {
+    signal = "Strong Buy";
+    direction = "Long";
+    reasons = longReasons;
+  } else if (
+    longScore >= 55 &&
+    longScore > shortScore &&
+    scoreDifference >= 8
+  ) {
+    signal = "Buy";
+    direction = "Long";
+    reasons = longReasons;
+  } else if (shortScore >= 70 && shortScore > longScore) {
+    signal = "Strong Sell";
+    direction = "Short";
+    reasons = shortReasons;
+  } else if (
+    shortScore >= 55 &&
+    shortScore > longScore &&
+    scoreDifference >= 8
+  ) {
+    signal = "Sell";
+    direction = "Short";
+    reasons = shortReasons;
+  } else {
+    reasons = [
+      ...longReasons.map(reason => `Bullish: ${reason}`),
+      ...shortReasons.map(reason => `Bearish: ${reason}`)
+    ];
+  }
 
   return {
     score,
     signal,
+    direction,
+    longScore,
+    shortScore,
+    scoreDifference,
     reasons
   };
 }
+
 function calculateTradePlan(price, data) {
   if (
     typeof price !== "number" ||
@@ -1042,9 +1192,13 @@ if (ema20 && ema50 && ema100 && ema200) {
     bos,
     choch,
     mss,
-    imbalance
+    imbalance,
+    liquiditySweep,
+    fvg,
+    orderBlocks,
+    equalHighLow
   });
-
+    
   const smartMoney = calculateSmartMoneyScore({
     premiumDiscount,
     fvg,
