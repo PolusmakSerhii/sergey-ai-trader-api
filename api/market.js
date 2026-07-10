@@ -424,59 +424,255 @@ function calculateProbabilityScore(data) {
   };
 }
 function calculateTradePlan(price, data) {
-  const atr = Number(data?.atr14) || 0;
-  const levels = data?.levels;
-  const probability = data?.probability;
-
   if (
     typeof price !== "number" ||
     !Number.isFinite(price) ||
-    !levels ||
-    !probability
+    !data
   ) {
     return null;
   }
 
+  const atr = Number(data.atr14) || 0;
   const safeAtr = atr > 0 ? atr : price * 0.02;
-  const minimumRiskReward = 1.5;
 
-  let candidateDirection = "Wait";
+  const probability = data.probability || {};
+  const smartMoney = data.smartMoney || {};
+  const levels = data.levels || {};
 
-  if (
-    probability.signal === "Strong Buy" ||
-    probability.signal === "Buy"
-  ) {
-    candidateDirection = "Long";
+  const macdValue =
+    typeof data.macd?.macd === "number"
+      ? data.macd.macd
+      : 0;
+
+  const fvg = Array.isArray(data.fvg) ? data.fvg : [];
+  const orderBlocks = Array.isArray(data.orderBlocks)
+    ? data.orderBlocks
+    : [];
+
+  let longScore = 0;
+  let shortScore = 0;
+
+  const longReasons = [];
+  const shortReasons = [];
+
+  // 1. Probability
+  if (probability.signal === "Strong Buy") {
+    longScore += 30;
+    longReasons.push("Strong Buy probability");
+  } else if (probability.signal === "Buy") {
+    longScore += 20;
+    longReasons.push("Buy probability");
+  }
+
+  if (probability.signal === "Strong Sell") {
+    shortScore += 30;
+    shortReasons.push("Strong Sell probability");
+  } else if (probability.signal === "Sell") {
+    shortScore += 20;
+    shortReasons.push("Sell probability");
+  }
+
+  // 2. Smart Money
+  if (smartMoney.rating === "Bullish") {
+    longScore += 15;
+    longReasons.push("Bullish Smart Money");
+  }
+
+  if (smartMoney.rating === "Bearish") {
+    shortScore += 15;
+    shortReasons.push("Bearish Smart Money");
   }
 
   if (
-    probability.signal === "Strong Sell" ||
-    probability.signal === "Sell"
+    typeof smartMoney.score === "number" &&
+    smartMoney.score >= 60
+  ) {
+    longScore += 8;
+    longReasons.push("Smart Money score above 60");
+  }
+
+  if (
+    typeof smartMoney.score === "number" &&
+    smartMoney.score <= 40
+  ) {
+    shortScore += 8;
+    shortReasons.push("Smart Money score below 40");
+  }
+
+  // 3. Trend
+  if (data.trend === "Strong Bullish") {
+    longScore += 15;
+    longReasons.push("Strong bullish trend");
+  }
+
+  if (data.trend === "Strong Bearish") {
+    shortScore += 15;
+    shortReasons.push("Strong bearish trend");
+  }
+
+  // 4. MACD
+  if (macdValue > 0) {
+    longScore += 8;
+    longReasons.push("MACD bullish");
+  }
+
+  if (macdValue < 0) {
+    shortScore += 8;
+    shortReasons.push("MACD bearish");
+  }
+
+  // 5. Premium / Discount
+  if (data.premiumDiscount?.zone === "Discount") {
+    longScore += 10;
+    longReasons.push("Price in discount zone");
+  }
+
+  if (data.premiumDiscount?.zone === "Premium") {
+    shortScore += 10;
+    shortReasons.push("Price in premium zone");
+  }
+
+  // 6. Market structure
+  if (
+    data.bos === "Bullish BOS" ||
+    data.choch === "Bullish CHOCH" ||
+    data.mss === "Bullish MSS"
+  ) {
+    longScore += 12;
+    longReasons.push("Bullish market structure");
+  }
+
+  if (
+    data.bos === "Bearish BOS" ||
+    data.choch === "Bearish CHOCH" ||
+    data.mss === "Bearish MSS"
+  ) {
+    shortScore += 12;
+    shortReasons.push("Bearish market structure");
+  }
+
+  // 7. Liquidity Sweep
+  if (data.liquiditySweep === "Below Low Liquidity") {
+    longScore += 10;
+    longReasons.push("Sell-side liquidity sweep");
+  }
+
+  if (data.liquiditySweep === "Above High Liquidity") {
+    shortScore += 10;
+    shortReasons.push("Buy-side liquidity sweep");
+  }
+
+  // 8. FVG
+  if (fvg.some(item => item?.type === "Bullish FVG")) {
+    longScore += 6;
+    longReasons.push("Bullish FVG");
+  }
+
+  if (fvg.some(item => item?.type === "Bearish FVG")) {
+    shortScore += 6;
+    shortReasons.push("Bearish FVG");
+  }
+
+  // 9. Order Blocks
+  if (
+    orderBlocks.some(
+      item => item?.type === "Bullish Order Block"
+    )
+  ) {
+    longScore += 6;
+    longReasons.push("Bullish Order Block");
+  }
+
+  if (
+    orderBlocks.some(
+      item => item?.type === "Bearish Order Block"
+    )
+  ) {
+    shortScore += 6;
+    shortReasons.push("Bearish Order Block");
+  }
+
+  // 10. Imbalance
+  if (data.imbalance?.type === "Bullish Imbalance") {
+    longScore += 8;
+    longReasons.push("Bullish imbalance");
+  }
+
+  if (data.imbalance?.type === "Bearish Imbalance") {
+    shortScore += 8;
+    shortReasons.push("Bearish imbalance");
+  }
+
+  longScore = Math.min(100, longScore);
+  shortScore = Math.min(100, shortScore);
+
+  const minimumSetupScore = 45;
+  const minimumScoreDifference = 8;
+
+  let candidateDirection = "Wait";
+  let setupScore = Math.max(longScore, shortScore);
+  let reasons = [];
+
+  if (
+    longScore >= minimumSetupScore &&
+    longScore - shortScore >= minimumScoreDifference
+  ) {
+    candidateDirection = "Long";
+    setupScore = longScore;
+    reasons = longReasons;
+  }
+
+  if (
+    shortScore >= minimumSetupScore &&
+    shortScore - longScore >= minimumScoreDifference
   ) {
     candidateDirection = "Short";
+    setupScore = shortScore;
+    reasons = shortReasons;
   }
 
   if (candidateDirection === "Wait") {
     return {
       direction: "Wait",
       candidateDirection: "Wait",
-      status: "No Signal",
+      status: "No Confirmed Setup",
       validTrade: false,
-      rejectionReason: "Probability signal is Neutral",
-      minimumRiskReward,
+
+      rejectionReason:
+        longScore < minimumSetupScore &&
+        shortScore < minimumSetupScore
+          ? "Setup score is below minimum threshold"
+          : "Bullish and bearish signals conflict",
+
+      minimumSetupScore,
+      minimumScoreDifference,
+
+      longScore,
+      shortScore,
+      setupScore,
+
+      reasons: [],
+
       entry: Number(price.toFixed(2)),
       entryZone: null,
       stopLoss: null,
+
       takeProfit1: null,
       takeProfit2: null,
       takeProfit3: null,
+
       structuralTarget: null,
+
       riskReward: null,
+
       riskRewardByTarget: {
         takeProfit1: null,
         takeProfit2: null,
-        takeProfit3: null
-      }
+        takeProfit3: null,
+        structuralTarget: null
+      },
+
+      recommendedTakeProfit: null
     };
   }
 
@@ -488,7 +684,7 @@ function calculateTradePlan(price, data) {
   let takeProfit1;
   let takeProfit2;
   let takeProfit3;
-  let structuralTarget;
+  let structuralTarget = null;
 
   if (candidateDirection === "Long") {
     entryZoneFrom = entry - safeAtr * 0.25;
@@ -500,11 +696,12 @@ function calculateTradePlan(price, data) {
     takeProfit2 = entry + safeAtr * 2;
     takeProfit3 = entry + safeAtr * 3;
 
-    structuralTarget =
+    if (
       typeof levels.resistance === "number" &&
       levels.resistance > entry
-        ? levels.resistance
-        : null;
+    ) {
+      structuralTarget = levels.resistance;
+    }
   }
 
   if (candidateDirection === "Short") {
@@ -517,11 +714,12 @@ function calculateTradePlan(price, data) {
     takeProfit2 = entry - safeAtr * 2;
     takeProfit3 = entry - safeAtr * 3;
 
-    structuralTarget =
+    if (
       typeof levels.support === "number" &&
       levels.support < entry
-        ? levels.support
-        : null;
+    ) {
+      structuralTarget = levels.support;
+    }
   }
 
   const risk = Math.abs(entry - stopLoss);
@@ -543,10 +741,14 @@ function calculateTradePlan(price, data) {
   const riskReward1 = calculateRiskReward(takeProfit1);
   const riskReward2 = calculateRiskReward(takeProfit2);
   const riskReward3 = calculateRiskReward(takeProfit3);
+
   const structuralRiskReward =
     calculateRiskReward(structuralTarget);
 
+  const minimumRiskReward = 1.5;
+
   const validTrade =
+    setupScore >= minimumSetupScore &&
     riskReward2 !== null &&
     riskReward2 >= minimumRiskReward;
 
@@ -567,7 +769,16 @@ function calculateTradePlan(price, data) {
       ? null
       : `Risk/Reward is below ${minimumRiskReward}`,
 
+    minimumSetupScore,
+    minimumScoreDifference,
     minimumRiskReward,
+
+    longScore,
+    shortScore,
+    setupScore,
+
+    confidence: setupScore,
+    reasons,
 
     entry: Number(entry.toFixed(2)),
 
@@ -822,6 +1033,7 @@ if (ema20 && ema50 && ema100 && ema200) {
     trend = "Strong Bearish";
   }
 }  
+
   const probability = calculateProbabilityScore({
     trend,
     rsi14,
@@ -831,25 +1043,39 @@ if (ema20 && ema50 && ema100 && ema200) {
     choch,
     mss,
     imbalance
-});   
+  });
+
+  const smartMoney = calculateSmartMoneyScore({
+    premiumDiscount,
+    fvg,
+    orderBlocks,
+    liquiditySweep,
+    bos,
+    choch,
+    mss
+  });
+
   const tradePlan = calculateTradePlan(coin.current_price, {
     atr14,
     levels,
-    probability
-  });    
- const smartMoney = calculateSmartMoneyScore({
-   premiumDiscount,
-   fvg,
-   orderBlocks,
-   liquiditySweep,
-   bos,
-   choch,
-   mss
- }); 
-const recommendation = calculateRecommendation({
-  probability,
-  smartMoney
-});
+    probability,
+    smartMoney,
+    trend,
+    macd,
+    premiumDiscount,
+    bos,
+    choch,
+    mss,
+    liquiditySweep,
+    fvg,
+    orderBlocks,
+    imbalance
+  });
+    
+  const recommendation = calculateRecommendation({
+    probability,
+    smartMoney
+  });
     
     res.status(200).json({
       ok: true,
