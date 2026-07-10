@@ -1175,7 +1175,43 @@ if (tradePlan.validTrade) {
       instruction: "Wait for stronger confirmation before entering"
     };
   }
-}  
+}
+  let positionSize = {
+  riskPercent: 0,
+  leverage: "No Trade"
+};
+
+if (tradePlan.validTrade) {
+
+  if (grade === "A+") {
+    positionSize = {
+      riskPercent: 2,
+      leverage: "5x-10x"
+    };
+  }
+
+  else if (grade === "A") {
+    positionSize = {
+      riskPercent: 1.5,
+      leverage: "3x-8x"
+    };
+  }
+
+  else if (grade === "B") {
+    positionSize = {
+      riskPercent: 1,
+      leverage: "3x-5x"
+    };
+  }
+
+  else if (grade === "C") {
+    positionSize = {
+      riskPercent: 0.5,
+      leverage: "2x-3x"
+    };
+  }
+
+}
   let action = "Wait";
   let status = "No Trade";
   let risk = "High";
@@ -1211,6 +1247,7 @@ if (tradePlan.validTrade) {
       gradeScore,
       setupQuality,
       entryTiming,
+      positionSize,
       risk,
 
      direction: tradePlan.direction,
