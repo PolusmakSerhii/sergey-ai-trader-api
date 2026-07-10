@@ -741,10 +741,23 @@ export default async function handler(req, res) {
 
   try {
     const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${id}&price_change_percentage=24h`;
-
     const response = await fetch(url);
     const data = await response.json();
-    const coin = data[0];
+
+if (!response.ok) {
+  throw new Error(`CoinGecko request failed: ${response.status}`);
+}
+
+if (!Array.isArray(data) || data.length === 0) {
+  throw new Error(`No market data returned for ${symbol}`);
+}
+
+   const coin = data[0];
+
+if (!coin || typeof coin.current_price !== "number") {
+  throw new Error(`Invalid market data for ${symbol}`);
+}    
+    
     const fg = await fetch("https://api.alternative.me/fng/?limit=1");
     const fgData = await fg.json(); 
     
