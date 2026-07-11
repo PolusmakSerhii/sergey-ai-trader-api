@@ -1449,8 +1449,12 @@ export default async function handler(req, res) {
   
   const id = map[symbol] || "solana";
 
-  try {
-    const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${id}&price_change_percentage=24h`;
+ try {
+
+    const coinGlass = await getCoinGlassMarketData(symbol);
+   
+    const url = `https://api.coingecko.com/api/v3/coins/markets?...`;
+   
     const response = await fetch(url);
     const data = await response.json();
 
@@ -1591,6 +1595,8 @@ if (ema20 && ema50 && ema100 && ema200) {
       coin: coin.name,
       asset: coin.symbol.toUpperCase(),
       rank: coin.market_cap_rank,
+
+      coinGlass, 
       
       fearGreed: {
           value: fgData.data[0].value,
