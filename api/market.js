@@ -1453,8 +1453,8 @@ export default async function handler(req, res) {
 
     const coinGlass = await getCoinGlassMarketData(symbol);
    
-    const url = `https://api.coingecko.com/api/v3/coins/markets?...`;
-   
+    const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${id}&price_change_percentage=24h`;   
+    
     const response = await fetch(url);
     const data = await response.json();
 
