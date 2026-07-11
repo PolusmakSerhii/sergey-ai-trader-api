@@ -1281,6 +1281,159 @@ if (tradePlan.validTrade) {
     description
   };
 }
+async function fetchCoinGlass(path, params = {}) {
+  const apiKey = process.env.COINGLASS_API_KEY;
+
+  if (!apiKey) {
+    return {
+      ok: false,
+      error: "COINGLASS_API_KEY is not configured"
+    };
+  }
+
+  const url = new URL(
+    `https://open-api-v4.coinglass.com${path}`
+  );
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      url.searchParams.set(key, String(value));
+    }
+  });
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        accept: "application/json",
+        "CG-API-KEY": apiKey
+      }
+    });
+
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok || payload?.code !== "0") {
+      return {
+        ok: false,
+        status: response.status,
+        error: payload?.msg || "CoinGlass request failed",
+        raw: payload
+      };
+    }
+
+    return {
+      ok: true,
+      status: response.status,
+      data: payload.data
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.message
+    };
+  }
+}
+
+async function getCoinGlassMarketData(symbol) {
+  const asset = symbol.replace(/USDT$/i, "");
+
+  const [fundingResponse, openInterestResponse] =
+    await Promise.all([
+      fetchCoinGlass(
+        "/api/futures/funding-rate/exchange-list"
+      ),
+      fetchCoinGlass(
+        "/api/futures/open-interest/exchange-list",
+        {
+          symbol: asset
+        }
+      )
+    ]);
+
+  let fundingRate = null;
+
+  if (
+    fundingResponse.ok &&
+    Array.isArray(fundingResponse.data)
+  ) {
+    const coinData = fundingResponse.data.find(
+      item => item?.symbol === asset
+    );
+
+    const stablecoinList = Array.isArray(
+      coinData?.stablecoin_margin_list
+    )
+      ? coinData.stablecoin_margin_list
+      : [];
+
+    const binanceFunding = stablecoinList.find(
+      item => item?.exchange === "Binance"
+    );
+
+    if (binanceFunding) {
+      fundingRate = {
+        exchange: "Binance",
+        rate:
+          typeof binanceFunding.funding_rate === "number"
+            ? binanceFunding.funding_rate
+            : null,
+        intervalHours:
+          binanceFunding.funding_rate_interval ?? null,
+        nextFundingTime:
+          binanceFunding.next_funding_time ?? null
+      };
+    }
+  }
+
+  let openInterest = null;
+
+  if (
+    openInterestResponse.ok &&
+    Array.isArray(openInterestResponse.data)
+  ) {
+    const aggregated =
+      openInterestResponse.data.find(
+        item => item?.exchange === "All"
+      ) || openInterestResponse.data[0];
+
+    if (aggregated) {
+      openInterest = {
+        exchange: aggregated.exchange ?? "All",
+        usd: aggregated.open_interest_usd ?? null,
+        quantity: aggregated.open_interest_quantity ?? null,
+        change5m:
+          aggregated.open_interest_change_percent_5m ?? null,
+        change15m:
+          aggregated.open_interest_change_percent_15m ?? null,
+        change30m:
+          aggregated.open_interest_change_percent_30m ?? null,
+        change1h:
+          aggregated.open_interest_change_percent_1h ?? null,
+        change4h:
+          aggregated.open_interest_change_percent_4h ?? null,
+        change24h:
+          aggregated.open_interest_change_percent_24h ?? null
+      };
+    }
+  }
+
+  return {
+    available:
+      fundingResponse.ok || openInterestResponse.ok,
+
+    fundingRate,
+    openInterest,
+
+    errors: {
+      fundingRate: fundingResponse.ok
+        ? null
+        : fundingResponse.error,
+
+      openInterest: openInterestResponse.ok
+        ? null
+        : openInterestResponse.error
+    }
+  };
+}
 
 export default async function handler(req, res) {
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
