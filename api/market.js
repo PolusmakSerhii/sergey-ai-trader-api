@@ -1590,7 +1590,7 @@ if (ema20 && ema50 && ema100 && ema200) {
     
     res.status(200).json({
       ok: true,
-      source: "CoinGecko Free API",
+      source: "CoinGecko Free API + CoinGlass API V4",
       symbol,
       coin: coin.name,
       asset: coin.symbol.toUpperCase(),
