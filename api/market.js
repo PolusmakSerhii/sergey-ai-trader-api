@@ -1439,29 +1439,8 @@ if (
     longShortResponse.data[
       longShortResponse.data.length - 1
     ];
-
-  longShortRatio = {
-    exchange: "Binance",
-    longAccount:
-      last.long_account ??
-      last.longAccount ??
-      null,
-
-    shortAccount:
-      last.short_account ??
-      last.shortAccount ??
-      null,
-
-    ratio:
-      last.long_short_ratio ??
-      last.longShortRatio ??
-      null,
-
-    timestamp:
-      last.time ??
-      last.timestamp ??
-      null
-  };
+  
+longShortRatio = last;  
 }  
 return {
   available:
