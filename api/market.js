@@ -1355,7 +1355,7 @@ fetchCoinGlass(
   "/api/futures/global-long-short-account-ratio/history",
   {
     exchange: "Binance",
-    symbol: asset,
+    symbol,
     interval: "4h",
     limit: 1
   }
