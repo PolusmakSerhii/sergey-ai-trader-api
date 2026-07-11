@@ -1336,9 +1336,12 @@ async function fetchCoinGlass(path, params = {}) {
 async function getCoinGlassMarketData(symbol) {
   const asset = symbol.replace(/USDT$/i, "");
 
-  const [fundingResponse, openInterestResponse] =
-    await Promise.all([
-      fetchCoinGlass(
+  const [
+  fundingResponse,
+  openInterestResponse,
+  longShortResponse
+] = await Promise.all([
+    fetchCoinGlass(
         "/api/futures/funding-rate/exchange-list"
       ),
       fetchCoinGlass(
@@ -1347,6 +1350,16 @@ async function getCoinGlassMarketData(symbol) {
           symbol: asset
         }
       )
+,
+fetchCoinGlass(
+  "/api/futures/global-long-short-account-ratio/history",
+  {
+    exchange: "Binance",
+    symbol: asset,
+    interval: "4h",
+    limit: 1
+  }
+)    
     ]);
 
   let fundingRate = null;
@@ -1415,22 +1428,63 @@ async function getCoinGlassMarketData(symbol) {
       };
     }
   }
+let longShortRatio = null;
 
-  return {
-    available:
-      fundingResponse.ok || openInterestResponse.ok,
+if (
+  longShortResponse.ok &&
+  Array.isArray(longShortResponse.data) &&
+  longShortResponse.data.length > 0
+) {
+  const last =
+    longShortResponse.data[
+      longShortResponse.data.length - 1
+    ];
 
-    fundingRate,
-    openInterest,
+  longShortRatio = {
+    exchange: "Binance",
+    longAccount:
+      last.long_account ??
+      last.longAccount ??
+      null,
 
-    errors: {
+    shortAccount:
+      last.short_account ??
+      last.shortAccount ??
+      null,
+
+    ratio:
+      last.long_short_ratio ??
+      last.longShortRatio ??
+      null,
+
+    timestamp:
+      last.time ??
+      last.timestamp ??
+      null
+  };
+}  
+return {
+  available:
+    fundingResponse.ok ||
+    openInterestResponse.ok ||
+    longShortResponse.ok,
+
+  fundingRate,
+  openInterest,
+  longShortRatio,
+
+  errors: {
       fundingRate: fundingResponse.ok
         ? null
         : fundingResponse.error,
 
       openInterest: openInterestResponse.ok
         ? null
-        : openInterestResponse.error
+        : openInterestResponse.error,
+
+longShortRatio: longShortResponse.ok
+  ? null
+  : longShortResponse.error    
     }
   };
 }
