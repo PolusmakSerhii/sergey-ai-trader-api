@@ -2402,23 +2402,30 @@ export default async function handler(req, res) {
     "1d",
     300
   );   
-   
-binanceKlines: {
-  available: binanceDailyResponse.ok,
-  interval: "1d",
-  candles: binanceDailyCandles.length,
+const binanceDailyCandles =
+  binanceDailyResponse.ok
+    ? binanceDailyResponse.data
+    : [];
 
-  latest:
-    binanceDailyCandles.length > 0
-      ? binanceDailyCandles[
-          binanceDailyCandles.length - 1
-        ]
-      : null,
+const binanceDailyCloses =
+  binanceDailyCandles.map(
+    candle => candle.close
+  );
 
-  error: binanceDailyResponse.ok
-    ? null
-    : binanceDailyResponse.error
-},
+const binanceDailyVolumes =
+  binanceDailyCandles.map(
+    candle => candle.volume
+  );
+
+const binanceDailyOhlc =
+  binanceDailyCandles.map(candle => [
+    candle.openTime,
+    candle.open,
+    candle.high,
+    candle.low,
+    candle.close
+  ]);
+
    
     const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${id}&price_change_percentage=24h`;   
     
@@ -2644,8 +2651,24 @@ const decisionEngine = calculateDecisionEngine({
       asset: coin.symbol.toUpperCase(),
       rank: coin.market_cap_rank,
 
-      coinGlass, 
-      
+       coinGlass,
+
+binanceKlines: {
+  available: binanceDailyResponse.ok,
+  interval: "1d",
+  candles: binanceDailyCandles.length,
+
+  latest:
+    binanceDailyCandles.length > 0
+      ? binanceDailyCandles[
+          binanceDailyCandles.length - 1
+        ]
+      : null,
+
+  error: binanceDailyResponse.ok
+    ? null
+    : binanceDailyResponse.error
+},      
       fearGreed: {
           value: fgData.data[0].value,
           classification: fgData.data[0].value_classification
