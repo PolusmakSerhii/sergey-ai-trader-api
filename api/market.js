@@ -2509,7 +2509,19 @@ const probability = {
     orderBlocks,
     imbalance
   });
-    
+   
+const decisionEngine = calculateDecisionEngine({
+  probability,
+  tradePlan,
+  smartMoney,
+  levels,
+  volumeStats,
+  trend,
+  bos,
+  choch,
+  mss
+});
+   
  const recommendation = calculateRecommendation({
   probability,
   smartMoney,
