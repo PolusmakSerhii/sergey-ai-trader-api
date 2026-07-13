@@ -1520,10 +1520,9 @@ available:
     ? null
     : liquidationResponse.error,
     
-  liquidationHeatmap:
-      liquidationHeatmapResponse.ok
-          ? null
-          : liquidationHeatmapResponse.error    
+  liquidationHeatmap: liquidationHeatmapResponse.ok
+    ? null
+    : liquidationHeatmapResponse.error    
 }
 };
 }
