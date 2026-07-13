@@ -1052,6 +1052,223 @@ volumeConfirmation: {
     warnings
   };
 }
+
+function calculateSignalConfidence(data, probability) {
+  if (!probability) {
+    return {
+      score: 0,
+      grade: "D",
+      quality: "No Data",
+      agreement: "Unknown",
+      penalties: []
+    };
+  }
+
+  const longScore =
+    Number(probability.longScore) || 0;
+
+  const shortScore =
+    Number(probability.shortScore) || 0;
+
+  const leadingScore = Math.max(
+    longScore,
+    shortScore
+  );
+
+  const scoreDifference = Math.abs(
+    longScore - shortScore
+  );
+
+  const bullishFactors =
+    Number(
+      probability.confluence?.bullishFactors
+    ) || 0;
+
+  const bearishFactors =
+    Number(
+      probability.confluence?.bearishFactors
+    ) || 0;
+
+  const totalFactors =
+    bullishFactors + bearishFactors;
+
+  const volumeRatio =
+    Number(
+      probability.volumeConfirmation?.ratio
+    ) || 0;
+
+  const volumeSpike =
+    probability.volumeConfirmation?.spike === true;
+
+  const warnings = Array.isArray(
+    probability.warnings
+  )
+    ? probability.warnings
+    : [];
+
+  const penalties = [];
+
+  /*
+   * 1. Сила основного направления — 40%
+   */
+  const strengthScore =
+    Math.min(100, leadingScore);
+
+  /*
+   * 2. Разница Long и Short — 25%
+   */
+  const separationScore =
+    Math.min(
+      100,
+      scoreDifference * 5
+    );
+
+  /*
+   * 3. Согласованность факторов — 20%
+   */
+  let confluenceScore = 0;
+
+  if (totalFactors > 0) {
+    const dominantFactors = Math.max(
+      bullishFactors,
+      bearishFactors
+    );
+
+    confluenceScore =
+      dominantFactors / totalFactors * 100;
+  }
+
+  /*
+   * 4. Подтверждение объёмом — 15%
+   */
+  let volumeScore = 40;
+
+  if (volumeSpike) {
+    volumeScore = 100;
+  } else if (volumeRatio >= 1) {
+    volumeScore = 70;
+  } else if (volumeRatio >= 0.7) {
+    volumeScore = 50;
+  } else if (volumeRatio > 0) {
+    volumeScore = 25;
+    penalties.push(
+      "Low volume reduces signal reliability"
+    );
+  }
+
+  let confidence = Math.round(
+    strengthScore * 0.4 +
+    separationScore * 0.25 +
+    confluenceScore * 0.2 +
+    volumeScore * 0.15
+  );
+
+  /*
+   * Штраф за нейтральный EMA-тренд
+   */
+  if (
+    data.trend === "Neutral" ||
+    warnings.some(item =>
+      item.includes("EMA trend is neutral")
+    )
+  ) {
+    confidence -= 8;
+
+    penalties.push(
+      "EMA trend is neutral or mixed"
+    );
+  }
+
+  /*
+   * Штраф за конфликт сигналов
+   */
+  if (scoreDifference < 10) {
+    confidence -= 10;
+
+    penalties.push(
+      "Bullish and bearish signals are too close"
+    );
+  }
+
+  /*
+   * Штраф за малое количество подтверждений
+   */
+  if (totalFactors < 3) {
+    confidence -= 8;
+
+    penalties.push(
+      "Not enough independent confirmations"
+    );
+  }
+
+  /*
+   * Бонус за направление тренда
+   */
+  const trendSupportsLong =
+    data.trend === "Strong Bullish" &&
+    longScore > shortScore;
+
+  const trendSupportsShort =
+    data.trend === "Strong Bearish" &&
+    shortScore > longScore;
+
+  if (
+    trendSupportsLong ||
+    trendSupportsShort
+  ) {
+    confidence += 10;
+  }
+
+  confidence = Math.max(
+    0,
+    Math.min(100, confidence)
+  );
+
+  let grade = "D";
+  let quality = "Avoid";
+
+  if (confidence >= 85) {
+    grade = "A+";
+    quality = "Excellent";
+  } else if (confidence >= 75) {
+    grade = "A";
+    quality = "Very Good";
+  } else if (confidence >= 65) {
+    grade = "B";
+    quality = "Good";
+  } else if (confidence >= 55) {
+    grade = "C";
+    quality = "Average";
+  }
+
+  let agreement = "Mixed";
+
+  if (scoreDifference >= 25) {
+    agreement = "Strong";
+  } else if (scoreDifference >= 12) {
+    agreement = "Moderate";
+  } else if (scoreDifference >= 8) {
+    agreement = "Weak";
+  }
+
+  return {
+    version: "1.0",
+    score: confidence,
+    grade,
+    quality,
+    agreement,
+
+    components: {
+      strength: Math.round(strengthScore),
+      separation: Math.round(separationScore),
+      confluence: Math.round(confluenceScore),
+      volume: Math.round(volumeScore)
+    },
+
+    penalties
+  };
+}
+
 function calculateTradePlan(price, data) {
   if (
     typeof price !== "number" ||
@@ -2021,27 +2238,43 @@ if (ema20 && ema50 && ema100 && ema200) {
     trend = "Strong Bearish";
   }
 }  
-const probability = calculateProbabilityScore({
-  price: coin.current_price,
-  change24h: coin.price_change_percentage_24h,
-  volumeStats,
-  
-  trend,
-  rsi14,
-  macd,
-  premiumDiscount,
-  bos,
-  choch,
-  mss,
-  imbalance,
-  liquiditySweep,
-  fvg,
-  orderBlocks,
-  equalHighLow,
+const probabilityBase =
+  calculateProbabilityScore({
+    price: coin.current_price,
+    change24h:
+      coin.price_change_percentage_24h,
+    volumeStats,
 
-  coinGlass
-});  
-    
+    trend,
+    rsi14,
+    macd,
+    premiumDiscount,
+    bos,
+    choch,
+    mss,
+    imbalance,
+    liquiditySweep,
+    fvg,
+    orderBlocks,
+    equalHighLow,
+    coinGlass
+  });
+
+const probability = {
+  ...probabilityBase,
+
+  version: "2.3",
+
+  confidence:
+    calculateSignalConfidence(
+      {
+        trend,
+        volumeStats
+      },
+      probabilityBase
+    )
+};
+   
   const smartMoney = calculateSmartMoneyScore({
     premiumDiscount,
     fvg,
