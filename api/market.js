@@ -344,7 +344,8 @@ function calculateMSS(price, swings, bos, choch) {
   return mss;
 }
 
-function calculateProbabilityScore(data) {
+
+ function calculateProbabilityScore(data) {
   let longScore = 0;
   let shortScore = 0;
 
@@ -761,7 +762,6 @@ function calculateProbabilityScore(data) {
     warnings
   };
 }
-
 function calculateTradePlan(price, data) {
   if (
     typeof price !== "number" ||
