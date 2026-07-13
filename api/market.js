@@ -1054,22 +1054,22 @@ const shortReasons = probabilityReasons
     shortScore += 15;
     shortReasons.push("Bearish Smart Money");
   }
-
-  if (
-    typeof smartMoney.score === "number" &&
-    smartMoney.score >= 60
-  ) {
-    longScore += 8;
-    longReasons.push("Smart Money score above 60");
-  }
-
-  if (
-    typeof smartMoney.score === "number" &&
-    smartMoney.score <= 40
-  ) {
-    shortScore += 8;
-    shortReasons.push("Smart Money score below 40");
-  }
+if (
+  smartMoney.rating === "Bearish" &&
+  typeof smartMoney.score === "number" &&
+  smartMoney.score <= 25
+) {
+  shortScore += 8;
+  shortReasons.push("Bearish Smart Money score");
+}  
+if (
+  smartMoney.rating === "Bullish" &&
+  typeof smartMoney.score === "number" &&
+  smartMoney.score >= 75
+) {
+  longScore += 8;
+  longReasons.push("Bullish Smart Money score");
+} 
   
   longScore = Math.min(100, longScore);
   shortScore = Math.min(100, shortScore);
