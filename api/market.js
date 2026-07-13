@@ -1618,6 +1618,214 @@ function calculateSmartMoneyScore(data) {
   };
 }
 
+function calculateDecisionEngine(data) {
+  const probability = data?.probability || {};
+  const confidence = probability?.confidence || {};
+  const tradePlan = data?.tradePlan || {};
+  const smartMoney = data?.smartMoney || {};
+  const levels = data?.levels || {};
+  const volumeStats = data?.volumeStats || {};
+
+  const longScore =
+    typeof probability.longScore === "number"
+      ? probability.longScore
+      : 0;
+
+  const shortScore =
+    typeof probability.shortScore === "number"
+      ? probability.shortScore
+      : 0;
+
+  const signalStrength = Math.max(longScore, shortScore);
+
+  const confidenceScore =
+    typeof confidence.score === "number"
+      ? confidence.score
+      : 0;
+
+  const bullishFactors = [];
+  const bearishFactors = [];
+  const riskFactors = [];
+
+  const probabilityReasons =
+    Array.isArray(probability.reasons)
+      ? probability.reasons
+      : [];
+
+  for (const reason of probabilityReasons) {
+    if (typeof reason !== "string") continue;
+
+    if (reason.startsWith("Bullish:")) {
+      bullishFactors.push(
+        reason.replace(/^Bullish:\s*/, "")
+      );
+    }
+
+    if (reason.startsWith("Bearish:")) {
+      bearishFactors.push(
+        reason.replace(/^Bearish:\s*/, "")
+      );
+    }
+  }
+
+  const warnings =
+    Array.isArray(probability.warnings)
+      ? probability.warnings
+      : [];
+
+  riskFactors.push(...warnings);
+
+  const confidencePenalties =
+    Array.isArray(confidence.penalties)
+      ? confidence.penalties
+      : [];
+
+  for (const penalty of confidencePenalties) {
+    if (!riskFactors.includes(penalty)) {
+      riskFactors.push(penalty);
+    }
+  }
+
+  if (smartMoney.rating === "Bullish") {
+    bullishFactors.push("Smart Money bias is bullish");
+  }
+
+  if (smartMoney.rating === "Bearish") {
+    bearishFactors.push("Smart Money bias is bearish");
+  }
+
+  if (
+    typeof volumeStats.ratio === "number" &&
+    volumeStats.ratio < 0.7
+  ) {
+    const warning =
+      `Low volume: ${volumeStats.ratio}x average`;
+
+    if (!riskFactors.includes(warning)) {
+      riskFactors.push(warning);
+    }
+  }
+
+  let marketBias = "Neutral";
+
+  if (
+    shortScore > longScore &&
+    shortScore - longScore >= 8
+  ) {
+    marketBias = "Bearish";
+  } else if (
+    longScore > shortScore &&
+    longScore - shortScore >= 8
+  ) {
+    marketBias = "Bullish";
+  }
+
+  let action = "WAIT";
+
+  if (
+    tradePlan.validTrade === true &&
+    tradePlan.direction === "Long"
+  ) {
+    action = "BUY";
+  }
+
+  if (
+    tradePlan.validTrade === true &&
+    tradePlan.direction === "Short"
+  ) {
+    action = "SELL";
+  }
+
+  let tradeQuality =
+    confidence.grade || "D";
+
+  if (!tradePlan.validTrade) {
+    tradeQuality = "D";
+  }
+
+  let nextTrigger =
+    "Wait for stronger confirmation and sufficient volume.";
+
+  if (action === "BUY") {
+    nextTrigger =
+      `Enter Long only inside ${tradePlan.entryZone?.from ?? "N/A"}–${tradePlan.entryZone?.to ?? "N/A"}, with Stop Loss at ${tradePlan.stopLoss ?? "N/A"}.`;
+  } else if (action === "SELL") {
+    nextTrigger =
+      `Enter Short only inside ${tradePlan.entryZone?.from ?? "N/A"}–${tradePlan.entryZone?.to ?? "N/A"}, with Stop Loss at ${tradePlan.stopLoss ?? "N/A"}.`;
+  } else if (marketBias === "Bearish") {
+    if (typeof levels.support === "number") {
+      nextTrigger =
+        `Wait for bearish structure confirmation and a breakdown below support ${levels.support}. Do not enter without increasing volume.`;
+    } else {
+      nextTrigger =
+        "Wait for bearish CHOCH or BOS with increasing volume before considering a Short.";
+    }
+  } else if (marketBias === "Bullish") {
+    if (typeof levels.resistance === "number") {
+      nextTrigger =
+        `Wait for bullish structure confirmation and a breakout above resistance ${levels.resistance}. Do not enter without increasing volume.`;
+    } else {
+      nextTrigger =
+        "Wait for bullish CHOCH or BOS with increasing volume before considering a Long.";
+    }
+  }
+
+  let invalidation = null;
+
+  if (
+    marketBias === "Bearish" &&
+    typeof levels.resistance === "number"
+  ) {
+    invalidation =
+      `Bearish scenario weakens above ${levels.resistance}.`;
+  }
+
+  if (
+    marketBias === "Bullish" &&
+    typeof levels.support === "number"
+  ) {
+    invalidation =
+      `Bullish scenario weakens below ${levels.support}.`;
+  }
+
+  const summaryText =
+    action === "WAIT"
+      ? `${marketBias} market bias, but no confirmed trade. Signal strength ${signalStrength}/100 and confidence ${confidenceScore}/100.`
+      : `${action} setup confirmed. Signal strength ${signalStrength}/100 and confidence ${confidenceScore}/100.`;
+
+  return {
+    version: "3.0",
+
+    summary: {
+      marketBias,
+      action,
+      signalStrength,
+      confidence: confidenceScore,
+      tradeQuality,
+      validTrade: tradePlan.validTrade === true,
+      text: summaryText
+    },
+
+    bullishFactors: [...new Set(bullishFactors)],
+    bearishFactors: [...new Set(bearishFactors)],
+    riskFactors: [...new Set(riskFactors)],
+
+    execution: {
+      entryZone: tradePlan.entryZone ?? null,
+      stopLoss: tradePlan.stopLoss ?? null,
+      takeProfit1: tradePlan.takeProfit1 ?? null,
+      takeProfit2: tradePlan.takeProfit2 ?? null,
+      takeProfit3: tradePlan.takeProfit3 ?? null,
+      recommendedTakeProfit:
+        tradePlan.recommendedTakeProfit ?? null,
+      riskReward: tradePlan.riskReward ?? null
+    },
+
+    nextTrigger,
+    invalidation
+  };
+}
+
 function calculateRecommendation(data) {
   const probability = data?.probability;
   const smartMoney = data?.smartMoney;
@@ -2364,6 +2572,7 @@ technical: {
     probability,
     tradePlan,
     smartMoney,
+    decisionEngine,
     recommendation
 },
       
