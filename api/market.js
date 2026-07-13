@@ -1027,29 +1027,23 @@ function calculateTradePlan(price, data) {
     ? data.orderBlocks
     : [];
 
-  let longScore = 0;
-  let shortScore = 0;
+  let longScore = probability.longScore ?? 0;
+let shortScore = probability.shortScore ?? 0;
 
-  const longReasons = [];
-  const shortReasons = [];
+const probabilityReasons =
+  Array.isArray(probability.reasons)
+    ? probability.reasons
+    : [];
 
-  // 1. Probability
-  if (probability.signal === "Strong Buy") {
-    longScore += 30;
-    longReasons.push("Strong Buy probability");
-  } else if (probability.signal === "Buy") {
-    longScore += 20;
-    longReasons.push("Buy probability");
-  }
+const longReasons = probabilityReasons
+  .filter(r => r.startsWith("Bullish:"))
+  .map(r => r.replace("Bullish: ", ""));
 
-  if (probability.signal === "Strong Sell") {
-    shortScore += 30;
-    shortReasons.push("Strong Sell probability");
-  } else if (probability.signal === "Sell") {
-    shortScore += 20;
-    shortReasons.push("Sell probability");
-  }
-
+const shortReasons = probabilityReasons
+  .filter(r => r.startsWith("Bearish:"))
+  .map(r => r.replace("Bearish: ", ""));
+  
+  
   // 2. Smart Money
   if (smartMoney.rating === "Bullish") {
     longScore += 15;
@@ -1076,116 +1070,12 @@ function calculateTradePlan(price, data) {
     shortScore += 8;
     shortReasons.push("Smart Money score below 40");
   }
-
-  // 3. Trend
-  if (data.trend === "Strong Bullish") {
-    longScore += 15;
-    longReasons.push("Strong bullish trend");
-  }
-
-  if (data.trend === "Strong Bearish") {
-    shortScore += 15;
-    shortReasons.push("Strong bearish trend");
-  }
-
-  // 4. MACD
-  if (macdValue > 0) {
-    longScore += 8;
-    longReasons.push("MACD bullish");
-  }
-
-  if (macdValue < 0) {
-    shortScore += 8;
-    shortReasons.push("MACD bearish");
-  }
-
-  // 5. Premium / Discount
-  if (data.premiumDiscount?.zone === "Discount") {
-    longScore += 10;
-    longReasons.push("Price in discount zone");
-  }
-
-  if (data.premiumDiscount?.zone === "Premium") {
-    shortScore += 10;
-    shortReasons.push("Price in premium zone");
-  }
-
-  // 6. Market structure
-  if (
-    data.bos === "Bullish BOS" ||
-    data.choch === "Bullish CHOCH" ||
-    data.mss === "Bullish MSS"
-  ) {
-    longScore += 12;
-    longReasons.push("Bullish market structure");
-  }
-
-  if (
-    data.bos === "Bearish BOS" ||
-    data.choch === "Bearish CHOCH" ||
-    data.mss === "Bearish MSS"
-  ) {
-    shortScore += 12;
-    shortReasons.push("Bearish market structure");
-  }
-
-  // 7. Liquidity Sweep
-  if (data.liquiditySweep === "Below Low Liquidity") {
-    longScore += 10;
-    longReasons.push("Sell-side liquidity sweep");
-  }
-
-  if (data.liquiditySweep === "Above High Liquidity") {
-    shortScore += 10;
-    shortReasons.push("Buy-side liquidity sweep");
-  }
-
-  // 8. FVG
-  if (fvg.some(item => item?.type === "Bullish FVG")) {
-    longScore += 6;
-    longReasons.push("Bullish FVG");
-  }
-
-  if (fvg.some(item => item?.type === "Bearish FVG")) {
-    shortScore += 6;
-    shortReasons.push("Bearish FVG");
-  }
-
-  // 9. Order Blocks
-  if (
-    orderBlocks.some(
-      item => item?.type === "Bullish Order Block"
-    )
-  ) {
-    longScore += 6;
-    longReasons.push("Bullish Order Block");
-  }
-
-  if (
-    orderBlocks.some(
-      item => item?.type === "Bearish Order Block"
-    )
-  ) {
-    shortScore += 6;
-    shortReasons.push("Bearish Order Block");
-  }
-
-  // 10. Imbalance
-  if (data.imbalance?.type === "Bullish Imbalance") {
-    longScore += 8;
-    longReasons.push("Bullish imbalance");
-  }
-
-  if (data.imbalance?.type === "Bearish Imbalance") {
-    shortScore += 8;
-    shortReasons.push("Bearish imbalance");
-  }
-
+  
   longScore = Math.min(100, longScore);
   shortScore = Math.min(100, shortScore);
-
-  const minimumSetupScore = 45;
-  const minimumScoreDifference = 8;
+  
+  const minimumSetupScore = 55;
+  const minimumScoreDifference = 12;
 
   let candidateDirection = "Wait";
   let setupScore = Math.max(longScore, shortScore);
