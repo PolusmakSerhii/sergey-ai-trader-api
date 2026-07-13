@@ -1491,10 +1491,11 @@ if (liquidationHeatmapResponse.ok) {
   
 return {
 available:
-    fundingResponse.ok ||
-    openInterestResponse.ok ||
-    longShortResponse.ok ||
-    liquidationResponse.ok,
+  fundingResponse.ok ||
+  openInterestResponse.ok ||
+  longShortResponse.ok ||
+  liquidationResponse.ok ||
+  liquidationHeatmapResponse.ok,  
   
  fundingRate,
  openInterest,
@@ -1517,7 +1518,7 @@ available:
 
   liquidations: liquidationResponse.ok
     ? null
-    : liquidationResponse.error
+    : liquidationResponse.error,
     
   liquidationHeatmap:
       liquidationHeatmapResponse.ok
