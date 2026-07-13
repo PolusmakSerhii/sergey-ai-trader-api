@@ -1363,11 +1363,12 @@ const [
   ),
 
   fetchCoinGlass(
-    "/api/futures/liquidation/exchange-list",
-    {
-      symbol: asset
-    }
-  )
+  "/api/futures/liquidation/exchange-list",
+  {
+    symbol: asset,
+    range: "24h"
+  }
+)
 ]);
   let fundingRate = null;
 
