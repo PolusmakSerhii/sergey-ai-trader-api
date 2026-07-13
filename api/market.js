@@ -426,7 +426,17 @@ const priceChange24h =
   typeof data.change24h === "number"
     ? data.change24h
     : null;
+   
+const volumeStats = data.volumeStats || {};
 
+const volumeRatio =
+  typeof volumeStats.ratio === "number"
+    ? volumeStats.ratio
+    : null;
+
+const volumeSpike =
+  volumeStats.spike === true;
+   
 const liquidations = Array.isArray(
   coinGlass.liquidations
 )
@@ -882,6 +892,41 @@ if (
       );
     }
   }
+}  
+// 17. VOLUME CONFIRMATION — максимум 8 баллов
+if (
+  volumeSpike &&
+  volumeRatio !== null &&
+  priceChange24h !== null
+) {
+  if (
+    priceChange24h > 0 &&
+    macdValue > 0
+  ) {
+    longScore += 8;
+    longReasons.push(
+      `Bullish volume confirmation: ${volumeRatio}x average volume`
+    );
+  } else if (
+    priceChange24h < 0 &&
+    macdValue < 0
+  ) {
+    shortScore += 8;
+    shortReasons.push(
+      `Bearish volume confirmation: ${volumeRatio}x average volume`
+    );
+  } else {
+    warnings.push(
+      `Volume spike without directional confirmation: ${volumeRatio}x`
+    );
+  }
+} else if (
+  volumeRatio !== null &&
+  volumeRatio < 0.7
+) {
+  warnings.push(
+    `Low market volume: ${volumeRatio}x average`
+  );
 }   
   // Бонус за подтверждение несколькими факторами
   if (longReasons.length >= 5) {
@@ -974,7 +1019,7 @@ if (
   }
 
   return {
-    version: "2.1",
+    version: "2.2",
     score,
     signal,
     direction,
@@ -996,6 +1041,12 @@ derivatives: {
   longShortRatio,
   longLiquidations,
   shortLiquidations
+},  
+volumeConfirmation: {
+  current: volumeStats.current ?? null,
+  average20: volumeStats.sma20 ?? null,
+  ratio: volumeRatio,
+  spike: volumeSpike
 },    
     reasons,
     warnings
@@ -1973,7 +2024,8 @@ if (ema20 && ema50 && ema100 && ema200) {
 const probability = calculateProbabilityScore({
   price: coin.current_price,
   change24h: coin.price_change_percentage_24h,
-
+  volumeStats,
+  
   trend,
   rsi14,
   macd,
