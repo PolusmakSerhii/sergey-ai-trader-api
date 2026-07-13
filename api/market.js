@@ -1547,17 +1547,61 @@ if (!coin || typeof coin.current_price !== "number") {
     const fg = await fetch("https://api.alternative.me/fng/?limit=1");
     const fgData = await fg.json(); 
     
-    const global = await fetch("https://api.coingecko.com/api/v3/global");
-    const globalData = await global.json();
-    const marketCapPercentage = globalData?.data?.market_cap_percentage || {};
-    const chart = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=250`);    
-    const chartData = await chart.json();
-    const volumes = Array.isArray(chartData.total_volumes)
-      ? chartData.total_volumes.map(v => v[1])
-      : [];
-    const ohlc = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/ohlc?vs_currency=usd&days=90`);
-    const ohlcData = await ohlc.json();
-    const dailyCloses = getDailyCloses(chartData.prices || []);    
+const [globalResponse, chartResponse, ohlcResponse] =
+  await Promise.all([
+    fetch("https://api.coingecko.com/api/v3/global"),
+
+    fetch(
+      `https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=250`
+    ),
+
+    fetch(
+      `https://api.coingecko.com/api/v3/coins/${id}/ohlc?vs_currency=usd&days=90`
+    )
+  ]);
+
+const globalData = globalResponse.ok
+  ? await globalResponse.json()
+  : null;
+
+const chartData = chartResponse.ok
+  ? await chartResponse.json()
+  : {
+      prices: [],
+      total_volumes: []
+    };
+
+const ohlcData = ohlcResponse.ok
+  ? await ohlcResponse.json()
+  : [];
+
+const marketCapPercentage =
+  globalData?.data?.market_cap_percentage || {};
+
+const volumes = Array.isArray(chartData?.total_volumes)
+  ? chartData.total_volumes.map(item => item[1])
+  : [];
+
+const dailyCloses = getDailyCloses(
+  Array.isArray(chartData?.prices)
+    ? chartData.prices
+    : []
+);
+
+const coinGeckoErrors = {
+  global: globalResponse.ok
+    ? null
+    : `CoinGecko global failed: ${globalResponse.status}`,
+
+  chart: chartResponse.ok
+    ? null
+    : `CoinGecko chart failed: ${chartResponse.status}`,
+
+  ohlc: ohlcResponse.ok
+    ? null
+    : `CoinGecko OHLC failed: ${ohlcResponse.status}`
+};
+   
     const rsi14 = calculateRSI(dailyCloses, 14);
     const ema20 = calculateEMA(dailyCloses, 20);
     const ema50 = calculateEMA(dailyCloses, 50);
@@ -1663,6 +1707,10 @@ if (ema20 && ema50 && ema100 && ema200) {
     res.status(200).json({
       ok: true,
       source: "CoinGecko Free API + CoinGlass API V4",
+      dataErrors: {
+  coinGecko: coinGeckoErrors,
+  coinGlass: coinGlass.errors
+},
       symbol,
       coin: coin.name,
       asset: coin.symbol.toUpperCase(),
