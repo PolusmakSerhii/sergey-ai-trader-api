@@ -383,6 +383,70 @@ function calculateMSS(price, swings, bos, choch) {
     typeof data.macd?.macd === "number"
       ? data.macd.macd
       : 0;
+const coinGlass = data.coinGlass || {};
+
+const fundingRate =
+  typeof coinGlass.fundingRate?.rate === "number"
+    ? coinGlass.fundingRate.rate
+    : null;
+
+const openInterest = coinGlass.openInterest || {};
+
+const openInterestChange1h =
+  typeof openInterest.change1h === "number"
+    ? openInterest.change1h
+    : null;
+
+const openInterestChange4h =
+  typeof openInterest.change4h === "number"
+    ? openInterest.change4h
+    : null;
+
+const openInterestChange24h =
+  typeof openInterest.change24h === "number"
+    ? openInterest.change24h
+    : null;
+
+const longAccount =
+  typeof coinGlass.longShortRatio?.longAccount === "number"
+    ? coinGlass.longShortRatio.longAccount
+    : null;
+
+const shortAccount =
+  typeof coinGlass.longShortRatio?.shortAccount === "number"
+    ? coinGlass.longShortRatio.shortAccount
+    : null;
+
+const longShortRatio =
+  typeof coinGlass.longShortRatio?.ratio === "number"
+    ? coinGlass.longShortRatio.ratio
+    : null;
+
+const priceChange24h =
+  typeof data.change24h === "number"
+    ? data.change24h
+    : null;
+
+const liquidations = Array.isArray(
+  coinGlass.liquidations
+)
+  ? coinGlass.liquidations
+  : [];
+
+const totalLiquidations =
+  liquidations.find(
+    item => item?.exchange === "All"
+  ) || null;
+
+const longLiquidations =
+  typeof totalLiquidations?.longLiquidation_usd === "number"
+    ? totalLiquidations.longLiquidation_usd
+    : null;
+
+const shortLiquidations =
+  typeof totalLiquidations?.shortLiquidation_usd === "number"
+    ? totalLiquidations.shortLiquidation_usd
+    : null;   
 
   function isPriceNearLevel(
     level,
@@ -653,7 +717,172 @@ function calculateMSS(price, swings, bos, choch) {
       "Bearish candle imbalance"
     );
   }
+// 13. FUNDING RATE — максимум 6 баллов
+if (fundingRate !== null) {
+  if (fundingRate <= -0.01) {
+    longScore += 6;
+    longReasons.push(
+      `Strong negative funding: ${fundingRate}`
+    );
+  } else if (fundingRate < -0.003) {
+    longScore += 3;
+    longReasons.push(
+      `Negative funding: ${fundingRate}`
+    );
+  }
 
+  if (fundingRate >= 0.01) {
+    shortScore += 6;
+    shortReasons.push(
+      `Strong positive funding: ${fundingRate}`
+    );
+  } else if (fundingRate > 0.003) {
+    shortScore += 3;
+    shortReasons.push(
+      `Positive funding: ${fundingRate}`
+    );
+  }
+}
+
+// 14. OPEN INTEREST + PRICE — максимум 8 баллов
+const effectiveOiChange =
+  openInterestChange4h ??
+  openInterestChange1h ??
+  openInterestChange24h;
+
+if (
+  effectiveOiChange !== null &&
+  priceChange24h !== null
+) {
+  if (
+    effectiveOiChange >= 1 &&
+    priceChange24h > 0
+  ) {
+    longScore += 8;
+    longReasons.push(
+      `Price and OI rising: OI ${effectiveOiChange}%`
+    );
+  } else if (
+    effectiveOiChange >= 1 &&
+    priceChange24h < 0
+  ) {
+    shortScore += 8;
+    shortReasons.push(
+      `OI rising while price falls: OI ${effectiveOiChange}%`
+    );
+  } else if (
+    effectiveOiChange <= -1 &&
+    priceChange24h > 0
+  ) {
+    shortScore += 3;
+    shortReasons.push(
+      "Price rising while OI falls — possible short covering"
+    );
+  } else if (
+    effectiveOiChange <= -1 &&
+    priceChange24h < 0
+  ) {
+    longScore += 3;
+    longReasons.push(
+      "Price and OI falling — possible long liquidation exhaustion"
+    );
+  }
+}
+
+// 15. LONG / SHORT CROWDING — максимум 8 баллов
+if (
+  longAccount !== null &&
+  shortAccount !== null
+) {
+  if (longAccount >= 75) {
+    shortScore += 8;
+    shortReasons.push(
+      `Crowded longs: ${longAccount}%`
+    );
+  } else if (longAccount >= 68) {
+    shortScore += 5;
+    shortReasons.push(
+      `Elevated long positioning: ${longAccount}%`
+    );
+  }
+
+  if (shortAccount >= 75) {
+    longScore += 8;
+    longReasons.push(
+      `Crowded shorts: ${shortAccount}%`
+    );
+  } else if (shortAccount >= 68) {
+    longScore += 5;
+    longReasons.push(
+      `Elevated short positioning: ${shortAccount}%`
+    );
+  }
+}
+
+if (longShortRatio !== null) {
+  if (longShortRatio >= 3) {
+    shortScore += 3;
+    shortReasons.push(
+      `Extreme long/short ratio: ${longShortRatio}`
+    );
+  }
+
+  if (longShortRatio <= 0.4) {
+    longScore += 3;
+    longReasons.push(
+      `Extreme short/long ratio: ${longShortRatio}`
+    );
+  }
+}
+
+// 16. LIQUIDATIONS — максимум 8 баллов
+if (
+  longLiquidations !== null &&
+  shortLiquidations !== null
+) {
+  const liquidationTotal =
+    longLiquidations + shortLiquidations;
+
+  if (liquidationTotal > 0) {
+    const longShare =
+      longLiquidations / liquidationTotal;
+
+    const shortShare =
+      shortLiquidations / liquidationTotal;
+
+    if (longShare >= 0.7) {
+      longScore += 8;
+      longReasons.push(
+        `Heavy long liquidations: ${Math.round(
+          longShare * 100
+        )}%`
+      );
+    } else if (longShare >= 0.6) {
+      longScore += 4;
+      longReasons.push(
+        `Long liquidations dominate: ${Math.round(
+          longShare * 100
+        )}%`
+      );
+    }
+
+    if (shortShare >= 0.7) {
+      shortScore += 8;
+      shortReasons.push(
+        `Heavy short liquidations: ${Math.round(
+          shortShare * 100
+        )}%`
+      );
+    } else if (shortShare >= 0.6) {
+      shortScore += 4;
+      shortReasons.push(
+        `Short liquidations dominate: ${Math.round(
+          shortShare * 100
+        )}%`
+      );
+    }
+  }
+}   
   // Бонус за подтверждение несколькими факторами
   if (longReasons.length >= 5) {
     longScore += 5;
@@ -745,7 +974,7 @@ function calculateMSS(price, swings, bos, choch) {
   }
 
   return {
-    version: "2.0",
+    version: "2.1",
     score,
     signal,
     direction,
@@ -757,7 +986,17 @@ function calculateMSS(price, swings, bos, choch) {
       bullishFactors: longReasons.length,
       bearishFactors: shortReasons.length
     },
-
+derivatives: {
+  fundingRate,
+  openInterestChange1h,
+  openInterestChange4h,
+  openInterestChange24h,
+  longAccount,
+  shortAccount,
+  longShortRatio,
+  longLiquidations,
+  shortLiquidations
+},    
     reasons,
     warnings
   };
@@ -1841,22 +2080,25 @@ if (ema20 && ema50 && ema100 && ema200) {
     trend = "Strong Bearish";
   }
 }  
+const probability = calculateProbabilityScore({
+  price: coin.current_price,
+  change24h: coin.price_change_percentage_24h,
 
-  const probability = calculateProbabilityScore({
-    price: coin.current_price,
-    trend,
-    rsi14,
-    macd,
-    premiumDiscount,
-    bos,
-    choch,
-    mss,
-    imbalance,
-    liquiditySweep,
-    fvg,
-    orderBlocks,
-    equalHighLow
-  });
+  trend,
+  rsi14,
+  macd,
+  premiumDiscount,
+  bos,
+  choch,
+  mss,
+  imbalance,
+  liquiditySweep,
+  fvg,
+  orderBlocks,
+  equalHighLow,
+
+  coinGlass
+});  
     
   const smartMoney = calculateSmartMoneyScore({
     premiumDiscount,
