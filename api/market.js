@@ -1340,7 +1340,7 @@ const [
   openInterestResponse,
   longShortResponse,
   liquidationResponse,
-  liquidationHeatmapResponse
+  
 ] = await Promise.all([
   
   fetchCoinGlass(
@@ -1371,15 +1371,6 @@ const [
     range: "24h"
   }
 ),
-
-fetchCoinGlass(
-  "/api/futures/liquidation/heatmap/model1",
-  {
-    exchange: "Binance",
-    symbol,
-    range: "3d"
-  }
-)  
 ]);
   
   let fundingRate = null;
@@ -1483,25 +1474,18 @@ if (
 ) {
   liquidations = liquidationResponse.data;
 }
-  let liquidationHeatmap = null;
-
-if (liquidationHeatmapResponse.ok) {
-  liquidationHeatmap = liquidationHeatmapResponse.data;
-}
   
 return {
 available:
   fundingResponse.ok ||
   openInterestResponse.ok ||
   longShortResponse.ok ||
-  liquidationResponse.ok ||
-  liquidationHeatmapResponse.ok,  
+  liquidationResponse.ok,  
   
  fundingRate,
  openInterest,
  longShortRatio,
  liquidations,
- liquidationHeatmap,
   
   errors: {
   fundingRate: fundingResponse.ok
@@ -1518,11 +1502,7 @@ available:
 
   liquidations: liquidationResponse.ok
     ? null
-    : liquidationResponse.error,
-    
-  liquidationHeatmap: liquidationHeatmapResponse.ok
-    ? null
-    : liquidationHeatmapResponse.error    
+    : liquidationResponse.error
 }
 };
 }
