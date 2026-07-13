@@ -2075,6 +2075,82 @@ if (tradePlan.validTrade) {
     description
   };
 }
+
+async function fetchBinanceKlines(
+  symbol,
+  interval = "1d",
+  limit = 300
+) {
+  const url = new URL(
+    "https://api.binance.com/api/v3/klines"
+  );
+
+  url.searchParams.set("symbol", symbol);
+  url.searchParams.set("interval", interval);
+  url.searchParams.set("limit", String(limit));
+
+  try {
+    const response = await fetch(url);
+
+    const data = await response
+      .json()
+      .catch(() => null);
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        error:
+          data?.msg ||
+          `Binance klines failed: ${response.status}`,
+        data: []
+      };
+    }
+
+    if (!Array.isArray(data)) {
+      return {
+        ok: false,
+        status: response.status,
+        error: "Invalid Binance klines response",
+        data: []
+      };
+    }
+
+    const candles = data
+      .map(item => ({
+        openTime: Number(item[0]),
+        open: Number(item[1]),
+        high: Number(item[2]),
+        low: Number(item[3]),
+        close: Number(item[4]),
+        volume: Number(item[5]),
+        closeTime: Number(item[6])
+      }))
+      .filter(candle =>
+        Number.isFinite(candle.open) &&
+        Number.isFinite(candle.high) &&
+        Number.isFinite(candle.low) &&
+        Number.isFinite(candle.close) &&
+        Number.isFinite(candle.volume)
+      );
+
+    return {
+      ok: true,
+      status: response.status,
+      interval,
+      count: candles.length,
+      data: candles
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.message,
+      interval,
+      data: []
+    };
+  }
+}
+
 async function fetchCoinGlass(path, params = {}) {
   const apiKey = process.env.COINGLASS_API_KEY;
 
@@ -2317,7 +2393,32 @@ export default async function handler(req, res) {
 
  try {
 
-    const coinGlass = await getCoinGlassMarketData(symbol);
+    const coinGlass = 
+      await getCoinGlassMarketData(symbol);
+
+   const binanceDailyResponse =
+  await fetchBinanceKlines(
+    symbol,
+    "1d",
+    300
+  );   
+   
+binanceKlines: {
+  available: binanceDailyResponse.ok,
+  interval: "1d",
+  candles: binanceDailyCandles.length,
+
+  latest:
+    binanceDailyCandles.length > 0
+      ? binanceDailyCandles[
+          binanceDailyCandles.length - 1
+        ]
+      : null,
+
+  error: binanceDailyResponse.ok
+    ? null
+    : binanceDailyResponse.error
+},
    
     const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${id}&price_change_percentage=24h`;   
     
