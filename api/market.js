@@ -350,17 +350,31 @@ function calculateProbabilityScore(data) {
 
   const longReasons = [];
   const shortReasons = [];
+  const warnings = [];
 
-  const fvg = Array.isArray(data.fvg) ? data.fvg : [];
+  const price =
+    typeof data.price === "number" &&
+    Number.isFinite(data.price)
+      ? data.price
+      : null;
+
+  const fvg = Array.isArray(data.fvg)
+    ? data.fvg
+    : [];
+
   const orderBlocks = Array.isArray(data.orderBlocks)
     ? data.orderBlocks
     : [];
 
-  const equalHighs = Array.isArray(data.equalHighLow?.equalHighs)
+  const equalHighs = Array.isArray(
+    data.equalHighLow?.equalHighs
+  )
     ? data.equalHighLow.equalHighs
     : [];
 
-  const equalLows = Array.isArray(data.equalHighLow?.equalLows)
+  const equalLows = Array.isArray(
+    data.equalHighLow?.equalLows
+  )
     ? data.equalHighLow.equalLows
     : [];
 
@@ -369,207 +383,382 @@ function calculateProbabilityScore(data) {
       ? data.macd.macd
       : 0;
 
-  // TREND
+  function isPriceNearLevel(
+    level,
+    tolerancePercent = 1.5
+  ) {
+    if (
+      price === null ||
+      typeof level !== "number" ||
+      !Number.isFinite(level)
+    ) {
+      return false;
+    }
+
+    const distancePercent =
+      Math.abs(price - level) / price * 100;
+
+    return distancePercent <= tolerancePercent;
+  }
+
+  function isPriceNearZone(
+    zone,
+    tolerancePercent = 2
+  ) {
+    if (
+      price === null ||
+      !zone ||
+      typeof zone.from !== "number" ||
+      typeof zone.to !== "number"
+    ) {
+      return false;
+    }
+
+    const low = Math.min(zone.from, zone.to);
+    const high = Math.max(zone.from, zone.to);
+
+    const tolerance = price * (
+      tolerancePercent / 100
+    );
+
+    return (
+      price >= low - tolerance &&
+      price <= high + tolerance
+    );
+  }
+
+  // 1. TREND — максимум 20 баллов
   if (data.trend === "Strong Bullish") {
-    longScore += 18;
-    longReasons.push("Strong bullish trend");
+    longScore += 20;
+    longReasons.push(
+      "Strong bullish EMA trend"
+    );
+  } else if (data.trend === "Strong Bearish") {
+    shortScore += 20;
+    shortReasons.push(
+      "Strong bearish EMA trend"
+    );
+  } else {
+    warnings.push(
+      "EMA trend is neutral or mixed"
+    );
   }
 
-  if (data.trend === "Strong Bearish") {
-    shortScore += 18;
-    shortReasons.push("Strong bearish trend");
-  }
-
-  // RSI
+  // 2. RSI — максимум 8 баллов
   if (typeof data.rsi14 === "number") {
-    if (data.rsi14 < 30) {
-      longScore += 10;
+    if (data.rsi14 <= 30) {
+      longScore += 8;
       longReasons.push("RSI oversold");
-    }
-
-    if (data.rsi14 > 70) {
-      shortScore += 10;
+    } else if (data.rsi14 >= 70) {
+      shortScore += 8;
       shortReasons.push("RSI overbought");
-    }
-
-    if (data.rsi14 >= 50 && data.rsi14 <= 65) {
+    } else if (
+      data.rsi14 >= 52 &&
+      data.rsi14 <= 65
+    ) {
       longScore += 4;
-      longReasons.push("RSI bullish momentum");
-    }
-
-    if (data.rsi14 >= 35 && data.rsi14 < 50) {
+      longReasons.push(
+        "RSI confirms bullish momentum"
+      );
+    } else if (
+      data.rsi14 >= 35 &&
+      data.rsi14 <= 48
+    ) {
       shortScore += 4;
-      shortReasons.push("RSI bearish momentum");
+      shortReasons.push(
+        "RSI confirms bearish momentum"
+      );
     }
   }
 
-  // MACD
+  // 3. MACD — максимум 8 баллов
   if (macdValue > 0) {
-    longScore += 10;
-    longReasons.push("MACD bullish");
+    longScore += 8;
+    longReasons.push("MACD above zero");
+  } else if (macdValue < 0) {
+    shortScore += 8;
+    shortReasons.push("MACD below zero");
   }
 
-  if (macdValue < 0) {
-    shortScore += 10;
-    shortReasons.push("MACD bearish");
-  }
-
-  // PREMIUM / DISCOUNT
+  // 4. PREMIUM / DISCOUNT — максимум 8 баллов
   if (data.premiumDiscount?.zone === "Discount") {
     longScore += 8;
-    longReasons.push("Price in discount zone");
-  }
-
-  if (data.premiumDiscount?.zone === "Premium") {
+    longReasons.push(
+      "Price is in discount zone"
+    );
+  } else if (
+    data.premiumDiscount?.zone === "Premium"
+  ) {
     shortScore += 8;
-    shortReasons.push("Price in premium zone");
+    shortReasons.push(
+      "Price is in premium zone"
+    );
   }
 
-  // BOS
+  // 5. BOS — максимум 12 баллов
   if (data.bos === "Bullish BOS") {
-    longScore += 8;
-    longReasons.push("Bullish BOS");
+    longScore += 12;
+    longReasons.push(
+      "Bullish break of structure"
+    );
+  } else if (data.bos === "Bearish BOS") {
+    shortScore += 12;
+    shortReasons.push(
+      "Bearish break of structure"
+    );
   }
 
-  if (data.bos === "Bearish BOS") {
-    shortScore += 8;
-    shortReasons.push("Bearish BOS");
-  }
-
-  // CHOCH
+  // 6. CHOCH — максимум 14 баллов
   if (data.choch === "Bullish CHOCH") {
-    longScore += 10;
-    longReasons.push("Bullish CHOCH");
+    longScore += 14;
+    longReasons.push(
+      "Bullish change of character"
+    );
+  } else if (
+    data.choch === "Bearish CHOCH"
+  ) {
+    shortScore += 14;
+    shortReasons.push(
+      "Bearish change of character"
+    );
   }
 
-  if (data.choch === "Bearish CHOCH") {
-    shortScore += 10;
-    shortReasons.push("Bearish CHOCH");
-  }
-
-  // MSS
+  // 7. MSS — максимум 14 баллов
   if (data.mss === "Bullish MSS") {
-    longScore += 10;
-    longReasons.push("Bullish MSS");
+    longScore += 14;
+    longReasons.push(
+      "Bullish market structure shift"
+    );
+  } else if (data.mss === "Bearish MSS") {
+    shortScore += 14;
+    shortReasons.push(
+      "Bearish market structure shift"
+    );
   }
 
-  if (data.mss === "Bearish MSS") {
-    shortScore += 10;
-    shortReasons.push("Bearish MSS");
-  }
-
-  // LIQUIDITY SWEEP
-  if (data.liquiditySweep === "Below Low Liquidity") {
-    longScore += 8;
-    longReasons.push("Sell-side liquidity sweep");
-  }
-
-  if (data.liquiditySweep === "Above High Liquidity") {
-    shortScore += 8;
-    shortReasons.push("Buy-side liquidity sweep");
-  }
-
-  // FVG
-  if (fvg.some(item => item?.type === "Bullish FVG")) {
-    longScore += 8;
-    longReasons.push("Bullish FVG");
-  }
-
-  if (fvg.some(item => item?.type === "Bearish FVG")) {
-    shortScore += 8;
-    shortReasons.push("Bearish FVG");
-  }
-
-  // ORDER BLOCKS
+  // 8. LIQUIDITY SWEEP — максимум 12 баллов
   if (
-    orderBlocks.some(
-      item => item?.type === "Bullish Order Block"
-    )
+    data.liquiditySweep ===
+    "Below Low Liquidity"
   ) {
     longScore += 12;
-    longReasons.push("Bullish Order Block");
-  }
-
-  if (
-    orderBlocks.some(
-      item => item?.type === "Bearish Order Block"
-    )
+    longReasons.push(
+      "Sell-side liquidity sweep"
+    );
+  } else if (
+    data.liquiditySweep ===
+    "Above High Liquidity"
   ) {
     shortScore += 12;
-    shortReasons.push("Bearish Order Block");
+    shortReasons.push(
+      "Buy-side liquidity sweep"
+    );
   }
 
-  // EQUAL HIGHS / LOWS
-  if (equalHighs.length > 0) {
+  // 9. FVG — учитываем только рядом с ценой
+  const nearbyBullishFVG = fvg.find(
+    item =>
+      item?.type === "Bullish FVG" &&
+      isPriceNearZone(item, 2)
+  );
+
+  const nearbyBearishFVG = fvg.find(
+    item =>
+      item?.type === "Bearish FVG" &&
+      isPriceNearZone(item, 2)
+  );
+
+  if (nearbyBullishFVG) {
+    longScore += 8;
+    longReasons.push(
+      `Bullish FVG near price: ${nearbyBullishFVG.from}-${nearbyBullishFVG.to}`
+    );
+  }
+
+  if (nearbyBearishFVG) {
+    shortScore += 8;
+    shortReasons.push(
+      `Bearish FVG near price: ${nearbyBearishFVG.from}-${nearbyBearishFVG.to}`
+    );
+  }
+
+  // 10. ORDER BLOCK — только рядом с ценой
+  const nearbyBullishOB = orderBlocks.find(
+    item =>
+      item?.type ===
+        "Bullish Order Block" &&
+      isPriceNearZone(item, 2.5)
+  );
+
+  const nearbyBearishOB = orderBlocks.find(
+    item =>
+      item?.type ===
+        "Bearish Order Block" &&
+      isPriceNearZone(item, 2.5)
+  );
+
+  if (nearbyBullishOB) {
+    longScore += 10;
+    longReasons.push(
+      `Bullish order block near price: ${nearbyBullishOB.from}-${nearbyBullishOB.to}`
+    );
+  }
+
+  if (nearbyBearishOB) {
+    shortScore += 10;
+    shortReasons.push(
+      `Bearish order block near price: ${nearbyBearishOB.from}-${nearbyBearishOB.to}`
+    );
+  }
+
+  // 11. EQUAL HIGHS / LOWS — только рядом с ценой
+  const nearbyEqualHigh = equalHighs.find(
+    level => isPriceNearLevel(level, 1.5)
+  );
+
+  const nearbyEqualLow = equalLows.find(
+    level => isPriceNearLevel(level, 1.5)
+  );
+
+  if (nearbyEqualHigh !== undefined) {
     shortScore += 5;
-    shortReasons.push("Equal highs liquidity");
+    shortReasons.push(
+      `Equal highs liquidity near ${nearbyEqualHigh}`
+    );
   }
 
-  if (equalLows.length > 0) {
+  if (nearbyEqualLow !== undefined) {
     longScore += 5;
-    longReasons.push("Equal lows liquidity");
+    longReasons.push(
+      `Equal lows liquidity near ${nearbyEqualLow}`
+    );
   }
 
-  // IMBALANCE
-  if (data.imbalance?.type === "Bullish Imbalance") {
+  // 12. IMBALANCE — максимум 6 баллов
+  if (
+    data.imbalance?.type ===
+    "Bullish Imbalance"
+  ) {
     longScore += 6;
-    longReasons.push("Bullish imbalance");
-  }
-
-  if (data.imbalance?.type === "Bearish Imbalance") {
+    longReasons.push(
+      "Bullish candle imbalance"
+    );
+  } else if (
+    data.imbalance?.type ===
+    "Bearish Imbalance"
+  ) {
     shortScore += 6;
-    shortReasons.push("Bearish imbalance");
+    shortReasons.push(
+      "Bearish candle imbalance"
+    );
   }
 
-  longScore = Math.min(100, longScore);
-  shortScore = Math.min(100, shortScore);
+  // Бонус за подтверждение несколькими факторами
+  if (longReasons.length >= 5) {
+    longScore += 5;
+    longReasons.push(
+      "Strong bullish confluence"
+    );
+  }
 
-  const score = Math.max(longScore, shortScore);
-  const scoreDifference = Math.abs(longScore - shortScore);
+  if (shortReasons.length >= 5) {
+    shortScore += 5;
+    shortReasons.push(
+      "Strong bearish confluence"
+    );
+  }
+
+  longScore = Math.min(
+    100,
+    Math.round(longScore)
+  );
+
+  shortScore = Math.min(
+    100,
+    Math.round(shortScore)
+  );
+
+  const scoreDifference =
+    Math.abs(longScore - shortScore);
+
+  const score =
+    Math.max(longScore, shortScore);
 
   let signal = "Neutral";
   let direction = "Neutral";
   let reasons = [];
 
-  if (longScore >= 70 && longScore > shortScore) {
+  if (
+    longScore >= 75 &&
+    longScore > shortScore &&
+    scoreDifference >= 12
+  ) {
     signal = "Strong Buy";
     direction = "Long";
     reasons = longReasons;
   } else if (
     longScore >= 55 &&
     longScore > shortScore &&
-    scoreDifference >= 8
+    scoreDifference >= 10
   ) {
     signal = "Buy";
     direction = "Long";
     reasons = longReasons;
-  } else if (shortScore >= 70 && shortScore > longScore) {
+  } else if (
+    shortScore >= 75 &&
+    shortScore > longScore &&
+    scoreDifference >= 12
+  ) {
     signal = "Strong Sell";
     direction = "Short";
     reasons = shortReasons;
   } else if (
     shortScore >= 55 &&
     shortScore > longScore &&
-    scoreDifference >= 8
+    scoreDifference >= 10
   ) {
     signal = "Sell";
     direction = "Short";
     reasons = shortReasons;
   } else {
     reasons = [
-      ...longReasons.map(reason => `Bullish: ${reason}`),
-      ...shortReasons.map(reason => `Bearish: ${reason}`)
+      ...longReasons.map(
+        reason => `Bullish: ${reason}`
+      ),
+      ...shortReasons.map(
+        reason => `Bearish: ${reason}`
+      )
     ];
+
+    if (scoreDifference < 10) {
+      warnings.push(
+        "Bullish and bearish signals conflict"
+      );
+    }
+
+    if (score < 55) {
+      warnings.push(
+        "Not enough confirmation for a trade"
+      );
+    }
   }
 
   return {
+    version: "2.0",
     score,
     signal,
     direction,
     longScore,
     shortScore,
     scoreDifference,
-    reasons
+
+    confluence: {
+      bullishFactors: longReasons.length,
+      bearishFactors: shortReasons.length
+    },
+
+    reasons,
+    warnings
   };
 }
 
@@ -1654,6 +1843,7 @@ if (ema20 && ema50 && ema100 && ema200) {
 }  
 
   const probability = calculateProbabilityScore({
+    price: coin.current_price,
     trend,
     rsi14,
     macd,
