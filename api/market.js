@@ -1335,33 +1335,40 @@ async function fetchCoinGlass(path, params = {}) {
 
 async function getCoinGlassMarketData(symbol) {
   const asset = symbol.replace(/USDT$/i, "");
-
-  const [
+const [
   fundingResponse,
   openInterestResponse,
-  longShortResponse
+  longShortResponse,
+  liquidationResponse
 ] = await Promise.all([
-    fetchCoinGlass(
-        "/api/futures/funding-rate/exchange-list"
-      ),
-      fetchCoinGlass(
-        "/api/futures/open-interest/exchange-list",
-        {
-          symbol: asset
-        }
-      )
-,
-fetchCoinGlass(
-  "/api/futures/global-long-short-account-ratio/history",
-  {
-    exchange: "Binance",
-    symbol,
-    interval: "4h",
-    limit: 1
-  }
-)    
-    ]);
+  fetchCoinGlass(
+    "/api/futures/funding-rate/exchange-list"
+  ),
 
+  fetchCoinGlass(
+    "/api/futures/open-interest/exchange-list",
+    {
+      symbol: asset
+    }
+  ),
+
+  fetchCoinGlass(
+    "/api/futures/global-long-short-account-ratio/history",
+    {
+      exchange: "Binance",
+      symbol,
+      interval: "4h",
+      limit: 1
+    }
+  ),
+
+  fetchCoinGlass(
+    "/api/futures/liquidation/exchange-list",
+    {
+      symbol: asset
+    }
+  )
+]);
   let fundingRate = null;
 
   if (
@@ -1455,30 +1462,45 @@ longShortRatio = {
     last.time ?? null
 };
 }  
+let liquidations = null;
+
+if (
+  liquidationResponse.ok &&
+  Array.isArray(liquidationResponse.data)
+) {
+  liquidations = liquidationResponse.data;
+}
+  
 return {
-  available:
+available:
     fundingResponse.ok ||
     openInterestResponse.ok ||
-    longShortResponse.ok,
-
-  fundingRate,
-  openInterest,
-  longShortRatio,
+    longShortResponse.ok ||
+    liquidationResponse.ok,
+  
+ fundingRate,
+ openInterest,
+ longShortRatio,
+ liquidations,
 
   errors: {
-      fundingRate: fundingResponse.ok
-        ? null
-        : fundingResponse.error,
+  fundingRate: fundingResponse.ok
+    ? null
+    : fundingResponse.error,
 
-      openInterest: openInterestResponse.ok
-        ? null
-        : openInterestResponse.error,
+  openInterest: openInterestResponse.ok
+    ? null
+    : openInterestResponse.error,
 
-longShortRatio: longShortResponse.ok
-  ? null
-  : longShortResponse.error    
-    }
-  };
+  longShortRatio: longShortResponse.ok
+    ? null
+    : longShortResponse.error,
+
+  liquidations: liquidationResponse.ok
+    ? null
+    : liquidationResponse.error
+}
+};
 }
 
 export default async function handler(req, res) {
