@@ -2079,7 +2079,7 @@ if (tradePlan.validTrade) {
 async function fetchOKXKlines(
   symbol,
   interval = "1D",
-  limit = 300
+  limit = 1200
 ) {
   const instId = symbol.replace(
     /^(.*?)(USDT)$/i,
