@@ -2076,47 +2076,44 @@ if (tradePlan.validTrade) {
   };
 }
 
-async function fetchBinanceKlines(
+async function fetchOKXKlines(
   symbol,
-  interval = "1d",
+  interval = "1D",
   limit = 300
 ) {
-  const url = new URL(
-    "https://api.binance.com/api/v3/klines"
+  const instId = symbol.replace(
+    /^(.*?)(USDT)$/i,
+    "$1-USDT"
   );
 
-  url.searchParams.set("symbol", symbol);
-  url.searchParams.set("interval", interval);
+  const url = new URL(
+    "https://www.okx.com/api/v5/market/candles"
+  );
+
+  url.searchParams.set("instId", instId);
+  url.searchParams.set("bar", interval);
   url.searchParams.set("limit", String(limit));
 
   try {
     const response = await fetch(url);
+    const payload = await response.json().catch(() => null);
 
-    const data = await response
-      .json()
-      .catch(() => null);
-
-    if (!response.ok) {
+    if (
+      !response.ok ||
+      payload?.code !== "0" ||
+      !Array.isArray(payload?.data)
+    ) {
       return {
         ok: false,
         status: response.status,
         error:
-          data?.msg ||
-          `Binance klines failed: ${response.status}`,
+          payload?.msg ||
+          `OKX candles failed: ${response.status}`,
         data: []
       };
     }
 
-    if (!Array.isArray(data)) {
-      return {
-        ok: false,
-        status: response.status,
-        error: "Invalid Binance klines response",
-        data: []
-      };
-    }
-
-    const candles = data
+    const candles = payload.data
       .map(item => ({
         openTime: Number(item[0]),
         open: Number(item[1]),
@@ -2124,19 +2121,23 @@ async function fetchBinanceKlines(
         low: Number(item[3]),
         close: Number(item[4]),
         volume: Number(item[5]),
-        closeTime: Number(item[6])
+        quoteVolume: Number(item[7]),
+        confirmed: item[8] === "1"
       }))
       .filter(candle =>
+        Number.isFinite(candle.openTime) &&
         Number.isFinite(candle.open) &&
         Number.isFinite(candle.high) &&
         Number.isFinite(candle.low) &&
         Number.isFinite(candle.close) &&
         Number.isFinite(candle.volume)
-      );
+      )
+      .reverse();
 
     return {
       ok: true,
       status: response.status,
+      source: "OKX",
       interval,
       count: candles.length,
       data: candles
@@ -2144,8 +2145,86 @@ async function fetchBinanceKlines(
   } catch (error) {
     return {
       ok: false,
-      error: error.message,
+      source: "OKX",
       interval,
+      error: error.message,
+      data: []
+    };
+  }
+}
+
+async function fetchOKXKlines(
+  symbol,
+  interval = "1D",
+  limit = 300
+) {
+  const instId = symbol.replace(/USDT$/i, "-USDT");
+
+  const url = new URL(
+    "https://www.okx.com/api/v5/market/candles"
+  );
+
+  url.searchParams.set("instId", instId);
+  url.searchParams.set("bar", interval);
+  url.searchParams.set("limit", String(limit));
+
+  try {
+    const response = await fetch(url);
+
+    const payload = await response
+      .json()
+      .catch(() => null);
+
+    if (
+      !response.ok ||
+      payload?.code !== "0" ||
+      !Array.isArray(payload?.data)
+    ) {
+      return {
+        ok: false,
+        status: response.status,
+        source: "OKX",
+        error:
+          payload?.msg ||
+          `OKX candles request failed: ${response.status}`,
+        data: []
+      };
+    }
+
+    const candles = payload.data
+      .map(item => ({
+        openTime: Number(item[0]),
+        open: Number(item[1]),
+        high: Number(item[2]),
+        low: Number(item[3]),
+        close: Number(item[4]),
+        volume: Number(item[5]),
+        quoteVolume: Number(item[7]),
+        confirmed: item[8] === "1"
+      }))
+      .filter(candle =>
+        Number.isFinite(candle.openTime) &&
+        Number.isFinite(candle.open) &&
+        Number.isFinite(candle.high) &&
+        Number.isFinite(candle.low) &&
+        Number.isFinite(candle.close) &&
+        Number.isFinite(candle.volume)
+      )
+      .reverse();
+
+    return {
+      ok: true,
+      status: response.status,
+      source: "OKX",
+      interval,
+      data: candles
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      source: "OKX",
+      interval,
+      error: error.message,
       data: []
     };
   }
@@ -2396,29 +2475,30 @@ export default async function handler(req, res) {
     const coinGlass = 
       await getCoinGlassMarketData(symbol);
 
-   const binanceDailyResponse =
-  await fetchBinanceKlines(
+  const okxDailyResponse =
+  await fetchOKXKlines(
     symbol,
-    "1d",
+    "1D",
     300
-  );   
-const binanceDailyCandles =
-  binanceDailyResponse.ok
-    ? binanceDailyResponse.data
+  );
+
+const okxDailyCandles =
+  okxDailyResponse.ok
+    ? okxDailyResponse.data
     : [];
 
-const binanceDailyCloses =
-  binanceDailyCandles.map(
+const okxDailyCloses =
+  okxDailyCandles.map(
     candle => candle.close
   );
 
-const binanceDailyVolumes =
-  binanceDailyCandles.map(
+const okxDailyVolumes =
+  okxDailyCandles.map(
     candle => candle.volume
   );
 
-const binanceDailyOhlc =
-  binanceDailyCandles.map(candle => [
+const okxDailyOhlc =
+  okxDailyCandles.map(candle => [
     candle.openTime,
     candle.open,
     candle.high,
@@ -2652,23 +2732,25 @@ const decisionEngine = calculateDecisionEngine({
       rank: coin.market_cap_rank,
 
        coinGlass,
-
-binanceKlines: {
-  available: binanceDailyResponse.ok,
-  interval: "1d",
-  candles: binanceDailyCandles.length,
+      
+okxKlines: {
+  available: okxDailyResponse.ok,
+  source: "OKX",
+  interval: "1D",
+  candles: okxDailyCandles.length,
 
   latest:
-    binanceDailyCandles.length > 0
-      ? binanceDailyCandles[
-          binanceDailyCandles.length - 1
+    okxDailyCandles.length > 0
+      ? okxDailyCandles[
+          okxDailyCandles.length - 1
         ]
       : null,
 
-  error: binanceDailyResponse.ok
+  error: okxDailyResponse.ok
     ? null
-    : binanceDailyResponse.error
-},      
+    : okxDailyResponse.error
+},
+      
       fearGreed: {
           value: fgData.data[0].value,
           classification: fgData.data[0].value_classification
