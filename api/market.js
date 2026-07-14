@@ -2493,20 +2493,11 @@ const dailyCloses = getDailyCloses(
     ? chartData.prices
     : []
 );
-
 const coinGeckoErrors = {
   global: globalResponse.ok
     ? null
-    : `CoinGecko global failed: ${globalResponse.status}`,
-
-  chart: chartResponse.ok
-    ? null
-    : `CoinGecko chart failed: ${chartResponse.status}`,
-
-  ohlc: ohlcResponse.ok
-    ? null
-    : `CoinGecko OHLC failed: ${ohlcResponse.status}`
-};
+    : `CoinGecko global failed: ${globalResponse.status}`
+}; 
    const rsi14 = calculateRSI(okxDailyCloses, 14);
    const ema20 = calculateEMA(okxDailyCloses, 20);
    const ema50 = calculateEMA(okxDailyCloses, 50);
