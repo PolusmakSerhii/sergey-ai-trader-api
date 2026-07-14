@@ -2075,7 +2075,6 @@ if (tradePlan.validTrade) {
     description
   };
 }
-
 async function fetchOKXKlines(
   symbol,
   interval = "1D",
@@ -2086,33 +2085,132 @@ async function fetchOKXKlines(
     "$1-USDT"
   );
 
-  const url = new URL(
-    "https://www.okx.com/api/v5/market/candles"
-  );
+  const pageLimit = 100;
+  const candlesByTime = new Map();
 
-  url.searchParams.set("instId", instId);
-  url.searchParams.set("bar", interval);
-  url.searchParams.set("limit", String(limit));
+  let after = null;
+  let lastOldestTimestamp = null;
 
   try {
-    const response = await fetch(url);
-    const payload = await response.json().catch(() => null);
+    while (candlesByTime.size < limit) {
+      const remaining = limit - candlesByTime.size;
+      const currentLimit = Math.min(pageLimit, remaining);
 
-    if (
-      !response.ok ||
-      payload?.code !== "0" ||
-      !Array.isArray(payload?.data)
-    ) {
-      return {
-        ok: false,
-        status: response.status,
-        error:
-          payload?.msg ||
-          `OKX candles failed: ${response.status}`,
-        data: []
-      };
+      const url = new URL(
+        "https://www.okx.com/api/v5/market/history-candles"
+      );
+
+      url.searchParams.set("instId", instId);
+      url.searchParams.set("bar", interval);
+      url.searchParams.set("limit", String(currentLimit));
+
+      if (after !== null) {
+        url.searchParams.set("after", String(after));
+      }
+
+      const response = await fetch(url);
+
+      const payload = await response
+        .json()
+        .catch(() => null);
+
+      if (
+        !response.ok ||
+        payload?.code !== "0" ||
+        !Array.isArray(payload?.data)
+      ) {
+        return {
+          ok: false,
+          status: response.status,
+          source: "OKX",
+          interval,
+          error:
+            payload?.msg ||
+            `OKX history candles failed: ${response.status}`,
+          data: []
+        };
+      }
+
+      if (payload.data.length === 0) {
+        break;
+      }
+
+      let oldestTimestamp = null;
+
+      for (const item of payload.data) {
+        const candle = {
+          openTime: Number(item[0]),
+          open: Number(item[1]),
+          high: Number(item[2]),
+          low: Number(item[3]),
+          close: Number(item[4]),
+          volume: Number(item[5]),
+          quoteVolume: Number(item[7]),
+          confirmed: item[8] === "1"
+        };
+
+        const valid =
+          Number.isFinite(candle.openTime) &&
+          Number.isFinite(candle.open) &&
+          Number.isFinite(candle.high) &&
+          Number.isFinite(candle.low) &&
+          Number.isFinite(candle.close) &&
+          Number.isFinite(candle.volume);
+
+        if (!valid) continue;
+
+        candlesByTime.set(candle.openTime, candle);
+
+        if (
+          oldestTimestamp === null ||
+          candle.openTime < oldestTimestamp
+        ) {
+          oldestTimestamp = candle.openTime;
+        }
+      }
+
+      if (
+        oldestTimestamp === null ||
+        oldestTimestamp === lastOldestTimestamp
+      ) {
+        break;
+      }
+
+      lastOldestTimestamp = oldestTimestamp;
+      after = oldestTimestamp;
+
+      if (payload.data.length < currentLimit) {
+        break;
+      }
     }
 
+    const candles = Array
+      .from(candlesByTime.values())
+      .sort((a, b) => a.openTime - b.openTime)
+      .slice(-limit);
+
+    return {
+      ok: candles.length > 0,
+      status: 200,
+      source: "OKX",
+      interval,
+      count: candles.length,
+      data: candles,
+      error:
+        candles.length > 0
+          ? null
+          : "No OKX historical candles returned"
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      source: "OKX",
+      interval,
+      error: error.message,
+      data: []
+    };
+  }
+}
     const candles = payload.data
       .map(item => ({
         openTime: Number(item[0]),
@@ -2152,6 +2250,7 @@ async function fetchOKXKlines(
     };
   }
 }
+
 
 
 async function fetchCoinGlass(path, params = {}) {
