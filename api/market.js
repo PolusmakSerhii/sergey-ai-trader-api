@@ -2451,52 +2451,7 @@ if (!coin || typeof coin.current_price !== "number") {
     
     const fg = await fetch("https://api.alternative.me/fng/?limit=1");
     const fgData = await fg.json(); 
-    
-const [globalResponse, chartResponse, ohlcResponse] =
-  await Promise.all([
-    fetch("https://api.coingecko.com/api/v3/global"),
 
-    fetch(
-      `https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=250`
-    ),
-
-    fetch(
-      `https://api.coingecko.com/api/v3/coins/${id}/ohlc?vs_currency=usd&days=90`
-    )
-  ]);
-
-const globalData = globalResponse.ok
-  ? await globalResponse.json()
-  : null;
-
-const chartData = chartResponse.ok
-  ? await chartResponse.json()
-  : {
-      prices: [],
-      total_volumes: []
-    };
-
-const ohlcData = ohlcResponse.ok
-  ? await ohlcResponse.json()
-  : [];
-
-const marketCapPercentage =
-  globalData?.data?.market_cap_percentage || {};
-
-const volumes = Array.isArray(chartData?.total_volumes)
-  ? chartData.total_volumes.map(item => item[1])
-  : [];
-
-const dailyCloses = getDailyCloses(
-  Array.isArray(chartData?.prices)
-    ? chartData.prices
-    : []
-);
-const coinGeckoErrors = {
-  global: globalResponse.ok
-    ? null
-    : `CoinGecko global failed: ${globalResponse.status}`
-}; 
    const rsi14 = calculateRSI(okxDailyCloses, 14);
    const ema20 = calculateEMA(okxDailyCloses, 20);
    const ema50 = calculateEMA(okxDailyCloses, 50);
@@ -2646,10 +2601,10 @@ const decisionEngine = calculateDecisionEngine({
       ok: true,
       source: "CoinGecko + OKX + CoinGlass V4",
       
-      dataErrors: {
-  coinGecko: coinGeckoErrors,
-  coinGlass: coinGlass.errors
-},
+     dataErrors: {
+        coinGlass: coinGlass.errors
+      },
+      
       symbol,
       coin: coin.name,
       asset: coin.symbol.toUpperCase(),
@@ -2679,16 +2634,6 @@ okxKlines: {
           value: fgData.data[0].value,
           classification: fgData.data[0].value_classification
 }, 
-      
-btcDominance:
-  typeof marketCapPercentage.btc === "number"
-    ? Number(marketCapPercentage.btc.toFixed(2))
-    : null,
-
-ethDominance:
-  typeof marketCapPercentage.eth === "number"
-    ? Number(marketCapPercentage.eth.toFixed(2))
-    : null,
       
 technical: {
     rsi14,
