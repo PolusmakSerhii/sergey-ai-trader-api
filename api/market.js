@@ -2502,6 +2502,11 @@ const coinGeckoErrors = {
    const ema20 = calculateEMA(okxDailyCloses, 20);
    const ema50 = calculateEMA(okxDailyCloses, 50);
    const ema100 = calculateEMA(okxDailyCloses, 100);
+console.log(
+  okxDailyCloses.length,
+  okxDailyCloses[0],
+  okxDailyCloses.at(-1)
+);   
    const ema200 = calculateEMA(okxDailyCloses, 200);
 
    const macd = calculateMACD(okxDailyCloses);
