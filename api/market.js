@@ -2415,7 +2415,13 @@ const okxDailyCloses =
   okxDailyCandles.map(
     candle => candle.close
   );
-
+   console.log(
+  "OKX closes:",
+  okxDailyCloses.length,
+  okxDailyCloses[0],
+  okxDailyCloses.at(-1)
+);
+   
 const okxDailyVolumes =
   okxDailyCandles.map(
     candle => candle.volume
@@ -2430,7 +2436,6 @@ const okxDailyOhlc =
     candle.close
   ]);
 
-   
     const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${id}&price_change_percentage=24h`;   
     
     const response = await fetch(url);
