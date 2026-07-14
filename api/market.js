@@ -2644,7 +2644,8 @@ const decisionEngine = calculateDecisionEngine({
     
     res.status(200).json({
       ok: true,
-      source: "CoinGecko Free API + CoinGlass API V4",
+      source: "CoinGecko + OKX + CoinGlass V4",
+      
       dataErrors: {
   coinGecko: coinGeckoErrors,
   coinGlass: coinGlass.errors
