@@ -2507,31 +2507,39 @@ const coinGeckoErrors = {
     ? null
     : `CoinGecko OHLC failed: ${ohlcResponse.status}`
 };
-   
-    const rsi14 = calculateRSI(dailyCloses, 14);
-    const ema20 = calculateEMA(dailyCloses, 20);
-    const ema50 = calculateEMA(dailyCloses, 50);
-    const ema100 = calculateEMA(dailyCloses, 100);
-    const ema200 = calculateEMA(dailyCloses, 200);
-    const macd = calculateMACD(dailyCloses);
-    const levels = calculateLevels(dailyCloses);
-    const atr14 = calculateATR(ohlcData, 14);
-    const volumeStats = calculateVolumeStats(volumes);
-    const swingLevels = calculateSwingLevels(dailyCloses);
+   const rsi14 = calculateRSI(okxDailyCloses, 14);
+   const ema20 = calculateEMA(okxDailyCloses, 20);
+   const ema50 = calculateEMA(okxDailyCloses, 50);
+   const ema100 = calculateEMA(okxDailyCloses, 100);
+   const ema200 = calculateEMA(okxDailyCloses, 200);
+
+   const macd = calculateMACD(okxDailyCloses);
+   const levels = calculateLevels(okxDailyCloses);
+
+   const atr14 = calculateATR(okxDailyOhlc, 14);
+   const volumeStats =
+     calculateVolumeStats(okxDailyVolumes);
+
+   const swingLevels =
+     calculateSwingLevels(okxDailyCloses);   
     const bos = calculateBOS(coin.current_price, swingLevels);
     const choch = calculateCHOCH(bos, ema20, ema50);
     const liquiditySweep = calculateLiquiditySweep(
     coin.current_price,
     swingLevels
 );
-    const fvg = calculateFVG(ohlcData);
-    const orderBlocks = calculateOrderBlocks(ohlcData);
-    const premiumDiscount = calculatePremiumDiscount(
+     const fvg = calculateFVG(okxDailyOhlc);
+     const orderBlocks =
+       calculateOrderBlocks(okxDailyOhlc);   
+     const premiumDiscount = calculatePremiumDiscount(
       coin.current_price,
       swingLevels
     );    
-    const equalHighLow = calculateEqualHighLow(ohlcData);  
-    const imbalance = calculateImbalance(ohlcData); 
+const equalHighLow =
+  calculateEqualHighLow(okxDailyOhlc);
+
+const imbalance =
+  calculateImbalance(okxDailyOhlc);   
     const mss = calculateMSS(
       coin.current_price,
       swingLevels,
