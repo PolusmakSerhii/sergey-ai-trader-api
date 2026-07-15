@@ -2211,47 +2211,6 @@ async function fetchOKXKlines(
     };
   }
 }
-    const candles = payload.data
-      .map(item => ({
-        openTime: Number(item[0]),
-        open: Number(item[1]),
-        high: Number(item[2]),
-        low: Number(item[3]),
-        close: Number(item[4]),
-        volume: Number(item[5]),
-        quoteVolume: Number(item[7]),
-        confirmed: item[8] === "1"
-      }))
-      .filter(candle =>
-        Number.isFinite(candle.openTime) &&
-        Number.isFinite(candle.open) &&
-        Number.isFinite(candle.high) &&
-        Number.isFinite(candle.low) &&
-        Number.isFinite(candle.close) &&
-        Number.isFinite(candle.volume)
-      )
-      .reverse();
-
-    return {
-      ok: true,
-      status: response.status,
-      source: "OKX",
-      interval,
-      count: candles.length,
-      data: candles
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      source: "OKX",
-      interval,
-      error: error.message,
-      data: []
-    };
-  }
-}
-
-
 
 async function fetchCoinGlass(path, params = {}) {
   const apiKey = process.env.COINGLASS_API_KEY;
