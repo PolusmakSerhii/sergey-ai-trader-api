@@ -2456,13 +2456,11 @@ export default async function handler(req, res) {
 
     const coinGlass = 
       await getCoinGlassMarketData(symbol);
-
-  const okxDailyResponse =
+const okxDailyResponse =
   await fetchOKXKlines(
     symbol,
-    "1D",
-    300
-  );
+    "1D"
+  );   
 
 const okxDailyCandles =
   okxDailyResponse.ok
