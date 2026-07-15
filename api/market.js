@@ -1521,6 +1521,129 @@ function calculateAIAssessment(
     tradeAllowed
   };
 }
+function calculateMarketSummary(data) {
+  const probability = data?.probability || {};
+  const confidence = probability?.confidence || {};
+  const aiAssessment =
+    probability?.aiAssessment || {};
+
+  const tradePlan = data?.tradePlan || {};
+  const decisionEngine =
+    data?.decisionEngine || {};
+  const recommendation =
+    data?.recommendation || {};
+
+  const probabilities =
+    probability?.probabilities || {};
+
+  const action =
+    decisionEngine?.summary?.action ||
+    "WAIT";
+
+  const marketBias =
+    decisionEngine?.summary?.marketBias ||
+    "Neutral";
+
+  const confidenceScore =
+    typeof confidence.score === "number"
+      ? confidence.score
+      : 0;
+
+  const conviction =
+    typeof aiAssessment.conviction === "number"
+      ? aiAssessment.conviction
+      : 0;
+
+  const grade =
+    recommendation.grade ||
+    aiAssessment.grade ||
+    "D";
+
+  const setupQuality =
+    recommendation.setupQuality || {
+      stars: 1,
+      label: "Avoid"
+    };
+
+  const entryTiming =
+    recommendation.entryTiming || {
+      status: "Wait Confirmation",
+      priority: "Low",
+      instruction:
+        "Wait for a confirmed setup"
+    };
+
+  const riskReward =
+    typeof tradePlan.riskReward === "number"
+      ? tradePlan.riskReward
+      : null;
+
+  return {
+    version: "1.0",
+
+    action,
+    marketBias,
+
+    tradeAllowed:
+      tradePlan.validTrade === true,
+
+    grade,
+
+    setupQuality: {
+      stars:
+        Number(setupQuality.stars) || 1,
+      label:
+        setupQuality.label || "Avoid"
+    },
+
+    probability: {
+      bullish:
+        Number(probabilities.bullish) || 0,
+      bearish:
+        Number(probabilities.bearish) || 0,
+      neutral:
+        Number(probabilities.neutral) || 0
+    },
+
+    confidence: confidenceScore,
+    conviction,
+
+    risk:
+      recommendation.risk || "High",
+
+    entryStatus: {
+      status: entryTiming.status,
+      priority: entryTiming.priority,
+      instruction: entryTiming.instruction
+    },
+
+    execution: {
+      direction:
+        tradePlan.direction || "Wait",
+
+      entryZone:
+        tradePlan.entryZone ?? null,
+
+      stopLoss:
+        tradePlan.stopLoss ?? null,
+
+      takeProfit1:
+        tradePlan.takeProfit1 ?? null,
+
+      takeProfit2:
+        tradePlan.takeProfit2 ?? null,
+
+      takeProfit3:
+        tradePlan.takeProfit3 ?? null,
+
+      recommendedTakeProfit:
+        tradePlan.recommendedTakeProfit ??
+        null,
+
+      riskReward
+    }
+  };
+}
 
 function calculateTradePlan(price, data) {
   if (
@@ -2911,7 +3034,15 @@ const decisionEngine = calculateDecisionEngine({
   macd,
   premiumDiscount
 });
-    
+   
+const marketSummary =
+  calculateMarketSummary({
+    probability,
+    tradePlan,
+    decisionEngine,
+    recommendation
+  });
+   
     res.status(200).json({
       ok: true,
       source: "CoinGecko + OKX + CoinGlass V4",
@@ -2975,8 +3106,9 @@ technical: {
     tradePlan,
     smartMoney,
     decisionEngine,
-    recommendation
-},
+    recommendation,
+    marketSummary
+  },
       
       price: coin.current_price,
       change24h: coin.price_change_percentage_24h,
