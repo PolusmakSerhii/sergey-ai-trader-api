@@ -1521,6 +1521,316 @@ function calculateAIAssessment(
     tradeAllowed
   };
 }
+function calculateMarketEnvironment(data) {
+  const reasons = [];
+  const warnings = [];
+
+  const price =
+    typeof data?.price === "number" &&
+    Number.isFinite(data.price) &&
+    data.price > 0
+      ? data.price
+      : null;
+
+  const atr14 =
+    typeof data?.atr14 === "number" &&
+    Number.isFinite(data.atr14) &&
+    data.atr14 >= 0
+      ? data.atr14
+      : null;
+
+  const volumeRatio =
+    typeof data?.volumeStats?.ratio === "number" &&
+    Number.isFinite(data.volumeStats.ratio)
+      ? data.volumeStats.ratio
+      : null;
+
+  const volumeSpike =
+    data?.volumeStats?.spike === true;
+
+  const neutralProbability =
+    typeof data?.probability?.probabilities?.neutral === "number"
+      ? data.probability.probabilities.neutral
+      : null;
+
+  const confidence =
+    typeof data?.probability?.confidence?.score === "number"
+      ? data.probability.confidence.score
+      : null;
+
+  const coinGlassAvailable =
+    data?.coinGlass?.available === true;
+
+  /*
+   * Волатильность нормализуется относительно цены.
+   * Это позволяет сравнивать разные монеты.
+   */
+  const atrPercent =
+    price !== null && atr14 !== null
+      ? atr14 / price * 100
+      : null;
+
+  /*
+   * 1. PARTICIPATION — 30 баллов
+   * Оценивает активность рынка через объём.
+   */
+  let participationScore = 0;
+  let participation = "Unknown";
+
+  if (volumeRatio !== null) {
+    if (volumeRatio >= 1.5) {
+      participationScore = 30;
+      participation = "Very High";
+      reasons.push(
+        `Very high market participation: ${volumeRatio}x average volume`
+      );
+    } else if (volumeRatio >= 1) {
+      participationScore = 25;
+      participation = "High";
+      reasons.push(
+        `Healthy market participation: ${volumeRatio}x average volume`
+      );
+    } else if (volumeRatio >= 0.7) {
+      participationScore = 18;
+      participation = "Moderate";
+    } else if (volumeRatio >= 0.4) {
+      participationScore = 10;
+      participation = "Low";
+      warnings.push(
+        `Low market participation: ${volumeRatio}x average volume`
+      );
+    } else {
+      participationScore = 4;
+      participation = "Very Low";
+      warnings.push(
+        `Very low market participation: ${volumeRatio}x average volume`
+      );
+    }
+  } else {
+    warnings.push(
+      "Volume participation data is unavailable"
+    );
+  }
+
+  /*
+   * 2. VOLATILITY — 25 баллов
+   * Лучшее состояние — достаточное движение
+   * без экстремальной нестабильности.
+   */
+  let volatilityScore = 0;
+  let volatility = "Unknown";
+
+  if (atrPercent !== null) {
+    if (atrPercent < 1) {
+      volatilityScore = 8;
+      volatility = "Very Low";
+      warnings.push(
+        `Volatility is too low: ATR ${atrPercent.toFixed(2)}%`
+      );
+    } else if (atrPercent < 2) {
+      volatilityScore = 18;
+      volatility = "Low";
+    } else if (atrPercent <= 5) {
+      volatilityScore = 25;
+      volatility = "Normal";
+      reasons.push(
+        `Tradable volatility: ATR ${atrPercent.toFixed(2)}%`
+      );
+    } else if (atrPercent <= 8) {
+      volatilityScore = 17;
+      volatility = "High";
+      warnings.push(
+        `Elevated volatility: ATR ${atrPercent.toFixed(2)}%`
+      );
+    } else {
+      volatilityScore = 6;
+      volatility = "Extreme";
+      warnings.push(
+        `Extreme volatility: ATR ${atrPercent.toFixed(2)}%`
+      );
+    }
+  } else {
+    warnings.push(
+      "Normalized volatility data is unavailable"
+    );
+  }
+
+  /*
+   * 3. MARKET CLARITY — 30 баллов
+   * Низкая neutral probability и высокая confidence
+   * означают более понятную рыночную среду.
+   */
+  let clarityScore = 0;
+  let clarity = "Unknown";
+
+  if (
+    neutralProbability !== null &&
+    confidence !== null
+  ) {
+    const directionalClarity =
+      Math.max(0, 100 - neutralProbability);
+
+    clarityScore = Math.round(
+      directionalClarity * 0.18 +
+      confidence * 0.12
+    );
+
+    clarityScore = Math.max(
+      0,
+      Math.min(30, clarityScore)
+    );
+
+    if (clarityScore >= 24) {
+      clarity = "Clear";
+      reasons.push(
+        "Market signals show strong directional clarity"
+      );
+    } else if (clarityScore >= 17) {
+      clarity = "Moderate";
+    } else if (clarityScore >= 10) {
+      clarity = "Mixed";
+      warnings.push(
+        "Market direction remains uncertain"
+      );
+    } else {
+      clarity = "Unclear";
+      warnings.push(
+        "Market uncertainty is too high"
+      );
+    }
+  } else {
+    warnings.push(
+      "Probability or confidence data is unavailable"
+    );
+  }
+
+  /*
+   * 4. DATA QUALITY — 15 баллов
+   */
+  let dataQualityScore = 0;
+  let dataQuality = "Limited";
+
+  const coreDataAvailable =
+    price !== null &&
+    atr14 !== null &&
+    volumeRatio !== null &&
+    neutralProbability !== null &&
+    confidence !== null;
+
+  if (coreDataAvailable && coinGlassAvailable) {
+    dataQualityScore = 15;
+    dataQuality = "Complete";
+  } else if (coreDataAvailable) {
+    dataQualityScore = 10;
+    dataQuality = "Core Data Available";
+    warnings.push(
+      "CoinGlass derivatives data is incomplete"
+    );
+  } else {
+    dataQualityScore = 4;
+    dataQuality = "Incomplete";
+    warnings.push(
+      "Core market environment data is incomplete"
+    );
+  }
+
+  let score =
+    participationScore +
+    volatilityScore +
+    clarityScore +
+    dataQualityScore;
+
+  /*
+   * Дополнительный штраф:
+   * всплеск объёма при экстремальной волатильности
+   * может означать ликвидационное событие.
+   */
+  if (
+    volumeSpike &&
+    atrPercent !== null &&
+    atrPercent > 8
+  ) {
+    score -= 10;
+
+    warnings.push(
+      "Volume spike combined with extreme volatility"
+    );
+  }
+
+  score = Math.max(
+    0,
+    Math.min(100, Math.round(score))
+  );
+
+  let condition = "Dangerous";
+
+  if (score >= 80) {
+    condition = "Excellent";
+  } else if (score >= 65) {
+    condition = "Healthy";
+  } else if (score >= 50) {
+    condition = "Caution";
+  } else if (score >= 35) {
+    condition = "Poor";
+  }
+
+  /*
+   * tradable — оценка среды, а не разрешение сделки.
+   * Конкретный вход всё равно определяет Decision Engine.
+   */
+  const tradable =
+    score >= 60 &&
+    volatility !== "Extreme" &&
+    participation !== "Very Low" &&
+    dataQuality !== "Incomplete";
+
+  return {
+    version: "1.0",
+
+    score,
+    condition,
+    tradable,
+
+    components: {
+      participation: {
+        score: participationScore,
+        maxScore: 30,
+        status: participation,
+        volumeRatio,
+        volumeSpike
+      },
+
+      volatility: {
+        score: volatilityScore,
+        maxScore: 25,
+        status: volatility,
+        atrPercent:
+          atrPercent !== null
+            ? Number(atrPercent.toFixed(2))
+            : null
+      },
+
+      clarity: {
+        score: clarityScore,
+        maxScore: 30,
+        status: clarity,
+        neutralProbability,
+        confidence
+      },
+
+      dataQuality: {
+        score: dataQualityScore,
+        maxScore: 15,
+        status: dataQuality,
+        coinGlassAvailable
+      }
+    },
+
+    reasons: [...new Set(reasons)],
+    warnings: [...new Set(warnings)]
+  };
+}
+
 function calculateMarketSummary(data) {
   const probability = data?.probability || {};
   const confidence = probability?.confidence || {};
@@ -3110,6 +3420,15 @@ const decisionEngine = calculateDecisionEngine({
   choch,
   mss
 });
+
+   const marketEnvironment =
+  calculateMarketEnvironment({
+    price: coin.current_price,
+    atr14,
+    volumeStats,
+    probability,
+    coinGlass
+  });
    
  const recommendation = calculateRecommendation({
   probability,
@@ -3190,10 +3509,11 @@ technical: {
     probability,
     tradePlan,
     smartMoney,
-    decisionEngine,
-    recommendation,
-    marketSummary
-  },
+   decisionEngine,
+   recommendation,
+   marketEnvironment,
+   marketSummary 
+},
       
       price: coin.current_price,
       change24h: coin.price_change_percentage_24h,
