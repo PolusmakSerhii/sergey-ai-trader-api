@@ -2613,6 +2613,19 @@ function calculateDecisionEngine(data) {
   const levels = data?.levels || {};
   const volumeStats = data?.volumeStats || {};
 
+  const marketBiasResult =
+  data?.marketBias || {
+    bias: "Neutral",
+    strength: 0,
+    dominantProbability: 0,
+    neutralProbability: 100,
+    difference: 0,
+    reason: "Market bias data is unavailable"
+  };
+
+const marketBias =
+  marketBiasResult.bias || "Neutral";
+  
   const longScore =
     typeof probability.longScore === "number"
       ? probability.longScore
@@ -2625,11 +2638,6 @@ function calculateDecisionEngine(data) {
 
   const signalStrength = Math.max(longScore, shortScore);
 
-  const marketBiasResult =
-  calculateMarketBias(probability);
-
-const marketBias =
-  marketBiasResult.bias;
   const confidenceScore =
     typeof confidence.score === "number"
       ? confidence.score
@@ -3624,6 +3632,7 @@ const decisionEngine = calculateDecisionEngine({
   probability,
   tradePlan,
   smartMoney,
+  marketBias,  
   levels,
   volumeStats,
   trend,
