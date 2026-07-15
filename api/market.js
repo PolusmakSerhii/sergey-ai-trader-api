@@ -1831,6 +1831,214 @@ function calculateMarketEnvironment(data) {
   };
 }
 
+function calculateTradeReadiness(data) {
+  const environment =
+    data?.marketEnvironment || {};
+
+  const probability =
+    data?.probability || {};
+
+  const confidence =
+    probability?.confidence || {};
+
+  const marketBias =
+    data?.marketBias || {};
+
+  const reasons = [];
+  const blockers = [];
+
+  const environmentScore =
+    typeof environment.score === "number"
+      ? environment.score
+      : 0;
+
+  const environmentTradable =
+    environment.tradable === true;
+
+  const confidenceScore =
+    typeof confidence.score === "number"
+      ? confidence.score
+      : 0;
+
+  const neutralProbability =
+    typeof probability.probabilities?.neutral === "number"
+      ? probability.probabilities.neutral
+      : 100;
+
+  const scoreDifference =
+    typeof probability.scoreDifference === "number"
+      ? probability.scoreDifference
+      : 0;
+
+  const bias =
+    marketBias.bias || "Neutral";
+
+  /*
+   * 1. Качество рыночной среды — 40%
+   */
+  const environmentComponent =
+    Math.min(40, Math.round(
+      environmentScore * 0.4
+    ));
+
+  if (environmentTradable) {
+    reasons.push(
+      "Market environment is tradable"
+    );
+  } else {
+    blockers.push(
+      "Market environment is not tradable"
+    );
+  }
+
+  /*
+   * 2. Уверенность сигнала — 30%
+   */
+  const confidenceComponent =
+    Math.min(30, Math.round(
+      confidenceScore * 0.3
+    ));
+
+  if (confidenceScore >= 60) {
+    reasons.push(
+      "Signal confidence is acceptable"
+    );
+  } else {
+    blockers.push(
+      `Signal confidence is too low: ${confidenceScore}`
+    );
+  }
+
+  /*
+   * 3. Ясность направления — 20%
+   */
+  const directionalClarity =
+    Math.max(
+      0,
+      100 - neutralProbability
+    );
+
+  const clarityComponent =
+    Math.min(20, Math.round(
+      directionalClarity * 0.2
+    ));
+
+  if (
+    bias !== "Neutral" &&
+    neutralProbability <= 40
+  ) {
+    reasons.push(
+      `${bias} directional bias is confirmed`
+    );
+  } else {
+    blockers.push(
+      "Directional bias is not sufficiently clear"
+    );
+  }
+
+  /*
+   * 4. Разделение Long / Short — 10%
+   */
+  const separationComponent =
+    Math.min(
+      10,
+      Math.round(scoreDifference / 2)
+    );
+
+  if (scoreDifference >= 12) {
+    reasons.push(
+      "Bullish and bearish scores are sufficiently separated"
+    );
+  } else {
+    blockers.push(
+      `Long and Short scores are too close: ${scoreDifference}`
+    );
+  }
+
+  const score = Math.max(
+    0,
+    Math.min(
+      100,
+      environmentComponent +
+      confidenceComponent +
+      clarityComponent +
+      separationComponent
+    )
+  );
+
+  /*
+   * Ready означает:
+   * среда разрешает торговлю,
+   * есть направление,
+   * confidence достаточный,
+   * конфликт между Long и Short отсутствует.
+   */
+  const ready =
+    environmentTradable &&
+    environmentScore >= 60 &&
+    confidenceScore >= 60 &&
+    bias !== "Neutral" &&
+    neutralProbability <= 40 &&
+    scoreDifference >= 12;
+
+  let status = "Blocked";
+
+  if (ready && score >= 80) {
+    status = "Ready";
+  } else if (ready) {
+    status = "Conditional";
+  } else if (
+    environmentTradable &&
+    score >= 50
+  ) {
+    status = "Waiting Confirmation";
+  }
+
+  return {
+    version: "1.0",
+
+    score,
+    ready,
+    status,
+
+    direction:
+      bias === "Bullish"
+        ? "Long"
+        : bias === "Bearish"
+          ? "Short"
+          : "Neutral",
+
+    components: {
+      environment: {
+        score: environmentComponent,
+        maxScore: 40,
+        sourceScore: environmentScore
+      },
+
+      confidence: {
+        score: confidenceComponent,
+        maxScore: 30,
+        sourceScore: confidenceScore
+      },
+
+      clarity: {
+        score: clarityComponent,
+        maxScore: 20,
+        neutralProbability
+      },
+
+      separation: {
+        score: separationComponent,
+        maxScore: 10,
+        scoreDifference
+      }
+    },
+
+    reasons: [...new Set(reasons)],
+    blockers: [...new Set(blockers)]
+  };
+}
+
 function calculateMarketSummary(data) {
   const probability = data?.probability || {};
   const confidence = probability?.confidence || {};
@@ -3381,8 +3589,11 @@ const probability = {
       probabilityBase,
       probabilityConfidence
     )
-};   
-  const smartMoney = calculateSmartMoneyScore({
+}; 
+   const marketBias =
+  calculateMarketBias(probability);
+   
+   const smartMoney = calculateSmartMoneyScore({
     premiumDiscount,
     fvg,
     orderBlocks,
@@ -3428,6 +3639,13 @@ const decisionEngine = calculateDecisionEngine({
     volumeStats,
     probability,
     coinGlass
+  });
+   
+const tradeReadiness =
+  calculateTradeReadiness({
+    marketEnvironment,
+    probability,
+    marketBias
   });
    
  const recommendation = calculateRecommendation({
@@ -3509,11 +3727,13 @@ technical: {
     probability,
     tradePlan,
     smartMoney,
-   decisionEngine,
-   recommendation,
-   marketEnvironment,
-   marketSummary 
-},
+    decisionEngine,
+    recommendation,
+    marketBias,
+    marketEnvironment,
+    tradeReadiness,
+    marketSummary  
+   },
       
       price: coin.current_price,
       change24h: coin.price_change_percentage_24h,
