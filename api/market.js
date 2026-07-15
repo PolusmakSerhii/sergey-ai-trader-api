@@ -3198,6 +3198,177 @@ async function fetchOKXKlines(
     };
   }
 }
+function calculateDerivativesHistory(coinGlass) {
+  const source = coinGlass || {};
+
+  const fundingRate =
+    source.fundingRate || null;
+
+  const openInterest =
+    source.openInterest || null;
+
+  const longShortRatio =
+    source.longShortRatio || null;
+
+  const liquidations =
+    Array.isArray(source.liquidations)
+      ? source.liquidations
+      : [];
+
+  const aggregatedLiquidations =
+    liquidations.find(
+      item => item?.exchange === "All"
+    ) || null;
+
+  return {
+    version: "1.0",
+
+    available:
+      source.available === true,
+
+    funding: {
+      current: fundingRate
+        ? {
+            exchange:
+              fundingRate.exchange ?? null,
+
+            rate:
+              typeof fundingRate.rate === "number"
+                ? fundingRate.rate
+                : null,
+
+            intervalHours:
+              fundingRate.intervalHours ?? null,
+
+            nextFundingTime:
+              fundingRate.nextFundingTime ?? null
+          }
+        : null,
+
+      history: [],
+
+      historyAvailable: false
+    },
+
+    openInterest: {
+      current: openInterest
+        ? {
+            exchange:
+              openInterest.exchange ?? null,
+
+            usd:
+              typeof openInterest.usd === "number"
+                ? openInterest.usd
+                : null,
+
+            quantity:
+              typeof openInterest.quantity === "number"
+                ? openInterest.quantity
+                : null,
+
+            changes: {
+              change5m:
+                typeof openInterest.change5m === "number"
+                  ? openInterest.change5m
+                  : null,
+
+              change15m:
+                typeof openInterest.change15m === "number"
+                  ? openInterest.change15m
+                  : null,
+
+              change30m:
+                typeof openInterest.change30m === "number"
+                  ? openInterest.change30m
+                  : null,
+
+              change1h:
+                typeof openInterest.change1h === "number"
+                  ? openInterest.change1h
+                  : null,
+
+              change4h:
+                typeof openInterest.change4h === "number"
+                  ? openInterest.change4h
+                  : null,
+
+              change24h:
+                typeof openInterest.change24h === "number"
+                  ? openInterest.change24h
+                  : null
+            }
+          }
+        : null,
+
+      history: [],
+
+      historyAvailable: false
+    },
+
+    longShort: {
+      current: longShortRatio
+        ? {
+            exchange:
+              longShortRatio.exchange ?? null,
+
+            longAccount:
+              typeof longShortRatio.longAccount === "number"
+                ? longShortRatio.longAccount
+                : null,
+
+            shortAccount:
+              typeof longShortRatio.shortAccount === "number"
+                ? longShortRatio.shortAccount
+                : null,
+
+            ratio:
+              typeof longShortRatio.ratio === "number"
+                ? longShortRatio.ratio
+                : null,
+
+            timestamp:
+              longShortRatio.timestamp ?? null
+          }
+        : null,
+
+      history: [],
+
+      historyAvailable: false
+    },
+
+    liquidations: {
+      current: aggregatedLiquidations
+        ? {
+            exchange:
+              aggregatedLiquidations.exchange ?? "All",
+
+            totalUsd:
+              typeof aggregatedLiquidations.liquidation_usd === "number"
+                ? aggregatedLiquidations.liquidation_usd
+                : null,
+
+            longUsd:
+              typeof aggregatedLiquidations.longLiquidation_usd === "number"
+                ? aggregatedLiquidations.longLiquidation_usd
+                : null,
+
+            shortUsd:
+              typeof aggregatedLiquidations.shortLiquidation_usd === "number"
+                ? aggregatedLiquidations.shortLiquidation_usd
+                : null
+          }
+        : null,
+
+      exchanges: liquidations,
+
+      history: [],
+
+      historyAvailable: false
+    },
+
+    errors: source.errors || {}
+  };
+}
 
 async function fetchCoinGlass(path, params = {}) {
   const apiKey = process.env.COINGLASS_API_KEY;
@@ -3665,6 +3836,11 @@ const tradeReadiness =
   macd,
   premiumDiscount
 });
+
+   const derivativesHistory =
+  calculateDerivativesHistory(
+    coinGlass
+  );
    
 const marketSummary =
   calculateMarketSummary({
@@ -3689,7 +3865,9 @@ const marketSummary =
 
        coinGlass,
       
-okxKlines: {
+      derivativesHistory,
+        
+      okxKlines: {
   available: okxDailyResponse.ok,
   source: "OKX",
   interval: "1D",
