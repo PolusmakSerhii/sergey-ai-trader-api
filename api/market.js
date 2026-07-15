@@ -40,6 +40,8 @@ function calculateRSI(closes, period = 14) {
   const rs = avgGain / avgLoss;
   return Number((100 - 100 / (1 + rs)).toFixed(2));
 }
+
+
 function calculateEMA(closes, period) {
   if (!closes || closes.length < period) return null;
 
@@ -54,20 +56,110 @@ function calculateEMA(closes, period) {
   return Number(ema.toFixed(2));
 }
 
-function calculateMACD(closes) {
-  if (!closes || closes.length < 35) return null;
+function calculateEMASeries(closes, period) {
+  if (
+    !Array.isArray(closes) ||
+    closes.length < period
+  ) {
+    return [];
+  }
 
-  const ema12 = calculateEMA(closes, 12);
-  const ema26 = calculateEMA(closes, 26);
+  const multiplier = 2 / (period + 1);
 
-  if (!ema12 || !ema26) return null;
+  const initialSma =
+    closes
+      .slice(0, period)
+      .reduce((sum, value) => sum + value, 0) /
+    period;
 
-  const macd = Number((ema12 - ema26).toFixed(4));
+  const result = new Array(period - 1).fill(null);
+
+  let previousEma = initialSma;
+  result.push(previousEma);
+
+  for (let i = period; i < closes.length; i++) {
+    previousEma =
+      closes[i] * multiplier +
+      previousEma * (1 - multiplier);
+
+    result.push(previousEma);
+  }
+
+  return result;
+}
+
+function calculateMACD(
+  closes,
+  fastPeriod = 12,
+  slowPeriod = 26,
+  signalPeriod = 9
+) {
+  if (
+    !Array.isArray(closes) ||
+    closes.length <
+      slowPeriod + signalPeriod
+  ) {
+    return null;
+  }
+
+  const fastEmaSeries =
+    calculateEMASeries(closes, fastPeriod);
+
+  const slowEmaSeries =
+    calculateEMASeries(closes, slowPeriod);
+
+  const macdSeries = [];
+
+  for (let i = 0; i < closes.length; i++) {
+    const fast = fastEmaSeries[i];
+    const slow = slowEmaSeries[i];
+
+    if (
+      typeof fast === "number" &&
+      typeof slow === "number"
+    ) {
+      macdSeries.push(fast - slow);
+    }
+  }
+
+  if (macdSeries.length < signalPeriod) {
+    return null;
+  }
+
+  const signalSeries =
+    calculateEMASeries(
+      macdSeries,
+      signalPeriod
+    );
+
+  const macdLine =
+    macdSeries[macdSeries.length - 1];
+
+  const signalLine =
+    signalSeries[signalSeries.length - 1];
+
+  if (
+    typeof macdLine !== "number" ||
+    typeof signalLine !== "number"
+  ) {
+    return null;
+  }
+
+  const histogram = macdLine - signalLine;
 
   return {
-    macd
+    macd: Number(macdLine.toFixed(4)),
+    signal: Number(signalLine.toFixed(4)),
+    histogram: Number(histogram.toFixed(4)),
+    trend:
+      histogram > 0
+        ? "Bullish"
+        : histogram < 0
+          ? "Bearish"
+          : "Neutral"
   };
 }
+
 function calculateLevels(closes) {
   if (!closes || closes.length < 20) return null;
 
