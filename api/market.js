@@ -1993,6 +1993,99 @@ function calculateSmartMoneyScore(data) {
     reasons
   };
 }
+function calculateMarketBias(probability) {
+  if (!probability) {
+    return {
+      bias: "Neutral",
+      strength: 0,
+      dominantProbability: 0,
+      neutralProbability: 100,
+      difference: 0,
+      reason: "Probability data is unavailable"
+    };
+  }
+
+  const bullish =
+    typeof probability.probabilities?.bullish === "number"
+      ? probability.probabilities.bullish
+      : 0;
+
+  const bearish =
+    typeof probability.probabilities?.bearish === "number"
+      ? probability.probabilities.bearish
+      : 0;
+
+  const neutral =
+    typeof probability.probabilities?.neutral === "number"
+      ? probability.probabilities.neutral
+      : 100;
+
+  const difference = Math.abs(
+    bullish - bearish
+  );
+
+  const dominantProbability = Math.max(
+    bullish,
+    bearish
+  );
+
+  /*
+   * Neutral остаётся главным сценарием,
+   * если его вероятность выше направления.
+   */
+  if (
+    neutral >= dominantProbability ||
+    neutral >= 50
+  ) {
+    return {
+      bias: "Neutral",
+      strength: neutral,
+      dominantProbability,
+      neutralProbability: neutral,
+      difference,
+      reason:
+        "Neutral probability dominates directional scenarios"
+    };
+  }
+
+  /*
+   * Направление не подтверждается,
+   * если разница между Bullish и Bearish слишком мала.
+   */
+  if (difference < 10) {
+    return {
+      bias: "Neutral",
+      strength: dominantProbability,
+      dominantProbability,
+      neutralProbability: neutral,
+      difference,
+      reason:
+        "Bullish and bearish probabilities are too close"
+    };
+  }
+
+  if (bullish > bearish) {
+    return {
+      bias: "Bullish",
+      strength: bullish,
+      dominantProbability: bullish,
+      neutralProbability: neutral,
+      difference,
+      reason:
+        "Bullish probability is dominant"
+    };
+  }
+
+  return {
+    bias: "Bearish",
+    strength: bearish,
+    dominantProbability: bearish,
+    neutralProbability: neutral,
+    difference,
+    reason:
+      "Bearish probability is dominant"
+  };
+}
 
 function calculateDecisionEngine(data) {
   const probability = data?.probability || {};
@@ -2014,6 +2107,11 @@ function calculateDecisionEngine(data) {
 
   const signalStrength = Math.max(longScore, shortScore);
 
+  const marketBiasResult =
+  calculateMarketBias(probability);
+
+const marketBias =
+  marketBiasResult.bias;
   const confidenceScore =
     typeof confidence.score === "number"
       ? confidence.score
@@ -2080,20 +2178,6 @@ function calculateDecisionEngine(data) {
     if (!riskFactors.includes(warning)) {
       riskFactors.push(warning);
     }
-  }
-
-  let marketBias = "Neutral";
-
-  if (
-    shortScore > longScore &&
-    shortScore - longScore >= 8
-  ) {
-    marketBias = "Bearish";
-  } else if (
-    longScore > shortScore &&
-    longScore - shortScore >= 8
-  ) {
-    marketBias = "Bullish";
   }
 
   let action = "WAIT";
@@ -2172,16 +2256,17 @@ function calculateDecisionEngine(data) {
   return {
     version: "3.0",
 
-    summary: {
-      marketBias,
-      action,
-      signalStrength,
-      confidence: confidenceScore,
-      tradeQuality,
-      validTrade: tradePlan.validTrade === true,
-      text: summaryText
-    },
-
+summary: {
+  marketBias,
+  marketBiasDetails: marketBiasResult,
+  action,
+  signalStrength,
+  confidence: confidenceScore,
+  tradeQuality,
+  validTrade: tradePlan.validTrade === true,
+  text: summaryText
+},
+    
     bullishFactors: [...new Set(bullishFactors)],
     bearishFactors: [...new Set(bearishFactors)],
     riskFactors: [...new Set(riskFactors)],
