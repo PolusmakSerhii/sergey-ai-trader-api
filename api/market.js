@@ -3456,16 +3456,23 @@ async function getCoinGlassMarketData(symbol) {
   const asset = symbol.replace(/USDT$/i, "");
 const [
   fundingResponse,
+  fundingHistoryResponse,
   openInterestResponse,
   longShortResponse,
   liquidationResponse,
-  
 ] = await Promise.all([
   
   fetchCoinGlass(
     "/api/futures/funding-rate/exchange-list"
   ),
-
+fetchCoinGlass(
+  "/api/futures/funding-rate/history",
+  {
+    exchange: "Binance",
+    symbol,
+    interval: "4h"
+  }
+),  
   fetchCoinGlass(
     "/api/futures/open-interest/exchange-list",
     {
