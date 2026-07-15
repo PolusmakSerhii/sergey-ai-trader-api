@@ -1050,6 +1050,47 @@ if (
 
   const score =
     Math.max(longScore, shortScore);
+   
+const totalDirectionalScore =
+  longScore + shortScore;
+
+let bullishProbability = 0;
+let bearishProbability = 0;
+let neutralProbability = 100;
+
+if (totalDirectionalScore > 0) {
+  bullishProbability = Math.round(
+    longScore / totalDirectionalScore * 100
+  );
+
+  bearishProbability = Math.round(
+    shortScore / totalDirectionalScore * 100
+  );
+
+  neutralProbability = Math.max(
+    0,
+    Math.round(
+      100 -
+      Math.min(
+        100,
+        scoreDifference * 3
+      )
+    )
+  );
+
+  const directionalShare =
+    100 - neutralProbability;
+
+  bullishProbability = Math.round(
+    bullishProbability / 100 *
+    directionalShare
+  );
+
+  bearishProbability =
+    100 -
+    neutralProbability -
+    bullishProbability;
+}   
 
   let signal = "Neutral";
   let direction = "Neutral";
@@ -1111,10 +1152,17 @@ if (
   }
 
   return {
-    version: "2.2",
+    version: "3.0",
     score,
     signal,
     direction,
+    
+    probabilities: {
+      bullish: bullishProbability,
+      bearish: bearishProbability,
+      neutral: neutralProbability
+    },    
+    
     longScore,
     shortScore,
     scoreDifference,
@@ -1360,6 +1408,8 @@ function calculateSignalConfidence(data, probability) {
     penalties
   };
 }
+
+
 
 function calculateTradePlan(price, data) {
   if (
