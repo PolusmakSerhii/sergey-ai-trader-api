@@ -3200,7 +3200,10 @@ async function fetchOKXKlines(
 }
 function calculateDerivativesHistory(coinGlass) {
   const source = coinGlass || {};
-
+  
+  const lastUpdated =
+    new Date().toISOString();
+  
   const fundingRate =
     source.fundingRate || null;
 
@@ -3247,7 +3250,16 @@ function calculateDerivativesHistory(coinGlass) {
 
       history: [],
 
-      historyAvailable: false
+      historyAvailable: false,
+
+      source: "CoinGlass",
+
+      timeframe:
+        fundingRate?.intervalHours
+          ? `${fundingRate.intervalHours}H`
+          : null,
+
+      lastUpdated
     },
 
     openInterest: {
@@ -3302,7 +3314,13 @@ function calculateDerivativesHistory(coinGlass) {
 
       history: [],
 
-      historyAvailable: false
+      historyAvailable: false,
+
+      source: "CoinGlass",
+
+      timeframe: null,
+
+      lastUpdated
     },
 
     longShort: {
@@ -3333,7 +3351,13 @@ function calculateDerivativesHistory(coinGlass) {
 
       history: [],
 
-      historyAvailable: false
+      historyAvailable: false,
+
+      source: "CoinGlass",
+
+      timeframe: "4H",
+
+      lastUpdated
     },
 
     liquidations: {
@@ -3361,9 +3385,15 @@ function calculateDerivativesHistory(coinGlass) {
 
       exchanges: liquidations,
 
-      history: [],
+            history: [],
 
-      historyAvailable: false
+      historyAvailable: false,
+
+      source: "CoinGlass",
+
+      timeframe: "24H",
+
+      lastUpdated
     },
 
     errors: source.errors || {}
