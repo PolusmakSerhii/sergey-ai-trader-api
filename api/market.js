@@ -1409,7 +1409,118 @@ function calculateSignalConfidence(data, probability) {
   };
 }
 
+function calculateAIAssessment(
+  probability,
+  confidence
+) {
+  if (!probability || !confidence) {
+    return null;
+  }
 
+  const bullishProbability =
+    Number(
+      probability.probabilities?.bullish
+    ) || 0;
+
+  const bearishProbability =
+    Number(
+      probability.probabilities?.bearish
+    ) || 0;
+
+  const neutralProbability =
+    Number(
+      probability.probabilities?.neutral
+    ) || 0;
+
+  const confidenceScore =
+    Number(confidence.score) || 0;
+
+  const directionalProbability =
+    Math.max(
+      bullishProbability,
+      bearishProbability
+    );
+
+  let direction = "Neutral";
+
+  if (
+    bullishProbability >
+    bearishProbability
+  ) {
+    direction = "Long";
+  }
+
+  if (
+    bearishProbability >
+    bullishProbability
+  ) {
+    direction = "Short";
+  }
+
+  /*
+   * Итоговая сила сетапа:
+   * 60% — вероятность направления;
+   * 40% — качество подтверждений.
+   */
+  const conviction = Math.round(
+    directionalProbability * 0.6 +
+    confidenceScore * 0.4
+  );
+
+  let grade = "D";
+  let quality = "Avoid";
+
+  if (
+    conviction >= 85 &&
+    neutralProbability <= 15
+  ) {
+    grade = "A+";
+    quality = "Excellent";
+  } else if (
+    conviction >= 75 &&
+    neutralProbability <= 25
+  ) {
+    grade = "A";
+    quality = "Very Good";
+  } else if (
+    conviction >= 65 &&
+    neutralProbability <= 35
+  ) {
+    grade = "B";
+    quality = "Good";
+  } else if (
+    conviction >= 55 &&
+    neutralProbability <= 45
+  ) {
+    grade = "C";
+    quality = "Average";
+  }
+
+  const tradeAllowed =
+    conviction >= 65 &&
+    confidenceScore >= 60 &&
+    neutralProbability <= 35;
+
+  return {
+    version: "3.1",
+
+    direction,
+
+    probabilities: {
+      bullish: bullishProbability,
+      bearish: bearishProbability,
+      neutral: neutralProbability
+    },
+
+    directionalProbability,
+    confidence: confidenceScore,
+    conviction,
+
+    grade,
+    quality,
+    tradeAllowed
+  };
+}
 
 function calculateTradePlan(price, data) {
   if (
@@ -2731,22 +2842,28 @@ const probabilityBase =
     equalHighLow,
     coinGlass
   });
+const probabilityConfidence =
+  calculateSignalConfidence(
+    {
+      trend,
+      volumeStats
+    },
+    probabilityBase
+  );
 
 const probability = {
   ...probabilityBase,
 
-  version: "3.0",
+  version: "3.1",
 
-  confidence:
-    calculateSignalConfidence(
-      {
-        trend,
-        volumeStats
-      },
-      probabilityBase
+  confidence: probabilityConfidence,
+
+  aiAssessment:
+    calculateAIAssessment(
+      probabilityBase,
+      probabilityConfidence
     )
-};
-   
+};   
   const smartMoney = calculateSmartMoneyScore({
     premiumDiscount,
     fvg,
