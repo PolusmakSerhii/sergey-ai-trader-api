@@ -5769,7 +5769,8 @@ const highConfidence = filteredSuccessful
   .map((item, index) => ({
     rank: index + 1,
     ...item
-      
+}));
+  
 const bullishSetups =
   filteredSuccessful.filter(item =>
     (item.longScore || 0) >
@@ -5805,21 +5806,6 @@ const averageConfidence =
       )
     : 0;
 
-const averageNeutralProbability =
-  filteredSuccessful.length > 0
-    ? Math.round(
-        filteredSuccessful.reduce(
-          (sum, item) =>
-            sum +
-            (
-              item.probabilities?.neutral ??
-              100
-            ),
-          0
-        ) / filteredSuccessful.length
-      )
-    : 100;
-  
 const averageNeutralProbability =
   filteredSuccessful.length > 0
     ? Math.round(
