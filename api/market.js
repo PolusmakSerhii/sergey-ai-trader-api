@@ -5501,7 +5501,7 @@ if (
 ) {
   return res.status(502).json({
     ok: false,
-    version: "0.7",
+    version: "1.0",
     error:
       symbolsResponse.error ||
       "Could not load OKX symbols"
@@ -5513,7 +5513,7 @@ if (
     ) {
       return res.status(502).json({
         ok: false,
-        version: "0.7",
+        version: "1.0",
         error:
           tickersResponse.error ||
           "Could not load OKX tickers"
@@ -5572,7 +5572,7 @@ const totalPages =
 if (scannerSymbols.length === 0) {
   return res.status(400).json({
     ok: false,
-    version: "0.7",
+    version: "1.0",
 
     error:
       `Scanner page ${scannerPage} is outside the available range`,
@@ -5817,6 +5817,56 @@ const highConfidence = filteredSuccessful
     rank: index + 1,
     ...item
 }));
+const topOpportunities =
+  [...filteredSuccessful]
+    .sort((a, b) =>
+      (b.opportunityScore || 0) -
+      (a.opportunityScore || 0)
+    )
+    .slice(0, 10)
+    .map((item, index) => ({
+      rank: index + 1,
+      ...item
+    }));
+
+const topSmartMoney =
+  [...filteredSuccessful]
+    .sort((a, b) =>
+      (b.smartMoneyScore || 0) -
+      (a.smartMoneyScore || 0)
+    )
+    .slice(0, 10)
+    .map((item, index) => ({
+      rank: index + 1,
+      ...item
+    }));
+
+const topRiskReward =
+  filteredSuccessful
+    .filter(item =>
+      typeof item.riskReward === "number" &&
+      Number.isFinite(item.riskReward)
+    )
+    .sort((a, b) =>
+      b.riskReward - a.riskReward
+    )
+    .slice(0, 10)
+    .map((item, index) => ({
+      rank: index + 1,
+      ...item
+    }));
+
+const topReadiness =
+  [...filteredSuccessful]
+    .sort((a, b) =>
+      (b.tradeReadiness?.score || 0) -
+      (a.tradeReadiness?.score || 0)
+    )
+    .slice(0, 10)
+    .map((item, index) => ({
+      rank: index + 1,
+      ...item
+    }));
   
 const bullishSetups =
   filteredSuccessful.filter(item =>
@@ -5971,6 +6021,35 @@ const marketSummary = {
 
   averageNeutralProbability,
 
+  bestOpportunity:
+    topOpportunities[0]
+      ? {
+        symbol:
+          topOpportunities[0].symbol,
+
+        direction:
+          topOpportunities[0].direction,
+
+        action:
+          topOpportunities[0].action,
+
+        opportunityScore:
+          topOpportunities[0].opportunityScore,
+
+        opportunityGrade:
+          topOpportunities[0].opportunityGrade,
+
+        confidence:
+          topOpportunities[0].confidence,
+
+        readiness:
+          topOpportunities[0].tradeReadiness,
+
+        riskReward:
+          topOpportunities[0].riskReward
+      }
+    : null,
+  
   bestSetup:
     bestSetup
       ? {
@@ -6007,7 +6086,7 @@ const marketSummary = {
   return res.status(200).json({
     ok: failed.length === 0,
 
-    version: "0.7",
+    version: "1.0",
 
     source:
       "Sergey AI Trader Probability AI",
@@ -6057,14 +6136,17 @@ const marketSummary = {
 
    results: ranked,
 
-   categories: {
-     topLongs,
-     topShorts,
-     readyToTrade,
-     highConfidence
-   },
-
-   errors: failed
+  categories: {
+  topOpportunities,
+  topLongs,
+  topShorts,
+  topSmartMoney,
+  topRiskReward,
+  topReadiness,
+  readyToTrade,
+  highConfidence
+},
+    errors: failed
  });
  }
   
