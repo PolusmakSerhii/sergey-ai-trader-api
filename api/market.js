@@ -3101,6 +3101,132 @@ async function fetchOKXSwapSymbols() {
     };
   }
 }
+    async function fetchOKXSwapTickers() {
+  const url =
+    "https://www.okx.com/api/v5/market/tickers?instType=SWAP";
+
+  try {
+    const response =
+      await fetch(url);
+
+    const payload =
+      await response
+        .json()
+        .catch(() => null);
+
+    if (
+      !response.ok ||
+      payload?.code !== "0" ||
+      !Array.isArray(payload?.data)
+    ) {
+      return {
+        ok: false,
+        source: "OKX",
+        count: 0,
+        tickers: [],
+        error:
+          payload?.msg ||
+          `OKX tickers request failed: ${response.status}`
+      };
+    }
+
+    const tickers = payload.data
+      .filter(item =>
+        typeof item?.instId === "string" &&
+        item.instId.endsWith("-USDT-SWAP")
+      )
+      .map(item => {
+        const parts =
+          item.instId.split("-");
+
+        const baseAsset =
+          parts.slice(0, -2).join("-");
+
+        const marketSymbol =
+          `${baseAsset}USDT`;
+
+        const last =
+          Number(item.last);
+
+        const open24h =
+          Number(item.open24h);
+
+        const volumeBase24h =
+          Number(item.vol24h);
+
+        const volumeQuote24h =
+          Number(item.volCcy24h);
+
+        const change24h =
+          Number.isFinite(last) &&
+          Number.isFinite(open24h) &&
+          open24h !== 0
+            ? (
+                (last - open24h) /
+                open24h *
+                100
+              )
+            : null;
+
+        return {
+          symbol:
+            item.instId,
+
+          marketSymbol,
+
+          baseAsset,
+
+          price:
+            Number.isFinite(last)
+              ? last
+              : null,
+
+          change24h:
+            change24h !== null
+              ? Number(
+                  change24h.toFixed(4)
+                )
+              : null,
+
+          volumeBase24h:
+            Number.isFinite(volumeBase24h)
+              ? volumeBase24h
+              : 0,
+
+          volumeQuote24h:
+            Number.isFinite(volumeQuote24h)
+              ? volumeQuote24h
+              : 0,
+
+          timestamp:
+            item.ts
+              ? Number(item.ts)
+              : null
+        };
+      })
+      .filter(item =>
+        item.marketSymbol &&
+        item.price !== null
+      );
+
+    return {
+      ok: true,
+      source: "OKX",
+      count: tickers.length,
+      tickers,
+      error: null
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      source: "OKX",
+      count: 0,
+      tickers: [],
+      error: error.message
+    };
+  }
+}
+
 async function fetchOKXTicker(symbol) {
   const normalizedSymbol =
     String(symbol || "")
@@ -5192,30 +5318,67 @@ const scannerPage =
     ? Math.max(1, requestedPage)
     : 1;
   
-const symbolsResponse =
-  await fetchOKXSwapSymbols();
-
+   const [
+     symbolsResponse,
+     tickersResponse
+   ] = await Promise.all([
+     fetchOKXSwapSymbols(),
+     fetchOKXSwapTickers()
+   ]);
+  
 if (
   symbolsResponse.ok !== true ||
   !Array.isArray(symbolsResponse.symbols)
 ) {
   return res.status(502).json({
     ok: false,
-    version: "0.5",
+    version: "0.6",
     error:
       symbolsResponse.error ||
       "Could not load OKX symbols"
   });
 }
-const allScannerSymbols =
-  symbolsResponse.symbols
-    .map(item => item.marketSymbol)
-    .filter(symbol =>
-      typeof symbol === "string" &&
-      symbol.endsWith("USDT") &&
-      symbol.length > 4
+    if (
+      tickersResponse.ok !== true ||
+      !Array.isArray(tickersResponse.tickers)
+    ) {
+      return res.status(502).json({
+        ok: false,
+        version: "0.6",
+        error:
+          tickersResponse.error ||
+          "Could not load OKX tickers"
+      });
+   }  
+  const availableSymbols =
+  new Set(
+    symbolsResponse.symbols
+      .map(item => item.marketSymbol)
+      .filter(Boolean)
+  );
+
+const allScannerItems =
+  tickersResponse.tickers
+    .filter(item =>
+      availableSymbols.has(
+        item.marketSymbol
+      )
+    )
+    .filter(item =>
+      typeof item.marketSymbol === "string" &&
+      item.marketSymbol.endsWith("USDT") &&
+      item.marketSymbol.length > 4
+    )
+    .sort((a, b) =>
+      (b.volumeQuote24h || 0) -
+      (a.volumeQuote24h || 0)
     );
 
+const allScannerSymbols =
+  allScannerItems.map(
+    item => item.marketSymbol
+  );
+  
 const startIndex =
   (scannerPage - 1) *
   scannerLimit;
@@ -5225,7 +5388,12 @@ const startIndex =
       startIndex,
       startIndex + scannerLimit
     );
-
+ const scannerItems =
+    allScannerItems.slice(
+      startIndex,
+      startIndex + scannerLimit
+    );
+  
 const totalPages =
   Math.ceil(
     allScannerSymbols.length /
@@ -5235,7 +5403,7 @@ const totalPages =
 if (scannerSymbols.length === 0) {
   return res.status(400).json({
     ok: false,
-    version: "0.5",
+    version: "0.6",
 
     error:
       `Scanner page ${scannerPage} is outside the available range`,
@@ -5247,7 +5415,9 @@ if (scannerSymbols.length === 0) {
 
     totalAvailableSymbols:
       allScannerSymbols.length
-  });
+   sorting:
+      "OKX 24H quote volume descending",  
+});
 }
   
   const startedAt = Date.now();
@@ -5261,26 +5431,52 @@ if (scannerSymbols.length === 0) {
         )
       )
     );
+const results =
+  settledResults.map(
+    (result, index) => {
+      const marketItem =
+        scannerItems[index] || {};
 
-  const results =
-    settledResults.map(
-      (result, index) => {
-        if (result.status === "fulfilled") {
-          return result.value;
-        }
-
+      if (result.status === "fulfilled") {
         return {
-          symbol:
-            scannerSymbols[index],
+          ...result.value,
 
-          ok: false,
+          liquidity: {
+            rank:
+              startIndex + index + 1,
 
-          error:
-            result.reason?.message ||
-            "Unknown scanner error"
+            volumeQuote24h:
+              marketItem.volumeQuote24h ?? 0,
+
+            volumeBase24h:
+              marketItem.volumeBase24h ?? 0
+          }
         };
       }
-    );
+
+      return {
+        symbol:
+          scannerSymbols[index],
+
+        ok: false,
+
+        liquidity: {
+          rank:
+            startIndex + index + 1,
+
+          volumeQuote24h:
+            marketItem.volumeQuote24h ?? 0,
+
+          volumeBase24h:
+            marketItem.volumeBase24h ?? 0
+        },
+
+        error:
+          result.reason?.message ||
+          "Unknown scanner error"
+      };
+    }
+  );   
 
   const successful =
     results.filter(
@@ -5586,7 +5782,7 @@ const marketSummary = {
   return res.status(200).json({
     ok: failed.length === 0,
 
-    version: "0.5",
+    version: "0.6",
 
     source:
       "Sergey AI Trader Probability AI",
