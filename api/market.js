@@ -3491,6 +3491,17 @@ function calculateDerivativesHistory(coinGlass) {
       "funding"
     );
   
+  const openInterestHistory =
+    normalizeOpenInterestHistory(
+      source.openInterestHistoryResponse
+    );  
+  
+  const openInterestTrend =
+    calculateTrendAnalysis(
+      openInterestHistory,
+      "openInterest"
+    );
+  
   const fundingRate =
     source.fundingRate || null;
 
