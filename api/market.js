@@ -5414,7 +5414,7 @@ if (scannerSymbols.length === 0) {
     totalPages,
 
     totalAvailableSymbols:
-      allScannerSymbols.length
+      allScannerSymbols.length,
    sorting:
       "OKX 24H quote volume descending",  
 });
