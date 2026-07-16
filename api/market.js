@@ -8,8 +8,8 @@ function getDailyCloses(prices) {
     days[date] = item[1];
   }
 
-  return Object.values(days);
-}
+   return Object.values(days);
+ }
 
 function calculateRSI(closes, period = 14) {
   if (!closes || closes.length <= period) return null;
