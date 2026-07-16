@@ -3332,6 +3332,12 @@ function calculateDerivativesHistory(coinGlass) {
       source.debugFundingHistory
     );  
   
+  const fundingTrend =
+  calculateTrendAnalysis(
+    fundingHistory,
+    "funding"
+  );
+  
   const fundingRate =
     source.fundingRate || null;
 
@@ -3380,6 +3386,8 @@ function calculateDerivativesHistory(coinGlass) {
 
       historyAvailable:
         fundingHistory.length > 0,
+      
+      analysis: fundingTrend,      
       
       source: "CoinGlass",
 
