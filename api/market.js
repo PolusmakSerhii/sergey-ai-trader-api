@@ -5143,6 +5143,18 @@ export default async function handler(req, res) {
      
    return res.status(200).json(result);
  }
+if (mode === "ticker") {
+  const symbol =
+    String(req.query.symbol || "DOGEUSDT")
+      .toUpperCase();
+
+  const result =
+    await fetchOKXTicker(symbol);
+
+  return res.status(
+    result.ok ? 200 : 502
+  ).json(result);
+}  
 if (mode === "scanner") {
   const protocol =
     req.headers["x-forwarded-proto"] ||
@@ -5177,7 +5189,7 @@ if (
 ) {
   return res.status(502).json({
     ok: false,
-    version: "0.2",
+    version: "0.4",
     error:
       symbolsResponse.error ||
       "Could not load OKX symbols"
