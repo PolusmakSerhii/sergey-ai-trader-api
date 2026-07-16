@@ -5586,29 +5586,20 @@ const marketSummary = {
   
   const symbol = 
     (req.query.symbol || "SOLUSDT")
-       .toUpperCase();
+      .toUpperCase();
   
-const id =
-  COINGECKO_SYMBOL_MAP[symbol];
-  
-if (!id) {
-  return res.status(400).json({
-    ok: false,
-    symbol,
-    error:
-      `CoinGecko mapping is not configured for ${symbol}`
-  });
-}
+  const coinGeckoId =
+    COINGECKO_SYMBOL_MAP[symbol] || null;
 
  try {
-
     const coinGlass = 
       await getCoinGlassMarketData(symbol);
-const okxDailyResponse =
-  await fetchOKXKlines(
-    symbol,
-    "1D"
-  );   
+   
+    const okxDailyResponse =
+     await fetchOKXKlines(
+        symbol,
+          "1D"
+         );   
 
 const okxDailyCandles =
   okxDailyResponse.ok
@@ -5633,24 +5624,97 @@ const okxDailyOhlc =
     candle.low,
     candle.close
   ]);
+let coin = null;
+let marketDataSource = null;
 
-    const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${id}&price_change_percentage=24h`;   
-    
-    const response = await fetch(url);
-    const data = await response.json();
+/*
+ * Для известных монет используем CoinGecko:
+ * получаем название, ранг, market cap и supply.
+ */
+if (coinGeckoId) {
+  const url =
+    `https://api.coingecko.com/api/v3/coins/markets` +
+    `?vs_currency=usd` +
+    `&ids=${encodeURIComponent(coinGeckoId)}` +
+    `&price_change_percentage=24h`;
 
-if (!response.ok) {
-  throw new Error(`CoinGecko request failed: ${response.status}`);
+  const response = await fetch(url);
+
+  const data = await response
+    .json()
+    .catch(() => null);
+
+  if (
+    !response.ok ||
+    !Array.isArray(data) ||
+    data.length === 0
+  ) {
+    throw new Error(
+      `CoinGecko request failed for ${symbol}: ${response.status}`
+    );
+  }
+
+  coin = data[0];
+  marketDataSource = "CoinGecko";
 }
 
-if (!Array.isArray(data) || data.length === 0) {
-  throw new Error(`No market data returned for ${symbol}`);
+/*
+ * Для монет без CoinGecko mapping
+ * используем универсальный OKX Ticker.
+ */
+if (!coin) {
+  const okxTicker =
+    await fetchOKXTicker(symbol);
+
+  if (okxTicker.ok !== true) {
+    throw new Error(
+      okxTicker.error ||
+      `OKX ticker failed for ${symbol}`
+    );
+  }
+
+  const baseAsset =
+    symbol.replace(/USDT$/i, "");
+
+  coin = {
+    id: null,
+    name: baseAsset,
+    symbol:
+      baseAsset.toLowerCase(),
+
+    market_cap_rank: null,
+
+    current_price:
+      okxTicker.price,
+
+    price_change_percentage_24h:
+      okxTicker.change24h,
+
+    high_24h:
+      okxTicker.high24h,
+
+    low_24h:
+      okxTicker.low24h,
+
+    total_volume:
+      okxTicker.volume24h,
+
+    market_cap: null,
+
+    circulating_supply: null
+  };
+
+  marketDataSource = "OKX";
 }
 
-   const coin = data[0];
-
-if (!coin || typeof coin.current_price !== "number") {
-  throw new Error(`Invalid market data for ${symbol}`);
+if (
+  !coin ||
+  typeof coin.current_price !== "number" ||
+  !Number.isFinite(coin.current_price)
+) {
+  throw new Error(
+    `Invalid market data for ${symbol}`
+  );
 }    
     
     const fg = await fetch("https://api.alternative.me/fng/?limit=1");
