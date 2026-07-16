@@ -5939,10 +5939,35 @@ if (
 ) {
   scannerMarketBias = "Bullish";
 }
-
 const bestSetup =
-  [...filteredSuccessful]
+  filteredSuccessful
+    .filter(item =>
+      item.tradeAllowed === true &&
+      item.tradeReadiness?.ready === true
+    )
     .sort((a, b) => {
+      const opportunityDifference =
+        (b.opportunityScore || 0) -
+        (a.opportunityScore || 0);
+
+      if (opportunityDifference !== 0) {
+        return opportunityDifference;
+      }
+
+      const readinessDifference =
+        (b.tradeReadiness?.score || 0) -
+        (a.tradeReadiness?.score || 0);
+
+      if (readinessDifference !== 0) {
+        return readinessDifference;
+      }
+
+      return (
+        (b.confidence || 0) -
+        (a.confidence || 0)
+      );
+    })[0] || null;
+  
       const readyDifference =
         Number(
           b.tradeReadiness?.ready === true
