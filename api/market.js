@@ -5967,32 +5967,6 @@ const bestSetup =
         (a.confidence || 0)
       );
     })[0] || null;
-  
-      const readyDifference =
-        Number(
-          b.tradeReadiness?.ready === true
-        ) -
-        Number(
-          a.tradeReadiness?.ready === true
-        );
-
-      if (readyDifference !== 0) {
-        return readyDifference;
-      }
-
-      const readinessDifference =
-        (b.tradeReadiness?.score || 0) -
-        (a.tradeReadiness?.score || 0);
-
-      if (readinessDifference !== 0) {
-        return readinessDifference;
-      }
-
-      return (
-        (b.confidence || 0) -
-        (a.confidence || 0)
-      );
-    })[0] || null;
 
 let marketCondition = "Unclear";
 
