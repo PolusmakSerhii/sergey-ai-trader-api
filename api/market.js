@@ -3501,6 +3501,210 @@ function calculateTrendAnalysis(
     recentWindowSize
   };
 }
+function calculateFundingAnalysis(
+  history,
+  currentRate = null
+) {
+  if (
+    !Array.isArray(history) ||
+    history.length < 2
+  ) {
+    return {
+      version: "1.0",
+      available: false,
+      state: "Unknown",
+      bias: "Neutral",
+      risk: "Unknown",
+      averageFunding: null,
+      minFunding: null,
+      maxFunding: null,
+      positiveShare: null,
+      negativeShare: null,
+      recentAverage: null,
+      currentRate:
+        typeof currentRate === "number"
+          ? currentRate
+          : null
+    };
+  }
+
+  const values = history
+    .map(item => Number(item?.funding))
+    .filter(value => Number.isFinite(value));
+
+  if (values.length < 2) {
+    return {
+      version: "1.0",
+      available: false,
+      state: "Unknown",
+      bias: "Neutral",
+      risk: "Unknown",
+      averageFunding: null,
+      minFunding: null,
+      maxFunding: null,
+      positiveShare: null,
+      negativeShare: null,
+      recentAverage: null,
+      currentRate:
+        typeof currentRate === "number"
+          ? currentRate
+          : null
+    };
+  }
+
+  const averageFunding =
+    values.reduce(
+      (sum, value) => sum + value,
+      0
+    ) / values.length;
+
+  const minFunding =
+    Math.min(...values);
+
+  const maxFunding =
+    Math.max(...values);
+
+  const positiveCount =
+    values.filter(value => value > 0).length;
+
+  const negativeCount =
+    values.filter(value => value < 0).length;
+
+  const positiveShare =
+    positiveCount / values.length * 100;
+
+  const negativeShare =
+    negativeCount / values.length * 100;
+
+  const recentWindowSize = Math.max(
+    3,
+    Math.ceil(values.length * 0.1)
+  );
+
+  const recentValues =
+    values.slice(-recentWindowSize);
+
+  const recentAverage =
+    recentValues.reduce(
+      (sum, value) => sum + value,
+      0
+    ) / recentValues.length;
+
+  const latestFunding =
+    typeof currentRate === "number"
+      ? currentRate
+      : values[values.length - 1];
+
+  let state = "Neutral";
+  let bias = "Neutral";
+  let risk = "Low";
+
+  /*
+   * Сильно отрицательный Funding:
+   * рынок перегружен шортами,
+   * повышается риск Short Squeeze.
+   */
+  if (latestFunding <= -0.01) {
+    state = "Extreme Negative Funding";
+    bias = "Bullish Contrarian";
+    risk = "High";
+  } else if (latestFunding <= -0.003) {
+    state = "Negative Funding";
+    bias = "Bullish Contrarian";
+    risk = "Medium";
+  }
+
+  /*
+   * Сильно положительный Funding:
+   * рынок перегружен лонгами,
+   * повышается риск Long Squeeze.
+   */
+  if (latestFunding >= 0.01) {
+    state = "Extreme Positive Funding";
+    bias = "Bearish Contrarian";
+    risk = "High";
+  } else if (latestFunding >= 0.003) {
+    state = "Positive Funding";
+    bias = "Bearish Contrarian";
+    risk = "Medium";
+  }
+
+  /*
+   * Определяем улучшение или ухудшение
+   * относительно средней истории.
+   */
+  let direction = "Stable";
+
+  if (
+    recentAverage >
+    averageFunding
+  ) {
+    direction = "Improving";
+  } else if (
+    recentAverage <
+    averageFunding
+  ) {
+    direction = "Worsening";
+  }
+
+  let squeezeRisk = "Low";
+
+  if (
+    latestFunding <= -0.01 ||
+    negativeShare >= 75
+  ) {
+    squeezeRisk = "Short Squeeze Risk";
+  }
+
+  if (
+    latestFunding >= 0.01 ||
+    positiveShare >= 75
+  ) {
+    squeezeRisk = "Long Squeeze Risk";
+  }
+
+  return {
+    version: "1.0",
+    available: true,
+
+    state,
+    bias,
+    risk,
+    direction,
+    squeezeRisk,
+
+    currentRate: Number(
+      latestFunding.toFixed(6)
+    ),
+
+    averageFunding: Number(
+      averageFunding.toFixed(6)
+    ),
+
+    recentAverage: Number(
+      recentAverage.toFixed(6)
+    ),
+
+    minFunding: Number(
+      minFunding.toFixed(6)
+    ),
+
+    maxFunding: Number(
+      maxFunding.toFixed(6)
+    ),
+
+    positiveShare: Number(
+      positiveShare.toFixed(2)
+    ),
+
+    negativeShare: Number(
+      negativeShare.toFixed(2)
+    ),
+
+    observations: values.length,
+    recentWindowSize
+  };
+}
 
 function calculateDerivativesHistory(coinGlass) {
   const source = coinGlass || {};
@@ -3518,7 +3722,11 @@ function calculateDerivativesHistory(coinGlass) {
       fundingHistory,
       "funding"
     );
-  
+  const fundingAnalysis =
+    calculateFundingAnalysis(
+      fundingHistory,
+      source.fundingRate?.rate
+     );  
   const openInterestHistory =
     normalizeOpenInterestHistory(
       source.openInterestHistoryResponse
@@ -3579,15 +3787,15 @@ function calculateDerivativesHistory(coinGlass) {
       historyAvailable:
         fundingHistory.length > 0,
       
-      analysis: fundingTrend,      
+      analysis: fundingTrend, 
+
+      fundingAssessment:
+        fundingAnalysis,
       
       source: "CoinGlass",
 
-      timeframe:
-        fundingRate?.intervalHours
-          ? `${fundingRate.intervalHours}H`
-          : null,
-
+      timeframe: "4H",
+      
       lastUpdated
     },
 
