@@ -5213,11 +5213,196 @@ const highConfidence = successful
     rank: index + 1,
     ...item
   }));
+const bullishSetups =
+  successful.filter(item =>
+    (item.longScore || 0) >
+    (item.shortScore || 0)
+  );
+
+const bearishSetups =
+  successful.filter(item =>
+    (item.shortScore || 0) >
+    (item.longScore || 0)
+  );
+
+const neutralSetups =
+  successful.filter(item =>
+    (item.longScore || 0) ===
+    (item.shortScore || 0)
+  );
+
+const readyTrades =
+  successful.filter(item =>
+    item.tradeReadiness?.ready === true ||
+    item.tradeAllowed === true
+  );
+
+const averageConfidence =
+  successful.length > 0
+    ? Math.round(
+        successful.reduce(
+          (sum, item) =>
+            sum + (item.confidence || 0),
+          0
+        ) / successful.length
+      )
+    : 0;
+
+const averageNeutralProbability =
+  successful.length > 0
+    ? Math.round(
+        successful.reduce(
+          (sum, item) =>
+            sum +
+            (
+              item.probabilities?.neutral ??
+              100
+            ),
+          0
+        ) / successful.length
+      )
+    : 100;
+
+let scannerMarketBias = "Neutral";
+
+const directionalDifference =
+  Math.abs(
+    bullishSetups.length -
+    bearishSetups.length
+  );
+
+if (
+  bearishSetups.length >
+    bullishSetups.length &&
+  directionalDifference >= 2
+) {
+  scannerMarketBias = "Bearish";
+} else if (
+  bullishSetups.length >
+    bearishSetups.length &&
+  directionalDifference >= 2
+) {
+  scannerMarketBias = "Bullish";
+}
+
+const bestSetup =
+  [...successful]
+    .sort((a, b) => {
+      const readyDifference =
+        Number(
+          b.tradeReadiness?.ready === true
+        ) -
+        Number(
+          a.tradeReadiness?.ready === true
+        );
+
+      if (readyDifference !== 0) {
+        return readyDifference;
+      }
+
+      const readinessDifference =
+        (b.tradeReadiness?.score || 0) -
+        (a.tradeReadiness?.score || 0);
+
+      if (readinessDifference !== 0) {
+        return readinessDifference;
+      }
+
+      return (
+        (b.confidence || 0) -
+        (a.confidence || 0)
+      );
+    })[0] || null;
+
+let marketCondition = "Unclear";
+
+if (
+  readyTrades.length > 0 &&
+  averageConfidence >= 60
+) {
+  marketCondition = "Active Opportunities";
+} else if (
+  averageNeutralProbability >= 70
+) {
+  marketCondition = "High Uncertainty";
+} else if (
+  averageConfidence >= 45
+) {
+  marketCondition = "Selective";
+} else if (successful.length > 0) {
+  marketCondition = "Weak Signals";
+}
+
+const marketSummary = {
+  version: "1.0",
+
+  marketBias:
+    scannerMarketBias,
+
+  marketCondition,
+
+  scanned:
+    scannerSymbols.length,
+
+  successful:
+    successful.length,
+
+  bullishSetups:
+    bullishSetups.length,
+
+  bearishSetups:
+    bearishSetups.length,
+
+  neutralSetups:
+    neutralSetups.length,
+
+  readyTrades:
+    readyTrades.length,
+
+  highConfidenceSetups:
+    highConfidence.length,
+
+  averageConfidence,
+
+  averageNeutralProbability,
+
+  bestSetup:
+    bestSetup
+      ? {
+          symbol:
+            bestSetup.symbol,
+
+          direction:
+            bestSetup.direction,
+
+          action:
+            bestSetup.action,
+
+          score:
+            bestSetup.score,
+
+          confidence:
+            bestSetup.confidence,
+
+          grade:
+            bestSetup.grade,
+
+          marketBias:
+            bestSetup.marketBias,
+
+          tradeAllowed:
+            bestSetup.tradeAllowed,
+
+          tradeReadiness:
+            bestSetup.tradeReadiness
+        }
+      : null
+};
   
   return res.status(200).json({
     ok: failed.length === 0,
 
-    version: "0.3",
+    version: "0.4",
 
     source:
       "Sergey AI Trader Probability AI",
@@ -5239,17 +5424,19 @@ const highConfidence = successful
     durationMs:
       Date.now() - startedAt,
 
+   marketSummary,
+
    results: ranked,
 
-    categories: {
-    topLongs,
-    topShorts,
-    readyToTrade,
-    highConfidence
-  },
+   categories: {
+     topLongs,
+     topShorts,
+     readyToTrade,
+     highConfidence
+   },
 
    errors: failed
-  });
+ });
  }
   
   const symbol = 
