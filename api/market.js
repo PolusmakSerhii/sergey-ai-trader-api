@@ -3408,14 +3408,14 @@ function calculateDerivativesHistory(coinGlass) {
   
   const fundingHistory =
     normalizeFundingHistory(
-      source.debugFundingHistory
-    );  
+      source.fundingHistoryResponse
+    );
   
   const fundingTrend =
-  calculateTrendAnalysis(
-    fundingHistory,
-    "funding"
-  );
+    calculateTrendAnalysis(
+      fundingHistory,
+      "funding"
+    );
   
   const fundingRate =
     source.fundingRate || null;
@@ -3829,13 +3829,12 @@ available:
  longShortRatio,
  liquidations,
   
-debugFundingHistory:
-  fundingHistoryResponse,  
+ fundingHistoryResponse,  
   
-  errors: {
-  fundingRate: fundingResponse.ok
-    ? null
-    : fundingResponse.error,
+ errors: {
+   fundingRate: fundingResponse.ok
+     ? null
+     : fundingResponse.error,
 
   openInterest: openInterestResponse.ok
     ? null
