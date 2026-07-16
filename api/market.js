@@ -3042,7 +3042,6 @@ async function fetchOKXSwapSymbols() {
       };
     }
 
-   console.log(payload.data[0]);
     const symbols = payload.data
       .filter(item =>
         item?.state === "live" &&
@@ -3051,13 +3050,13 @@ async function fetchOKXSwapSymbols() {
       )
       
      .map(item => {
-  const parts =
-    String(item.instId || "").split("-");
+    const parts =
+      String(item.instId || "").split("-");
 
-  const baseAsset =
-    parts.length >= 3
-      ? parts.slice(0, -2).join("-")
-      : "";
+    const baseAsset =
+      parts.length >= 3
+        ? parts.slice(0, -2).join("-")
+        : "";
 
   const quoteAsset =
     parts.length >= 2
@@ -5178,10 +5177,21 @@ const scannerLimit =
   Number.isFinite(requestedLimit)
     ? Math.max(
         1,
-        Math.min(8, requestedLimit)
+        Math.min(10, requestedLimit)
       )
-    : 5;
+    : 10;
 
+  const requestedPage =
+  Number.parseInt(
+    String(req.query.page || "1"),
+    10
+  );
+
+const scannerPage =
+  Number.isFinite(requestedPage)
+    ? Math.max(1, requestedPage)
+    : 1;
+  
 const symbolsResponse =
   await fetchOKXSwapSymbols();
 
@@ -5191,27 +5201,54 @@ if (
 ) {
   return res.status(502).json({
     ok: false,
-    version: "0.4",
+    version: "0.5",
     error:
       symbolsResponse.error ||
       "Could not load OKX symbols"
   });
 }
-
-const supportedSymbols =
-  new Set(
-    Object.keys(
-      COINGECKO_SYMBOL_MAP
-    )
-  );
-
-const scannerSymbols =
+const allScannerSymbols =
   symbolsResponse.symbols
     .map(item => item.marketSymbol)
     .filter(symbol =>
-      supportedSymbols.has(symbol)
-    )
-    .slice(0, scannerLimit);
+      typeof symbol === "string" &&
+      symbol.endsWith("USDT") &&
+      symbol.length > 4
+    );
+
+const startIndex =
+  (scannerPage - 1) *
+  scannerLimit;
+
+  const scannerSymbols =
+    allScannerSymbols.slice(
+      startIndex,
+      startIndex + scannerLimit
+    );
+
+const totalPages =
+  Math.ceil(
+    allScannerSymbols.length /
+    scannerLimit
+  );
+
+if (scannerSymbols.length === 0) {
+  return res.status(400).json({
+    ok: false,
+    version: "0.5",
+
+    error:
+      `Scanner page ${scannerPage} is outside the available range`,
+
+    page:
+      scannerPage,
+
+    totalPages,
+
+    totalAvailableSymbols:
+      allScannerSymbols.length
+  });
+}
   
   const startedAt = Date.now();
 
@@ -5549,18 +5586,33 @@ const marketSummary = {
   return res.status(200).json({
     ok: failed.length === 0,
 
-    version: "0.4",
+    version: "0.5",
 
     source:
       "Sergey AI Trader Probability AI",
 
-    scanned:
-      scannerSymbols.length,
-    requestedLimit:
-      scannerLimit,
+   scanned:
+     scannerSymbols.length,
 
-    availableSupportedSymbols:
-      supportedSymbols.size,
+   page:
+     scannerPage,
+
+   limit:
+     scannerLimit,
+
+   totalPages,
+
+   totalAvailableSymbols:
+     allScannerSymbols.length,
+
+   range: {
+     from:
+       startIndex + 1,
+
+     to:
+       startIndex +
+       scannerSymbols.length
+  },
     
     successful:
       successful.length,
