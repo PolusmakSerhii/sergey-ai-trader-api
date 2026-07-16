@@ -3613,6 +3613,9 @@ available:
  longShortRatio,
  liquidations,
   
+debugFundingHistory:
+  fundingHistoryResponse,  
+  
   errors: {
   fundingRate: fundingResponse.ok
     ? null
