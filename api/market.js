@@ -3040,6 +3040,7 @@ async function fetchOKXSwapSymbols() {
       };
     }
 
+   console.log(payload.data[0]);
     const symbols = payload.data
       .filter(item =>
         item?.state === "live" &&
