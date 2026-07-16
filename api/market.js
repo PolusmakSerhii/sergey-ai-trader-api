@@ -3877,6 +3877,128 @@ function calculateOpenInterestAnalysis(
     recentWindowSize
   };
 }
+function calculateLongShortAssessment(
+  longShortData
+) {
+  const longAccount =
+    typeof longShortData?.longAccount === "number"
+      ? longShortData.longAccount
+      : null;
+
+  const shortAccount =
+    typeof longShortData?.shortAccount === "number"
+      ? longShortData.shortAccount
+      : null;
+
+  const ratio =
+    typeof longShortData?.ratio === "number"
+      ? longShortData.ratio
+      : null;
+
+  if (
+    longAccount === null ||
+    shortAccount === null ||
+    ratio === null
+  ) {
+    return {
+      version: "1.0",
+      available: false,
+      state: "Unknown",
+      bias: "Neutral",
+      risk: "Unknown",
+      squeezeRisk: "Unknown"
+    };
+  }
+
+  let state = "Balanced Positioning";
+  let bias = "Neutral";
+  let risk = "Low";
+  let squeezeRisk = "Low";
+
+  if (
+    longAccount >= 80 ||
+    ratio >= 4
+  ) {
+    state = "Extreme Long Crowding";
+    bias = "Bearish Contrarian";
+    risk = "High";
+    squeezeRisk = "Long Squeeze Risk";
+  } else if (
+    longAccount >= 70 ||
+    ratio >= 2
+  ) {
+    state = "Long Crowding";
+    bias = "Bearish Contrarian";
+    risk = "Medium";
+    squeezeRisk = "Elevated Long Squeeze Risk";
+  } else if (
+    shortAccount >= 80 ||
+    ratio <= 0.25
+  ) {
+    state = "Extreme Short Crowding";
+    bias = "Bullish Contrarian";
+    risk = "High";
+    squeezeRisk = "Short Squeeze Risk";
+  } else if (
+    shortAccount >= 70 ||
+    ratio <= 0.5
+  ) {
+    state = "Short Crowding";
+    bias = "Bullish Contrarian";
+    risk = "Medium";
+    squeezeRisk = "Elevated Short Squeeze Risk";
+  } else if (
+    longAccount >= 55 &&
+    longAccount < 70
+  ) {
+    state = "Moderate Long Bias";
+    bias = "Slight Bearish Contrarian";
+    risk = "Low";
+  } else if (
+    shortAccount >= 55 &&
+    shortAccount < 70
+  ) {
+    state = "Moderate Short Bias";
+    bias = "Slight Bullish Contrarian";
+    risk = "Low";
+  }
+
+  const imbalance =
+    longAccount - shortAccount;
+
+  return {
+    version: "1.0",
+    available: true,
+
+    state,
+    bias,
+    risk,
+    squeezeRisk,
+
+    longAccount: Number(
+      longAccount.toFixed(2)
+    ),
+
+    shortAccount: Number(
+      shortAccount.toFixed(2)
+    ),
+
+    ratio: Number(
+      ratio.toFixed(4)
+    ),
+
+    imbalance: Number(
+      imbalance.toFixed(2)
+    ),
+
+    dominantSide:
+      imbalance > 0
+        ? "Long"
+        : imbalance < 0
+          ? "Short"
+          : "Balanced"
+  };
+}
 
 function calculateDerivativesHistory(coinGlass) {
   const source = coinGlass || {};
