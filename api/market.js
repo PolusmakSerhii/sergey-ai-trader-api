@@ -3359,6 +3359,119 @@ async function fetchOKXTicker(symbol) {
     };
   }
 }
+function calculateScannerOpportunity(data) {
+  const probabilityScore =
+    typeof data?.score === "number"
+      ? data.score
+      : 0;
+
+  const confidence =
+    typeof data?.confidence === "number"
+      ? data.confidence
+      : 0;
+
+  const readinessScore =
+    typeof data?.tradeReadiness?.score === "number"
+      ? data.tradeReadiness.score
+      : 0;
+
+  const environmentScore =
+    typeof data?.marketEnvironmentScore === "number"
+      ? data.marketEnvironmentScore
+      : 0;
+
+  const smartMoneyScore =
+    typeof data?.smartMoneyScore === "number"
+      ? data.smartMoneyScore
+      : 50;
+
+  const riskReward =
+    typeof data?.riskReward === "number"
+      ? data.riskReward
+      : 0;
+
+  let riskRewardScore = 0;
+
+  if (riskReward >= 3) {
+    riskRewardScore = 100;
+  } else if (riskReward >= 2) {
+    riskRewardScore = 85;
+  } else if (riskReward >= 1.5) {
+    riskRewardScore = 70;
+  } else if (riskReward > 0) {
+    riskRewardScore = 35;
+  }
+
+  let opportunityScore = Math.round(
+    probabilityScore * 0.20 +
+    confidence * 0.25 +
+    readinessScore * 0.25 +
+    environmentScore * 0.10 +
+    smartMoneyScore * 0.10 +
+    riskRewardScore * 0.10
+  );
+
+  const penalties = [];
+
+  if (data?.tradeAllowed !== true) {
+    opportunityScore -= 10;
+    penalties.push(
+      "Trade is not currently allowed"
+    );
+  }
+
+  if (
+    data?.probabilities?.neutral >= 60
+  ) {
+    opportunityScore -= 10;
+    penalties.push(
+      "Neutral probability is too high"
+    );
+  }
+
+  if (
+    data?.tradeReadiness?.status === "Blocked"
+  ) {
+    opportunityScore -= 10;
+    penalties.push(
+      "Trade readiness is blocked"
+    );
+  }
+
+  opportunityScore = Math.max(
+    0,
+    Math.min(100, opportunityScore)
+  );
+
+  let opportunityGrade = "D";
+
+  if (opportunityScore >= 85) {
+    opportunityGrade = "A+";
+  } else if (opportunityScore >= 75) {
+    opportunityGrade = "A";
+  } else if (opportunityScore >= 65) {
+    opportunityGrade = "B";
+  } else if (opportunityScore >= 55) {
+    opportunityGrade = "C";
+  }
+
+  return {
+    version: "1.0",
+    score: opportunityScore,
+    grade: opportunityGrade,
+
+    components: {
+      probability: probabilityScore,
+      confidence,
+      readiness: readinessScore,
+      environment: environmentScore,
+      smartMoney: smartMoneyScore,
+      riskReward: riskRewardScore
+    },
+
+    penalties
+  };
+}
 
 async function fetchScannerSymbol(
   baseUrl,
@@ -3407,7 +3520,14 @@ async function fetchScannerSymbol(
 
     const tradeReadiness =
       technical.tradeReadiness || {};
+    const smartMoney =
+      technical.smartMoney || {};
 
+    const marketEnvironment =
+      technical.marketEnvironment || {};
+
+    const tradePlan =
+      technical.tradePlan || {};
     return {
       symbol,
       ok: true,
@@ -3471,22 +3591,47 @@ async function fetchScannerSymbol(
 
       tradeAllowed:
         aiAssessment.tradeAllowed === true,
+      
+tradeReadiness: {
+  score:
+    typeof tradeReadiness.score === "number"
+      ? tradeReadiness.score
+      : 0,
 
-      tradeReadiness: {
-        score:
-          typeof tradeReadiness.score === "number"
-            ? tradeReadiness.score
-            : 0,
+  ready:
+    tradeReadiness.ready === true,
 
-        ready:
-          tradeReadiness.ready === true,
+  status:
+    tradeReadiness.status || "Unknown"
+},
 
-        status:
-          tradeReadiness.status || "Unknown"
-      },
+smartMoneyScore:
+  typeof smartMoney.score === "number"
+    ? smartMoney.score
+    : 50,
 
-      action:
-        recommendation.action || "Wait"
+smartMoneyRating:
+  smartMoney.rating || "Neutral",
+
+marketEnvironmentScore:
+  typeof marketEnvironment.score === "number"
+    ? marketEnvironment.score
+    : 0,
+
+marketEnvironmentCondition:
+  marketEnvironment.condition || "Unknown",
+
+marketEnvironmentTradable:
+  marketEnvironment.tradable === true,
+
+riskReward:
+  typeof tradePlan.riskReward === "number"
+    ? tradePlan.riskReward
+    : null,
+
+action:
+  recommendation.action || "Wait"
+      
     };
   } catch (error) {
     return {
@@ -5332,7 +5477,7 @@ if (
 ) {
   return res.status(502).json({
     ok: false,
-    version: "0.6",
+    version: "0.7",
     error:
       symbolsResponse.error ||
       "Could not load OKX symbols"
@@ -5344,7 +5489,7 @@ if (
     ) {
       return res.status(502).json({
         ok: false,
-        version: "0.6",
+        version: "0.7",
         error:
           tickersResponse.error ||
           "Could not load OKX tickers"
@@ -5403,7 +5548,7 @@ const totalPages =
 if (scannerSymbols.length === 0) {
   return res.status(400).json({
     ok: false,
-    version: "0.6",
+    version: "0.7",
 
     error:
       `Scanner page ${scannerPage} is outside the available range`,
@@ -5478,43 +5623,64 @@ const results =
     }
   );   
 
-  const successful =
-    results.filter(
+ const successful =
+  results
+    .filter(
       item => item.ok === true
-    );
+    )
+    .map(item => {
+      const opportunity =
+        calculateScannerOpportunity(
+          item
+        );
 
+      return {
+        ...item,
+
+        opportunityScore:
+          opportunity.score,
+
+        opportunityGrade:
+          opportunity.grade,
+
+        opportunity
+      };
+    });
+  
   const failed =
     results.filter(
       item => item.ok !== true
     );
+  
+const ranked = [...successful]
+  .sort((a, b) => {
+    const opportunityDifference =
+      (b.opportunityScore || 0) -
+      (a.opportunityScore || 0);
 
-  const ranked = [...successful]
-    .sort((a, b) => {
-      const scoreA =
-        Math.max(
-          a.longScore || 0,
-          a.shortScore || 0
-        );
+    if (opportunityDifference !== 0) {
+      return opportunityDifference;
+    }
 
-      const scoreB =
-        Math.max(
-          b.longScore || 0,
-          b.shortScore || 0
-        );
+    const readinessDifference =
+      (b.tradeReadiness?.score || 0) -
+      (a.tradeReadiness?.score || 0);
 
-      if (scoreB !== scoreA) {
-        return scoreB - scoreA;
-      }
+    if (readinessDifference !== 0) {
+      return readinessDifference;
+    }
 
-      return (
-        (b.confidence || 0) -
-        (a.confidence || 0)
-      );
-    })
+    return (
+      (b.confidence || 0) -
+      (a.confidence || 0)
+    );
+  })
+  
     .map((item, index) => ({
       rank: index + 1,
       ...item
     }));
+  
 const topLongs = successful
   .filter(item =>
     (item.longScore || 0) >
@@ -5782,7 +5948,7 @@ const marketSummary = {
   return res.status(200).json({
     ok: failed.length === 0,
 
-    version: "0.6",
+    version: "0.7",
 
     source:
       "Sergey AI Trader Probability AI",
@@ -5800,7 +5966,9 @@ const marketSummary = {
 
    totalAvailableSymbols:
      allScannerSymbols.length,
-
+   sorting:
+     "Opportunity Score descending",
+    
    range: {
      from:
        startIndex + 1,
