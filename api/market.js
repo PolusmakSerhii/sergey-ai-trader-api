@@ -3047,15 +3047,38 @@ async function fetchOKXSwapSymbols() {
         item?.settleCcy === "USDT" &&
         item?.instType === "SWAP"
       )
-      .map(item => ({
-        symbol: item.instId,
-        marketSymbol:
-          `${item.baseCcy}${item.quoteCcy}`,
-        baseAsset: item.baseCcy,
-        quoteAsset: item.quoteCcy,
-        settleAsset: item.settleCcy,
-        state: item.state
-      }))
+      
+     .map(item => {
+  const parts =
+    String(item.instId || "").split("-");
+
+  const baseAsset =
+    parts.length >= 3
+      ? parts.slice(0, -2).join("-")
+      : "";
+
+  const quoteAsset =
+    parts.length >= 2
+      ? parts[parts.length - 2]
+      : "";
+
+  return {
+    symbol: item.instId,
+
+    marketSymbol:
+      baseAsset && quoteAsset
+        ? `${baseAsset}${quoteAsset}`
+        : "",
+
+    baseAsset,
+    quoteAsset,
+
+    settleAsset:
+      item.settleCcy || quoteAsset,
+
+    state: item.state
+  };
+})
       .sort((a, b) =>
         a.symbol.localeCompare(b.symbol)
       );
