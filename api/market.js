@@ -5692,7 +5692,7 @@ const ranked = [...filteredSuccessful]
       ...item
     }));
   
-const topLongs = successful
+const topLongs = filteredSuccessful
   .filter(item =>
     (item.longScore || 0) >
     (item.shortScore || 0)
@@ -5717,7 +5717,7 @@ const topLongs = successful
     ...item
   }));
 
-const topShorts = successful
+const topShorts = filteredSuccessful
   .filter(item =>
     (item.shortScore || 0) >
     (item.longScore || 0)
@@ -5742,7 +5742,7 @@ const topShorts = successful
     ...item
   }));
 
-const readyToTrade = successful
+const readyToTrade = filteredSuccessful
   .filter(item =>
     item.tradeReadiness?.ready === true ||
     item.tradeAllowed === true
@@ -5757,7 +5757,7 @@ const readyToTrade = successful
     ...item
   }));
 
-const highConfidence = successful
+const highConfidence = filteredSuccessful
   .filter(item =>
     (item.confidence || 0) >= 60
   )
@@ -5769,46 +5769,46 @@ const highConfidence = successful
   .map((item, index) => ({
     rank: index + 1,
     ...item
-  }));
+      
 const bullishSetups =
-  successful.filter(item =>
+  filteredSuccessful.filter(item =>
     (item.longScore || 0) >
     (item.shortScore || 0)
   );
-
+  
 const bearishSetups =
-  successful.filter(item =>
+  filteredSuccessful.filter(item =>
     (item.shortScore || 0) >
     (item.longScore || 0)
   );
 
 const neutralSetups =
-  successful.filter(item =>
+  filteredSuccessful.filter(item =>
     (item.longScore || 0) ===
     (item.shortScore || 0)
   );
 
 const readyTrades =
-  successful.filter(item =>
+  filteredSuccessful.filter(item =>
     item.tradeReadiness?.ready === true ||
     item.tradeAllowed === true
   );
-
+  
 const averageConfidence =
-  successful.length > 0
+  filteredSuccessful.length > 0
     ? Math.round(
-        successful.reduce(
+        filteredSuccessful.reduce(
           (sum, item) =>
             sum + (item.confidence || 0),
           0
-        ) / successful.length
+        ) / filteredSuccessful.length
       )
     : 0;
-
+  
 const averageNeutralProbability =
-  successful.length > 0
+  filteredSuccessful.length > 0
     ? Math.round(
-        successful.reduce(
+        filteredSuccessful.reduce(
           (sum, item) =>
             sum +
             (
@@ -5816,7 +5816,7 @@ const averageNeutralProbability =
               100
             ),
           0
-        ) / successful.length
+        ) / filteredSuccessful.length
       )
     : 100;
 
@@ -5843,7 +5843,7 @@ if (
 }
 
 const bestSetup =
-  [...successful]
+  [...filteredSuccessful]
     .sort((a, b) => {
       const readyDifference =
         Number(
