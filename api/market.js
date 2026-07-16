@@ -3100,6 +3100,139 @@ async function fetchOKXSwapSymbols() {
     };
   }
 }
+async function fetchOKXTicker(symbol) {
+  const normalizedSymbol =
+    String(symbol || "")
+      .toUpperCase()
+      .replace(/USDT$/i, "");
+
+  const instId =
+    `${normalizedSymbol}-USDT-SWAP`;
+
+  const url = new URL(
+    "https://www.okx.com/api/v5/market/ticker"
+  );
+
+  url.searchParams.set(
+    "instId",
+    instId
+  );
+
+  try {
+    const response =
+      await fetch(url);
+
+    const payload =
+      await response
+        .json()
+        .catch(() => null);
+
+    if (
+      !response.ok ||
+      payload?.code !== "0" ||
+      !Array.isArray(payload?.data) ||
+      payload.data.length === 0
+    ) {
+      return {
+        ok: false,
+        source: "OKX",
+        symbol,
+        instId,
+        error:
+          payload?.msg ||
+          `OKX ticker request failed: ${response.status}`
+      };
+    }
+
+    const ticker =
+      payload.data[0];
+
+    const last =
+      Number(ticker?.last);
+
+    const open24h =
+      Number(ticker?.open24h);
+
+    const high24h =
+      Number(ticker?.high24h);
+
+    const low24h =
+      Number(ticker?.low24h);
+
+    const volume24h =
+      Number(ticker?.volCcy24h);
+
+    const change24h =
+      Number.isFinite(last) &&
+      Number.isFinite(open24h) &&
+      open24h !== 0
+        ? (
+            (last - open24h) /
+            open24h *
+            100
+          )
+        : null;
+
+    if (!Number.isFinite(last)) {
+      return {
+        ok: false,
+        source: "OKX",
+        symbol,
+        instId,
+        error:
+          "OKX ticker returned an invalid price"
+      };
+    }
+
+    return {
+      ok: true,
+      source: "OKX",
+      symbol,
+      instId,
+
+      price:
+        Number(last.toFixed(8)),
+
+      change24h:
+        change24h !== null
+          ? Number(
+              change24h.toFixed(4)
+            )
+          : null,
+
+      high24h:
+        Number.isFinite(high24h)
+          ? high24h
+          : null,
+
+      low24h:
+        Number.isFinite(low24h)
+          ? low24h
+          : null,
+
+      volume24h:
+        Number.isFinite(volume24h)
+          ? volume24h
+          : null,
+
+      timestamp:
+        ticker?.ts
+          ? Number(ticker.ts)
+          : null,
+
+      error: null
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      source: "OKX",
+      symbol,
+      instId,
+      error: error.message
+    };
+  }
+}
+
 async function fetchScannerSymbol(
   baseUrl,
   symbol
