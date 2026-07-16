@@ -4031,12 +4031,18 @@ function calculateDerivativesHistory(coinGlass) {
       openInterestHistory,
       "openInterest"
     );
+  
  const openInterestAssessment =
    calculateOpenInterestAnalysis(
      openInterestHistory,
      source.openInterest?.usd,
      source.openInterest?.change24h
     );
+  
+  const longShortAssessment =
+  calculateLongShortAssessment(
+    source.longShortRatio
+  );
   
   const fundingRate =
     source.fundingRate || null;
@@ -4195,8 +4201,9 @@ function calculateDerivativesHistory(coinGlass) {
 
       historyAvailable: false,
 
-      source: "CoinGlass",
+      analysis: longShortAssessment,
 
+      source: "CoinGlass",
       timeframe: "4H",
 
       lastUpdated
