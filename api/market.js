@@ -4825,6 +4825,14 @@ available:
 }
 
 export default async function handler(req, res) {
+    const { mode } = req.query;
+
+   if (mode === "symbols") {
+   const result =
+     await fetchBinanceFuturesSymbols();
+
+   return res.status(200).json(result);
+ }
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
 
   const map = {
