@@ -3345,13 +3345,15 @@ function calculateTrendAnalysis(
     history.length < 2
   ) {
     return {
-      version: "1.1",
+      version: "1.2",
       available: false,
       trend: "Unknown",
       direction: "Unknown",
       momentum: "Unknown",
       change: null,
+      changePercent: null,
       recentChange: null,
+      recentChangePercent: null,
       strength: 0
     };
   }
@@ -3362,13 +3364,15 @@ function calculateTrendAnalysis(
 
   if (values.length < 2) {
     return {
-      version: "1.1",
+      version: "1.2",
       available: false,
       trend: "Unknown",
       direction: "Unknown",
       momentum: "Unknown",
       change: null,
+      changePercent: null,
       recentChange: null,
+      recentChangePercent: null,
       strength: 0
     };
   }
@@ -3376,12 +3380,14 @@ function calculateTrendAnalysis(
   const first = values[0];
   const last = values[values.length - 1];
 
-  const change = last - first;
+  const change =
+    last - first;
 
-  /*
-   * Последние 25% наблюдений показывают
-   * текущее краткосрочное движение.
-   */
+  const changePercent =
+    first !== 0
+      ? change / Math.abs(first) * 100
+      : null;
+
   const recentWindowSize = Math.max(
     2,
     Math.ceil(values.length * 0.25)
@@ -3401,6 +3407,13 @@ function calculateTrendAnalysis(
   const recentChange =
     recentLast - recentFirst;
 
+  const recentChangePercent =
+    recentFirst !== 0
+      ? recentChange /
+        Math.abs(recentFirst) *
+        100
+      : null;
+
   let trend = "Sideways";
   let direction = "Flat";
 
@@ -3412,10 +3425,6 @@ function calculateTrendAnalysis(
     direction = "Down";
   }
 
-  /*
-   * Momentum показывает, совпадает ли
-   * последнее движение с общим трендом.
-   */
   let momentum = "Neutral";
 
   if (
@@ -3441,18 +3450,23 @@ function calculateTrendAnalysis(
   }
 
   /*
-   * Пока масштаб рассчитан для Funding.
-   * Позже сделаем нормализацию под разные метрики.
+   * Сила теперь считается по процентному
+   * изменению, а не по абсолютному размеру.
+   *
+   * 10% движения = strength 100.
    */
-  const strength = Math.min(
-    100,
-    Math.round(
-      Math.abs(change) * 10000
-    )
-  );
+  const strength =
+    changePercent !== null
+      ? Math.min(
+          100,
+          Math.round(
+            Math.abs(changePercent) * 10
+          )
+        )
+      : 0;
 
   return {
-    version: "1.1",
+    version: "1.2",
     available: true,
 
     trend,
@@ -3463,9 +3477,23 @@ function calculateTrendAnalysis(
       change.toFixed(6)
     ),
 
+    changePercent:
+      changePercent !== null
+        ? Number(
+            changePercent.toFixed(4)
+          )
+        : null,
+
     recentChange: Number(
       recentChange.toFixed(6)
     ),
+
+    recentChangePercent:
+      recentChangePercent !== null
+        ? Number(
+            recentChangePercent.toFixed(4)
+          )
+        : null,
 
     strength,
 
