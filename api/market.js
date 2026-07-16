@@ -3198,11 +3198,79 @@ async function fetchOKXKlines(
     };
   }
 }
+function normalizeFundingHistory(response) {
+  if (
+    !response?.ok ||
+    !Array.isArray(response.data)
+  ) {
+    return [];
+  }
+
+  return response.data
+    .map(item => {
+      const time = Number(item?.time);
+      const open = Number(item?.open);
+      const high = Number(item?.high);
+      const low = Number(item?.low);
+      const close = Number(item?.close);
+
+      const valid =
+        Number.isFinite(time) &&
+        Number.isFinite(open) &&
+        Number.isFinite(high) &&
+        Number.isFinite(low) &&
+        Number.isFinite(close);
+
+      if (!valid) {
+        return null;
+      }
+
+      return {
+        time,
+
+        open: Number(
+          open.toFixed(6)
+        ),
+
+        high: Number(
+          high.toFixed(6)
+        ),
+
+        low: Number(
+          low.toFixed(6)
+        ),
+
+        close: Number(
+          close.toFixed(6)
+        ),
+
+        funding: Number(
+          close.toFixed(6)
+        ),
+
+        delta: Number(
+          (close - open).toFixed(6)
+        ),
+
+        range: Number(
+          (high - low).toFixed(6)
+        )
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.time - b.time);
+}
+
 function calculateDerivativesHistory(coinGlass) {
   const source = coinGlass || {};
   
   const lastUpdated =
     new Date().toISOString();
+  
+  const fundingHistory =
+    normalizeFundingHistory(
+      source.debugFundingHistory
+    );  
   
   const fundingRate =
     source.fundingRate || null;
@@ -3248,10 +3316,11 @@ function calculateDerivativesHistory(coinGlass) {
           }
         : null,
 
-      history: [],
+      history: fundingHistory,
 
-      historyAvailable: false,
-
+      historyAvailable:
+        fundingHistory.length > 0,
+      
       source: "CoinGlass",
 
       timeframe:
