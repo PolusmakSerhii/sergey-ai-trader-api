@@ -3014,6 +3014,63 @@ if (tradePlan.validTrade) {
     description
   };
 }
+
+async function fetchBinanceFuturesSymbols() {
+  const url =
+    "https://fapi.binance.com/fapi/v1/exchangeInfo";
+
+  try {
+    const response = await fetch(url);
+
+    const payload = await response
+      .json()
+      .catch(() => null);
+
+    if (
+      !response.ok ||
+      !Array.isArray(payload?.symbols)
+    ) {
+      return {
+        ok: false,
+        symbols: [],
+        error:
+          payload?.msg ||
+          `Binance Futures request failed: ${response.status}`
+      };
+    }
+
+    const symbols = payload.symbols
+      .filter(item =>
+        item?.status === "TRADING" &&
+        item?.quoteAsset === "USDT" &&
+        item?.contractType === "PERPETUAL"
+      )
+      .map(item => ({
+        symbol: item.symbol,
+        baseAsset: item.baseAsset,
+        quoteAsset: item.quoteAsset,
+        contractType: item.contractType,
+        status: item.status
+      }))
+      .sort((a, b) =>
+        a.symbol.localeCompare(b.symbol)
+      );
+
+    return {
+      ok: true,
+      count: symbols.length,
+      symbols,
+      error: null
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      symbols: [],
+      error: error.message
+    };
+  }
+}
+
 async function fetchOKXKlines(
   symbol,
   interval = "1D",
