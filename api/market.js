@@ -3261,6 +3261,80 @@ function normalizeFundingHistory(response) {
     .filter(Boolean)
     .sort((a, b) => a.time - b.time);
 }
+function normalizeOpenInterestHistory(response) {
+  if (
+    !response?.ok ||
+    !Array.isArray(response.data)
+  ) {
+    return [];
+  }
+
+  return response.data
+    .map(item => {
+      const time = Number(item?.time);
+      const open = Number(item?.open);
+      const high = Number(item?.high);
+      const low = Number(item?.low);
+      const close = Number(item?.close);
+
+      const valid =
+        Number.isFinite(time) &&
+        Number.isFinite(open) &&
+        Number.isFinite(high) &&
+        Number.isFinite(low) &&
+        Number.isFinite(close);
+
+      if (!valid) {
+        return null;
+      }
+
+      const delta =
+        close - open;
+
+      const changePercent =
+        open !== 0
+          ? delta / open * 100
+          : 0;
+
+      return {
+        time,
+
+        open: Number(
+          open.toFixed(2)
+        ),
+
+        high: Number(
+          high.toFixed(2)
+        ),
+
+        low: Number(
+          low.toFixed(2)
+        ),
+
+        close: Number(
+          close.toFixed(2)
+        ),
+
+        openInterest: Number(
+          close.toFixed(2)
+        ),
+
+        delta: Number(
+          delta.toFixed(2)
+        ),
+
+        changePercent: Number(
+          changePercent.toFixed(4)
+        ),
+
+        range: Number(
+          (high - low).toFixed(2)
+        )
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.time - b.time);
+}
 
 function calculateTrendAnalysis(
   history,
