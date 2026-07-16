@@ -3454,7 +3454,7 @@ function calculateDerivativesHistory(coinGlass) {
 
       exchanges: liquidations,
 
-            history: [],
+      history: [],
 
       historyAvailable: false,
 
