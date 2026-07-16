@@ -5118,16 +5118,27 @@ if (mode === "scanner") {
     (req.query.symbol || "SOLUSDT")
        .toUpperCase();
 
-  const map = {
-    SOLUSDT: "solana",
-    BTCUSDT: "bitcoin",
-    ETHUSDT: "ethereum",
-    BNBUSDT: "binancecoin",
-    RNDRUSDT: "render-token",
-    TAOUSDT: "bittensor"
-  };
+const map = {
+  SOLUSDT: "solana",
+  BTCUSDT: "bitcoin",
+  ETHUSDT: "ethereum",
+  BNBUSDT: "binancecoin",
+  RNDRUSDT: "render-token",
+  TAOUSDT: "bittensor",
+  XRPUSDT: "ripple",
+  AAVEUSDT: "aave"
+};
   
-  const id = map[symbol] || "solana";
+const id = map[symbol];
+
+if (!id) {
+  return res.status(400).json({
+    ok: false,
+    symbol,
+    error:
+      `CoinGecko mapping is not configured for ${symbol}`
+  });
+}
 
  try {
 
