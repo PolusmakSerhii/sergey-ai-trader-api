@@ -3668,9 +3668,9 @@ async function fetchCoinGlass(path, params = {}) {
   }
 }
 
-async function getCoinGlassMarketData(symbol) {
+  async function getCoinGlassMarketData(symbol) {
   const asset = symbol.replace(/USDT$/i, "");
-const [
+  const [
   fundingResponse,
   fundingHistoryResponse,
   openInterestResponse,
