@@ -477,6 +477,9 @@ function calculateMSS(price, swings, bos, choch) {
       : 0;
 const coinGlass = data.coinGlass || {};
 
+const derivativesProbabilitySignal =
+  data.derivativesProbabilitySignal || null;
+   
 const fundingRate =
   typeof coinGlass.fundingRate?.rate === "number"
     ? coinGlass.fundingRate.rate
@@ -1182,7 +1185,9 @@ derivatives: {
   longLiquidations,
   shortLiquidations
 },  
-volumeConfirmation: {
+  derivativesProbabilitySignal, 
+    
+  volumeConfirmation: {
   current: volumeStats.current ?? null,
   average20: volumeStats.sma20 ?? null,
   ratio: volumeRatio,
@@ -4945,6 +4950,14 @@ if (ema20 && ema50 && ema100 && ema200) {
     trend = "Strong Bearish";
   }
 }  
+const derivativesHistory =
+  calculateDerivativesHistory(
+    coinGlass
+  );
+
+const derivativesProbabilitySignal =
+  derivativesHistory?.probabilitySignal || null;
+   
 const probabilityBase =
   calculateProbabilityScore({
     price: coin.current_price,
@@ -4964,8 +4977,11 @@ const probabilityBase =
     fvg,
     orderBlocks,
     equalHighLow,
-    coinGlass
-  });
+    coinGlass,
+
+    derivativesProbabilitySignal
+    });  
+   
 const probabilityConfidence =
   calculateSignalConfidence(
     {
@@ -5055,11 +5071,6 @@ const tradeReadiness =
   macd,
   premiumDiscount
 });
-
-   const derivativesHistory =
-  calculateDerivativesHistory(
-    coinGlass
-  );
    
 const marketSummary =
   calculateMarketSummary({
