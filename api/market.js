@@ -4990,6 +4990,17 @@ available:
 };
 }
 
+const COINGECKO_SYMBOL_MAP = {
+  SOLUSDT: "solana",
+  BTCUSDT: "bitcoin",
+  ETHUSDT: "ethereum",
+  BNBUSDT: "binancecoin",
+  RNDRUSDT: "render-token",
+  TAOUSDT: "bittensor",
+  XRPUSDT: "ripple",
+  AAVEUSDT: "aave"
+};
+
 export default async function handler(req, res) {
     const { mode } = req.query;
 
@@ -5010,14 +5021,51 @@ if (mode === "scanner") {
   const baseUrl =
     `${protocol}://${host}`;
 
-  const scannerSymbols = [
-    "BTCUSDT",
-    "ETHUSDT",
-    "SOLUSDT",
-    "XRPUSDT",
-    "AAVEUSDT"
-  ];
+  const requestedLimit =
+  Number.parseInt(
+    String(req.query.limit || "5"),
+    10
+  );
 
+const scannerLimit =
+  Number.isFinite(requestedLimit)
+    ? Math.max(
+        1,
+        Math.min(8, requestedLimit)
+      )
+    : 5;
+
+const symbolsResponse =
+  await fetchOKXSwapSymbols();
+
+if (
+  symbolsResponse.ok !== true ||
+  !Array.isArray(symbolsResponse.symbols)
+) {
+  return res.status(502).json({
+    ok: false,
+    version: "0.2",
+    error:
+      symbolsResponse.error ||
+      "Could not load OKX symbols"
+  });
+}
+
+const supportedSymbols =
+  new Set(
+    Object.keys(
+      COINGECKO_SYMBOL_MAP
+    )
+  );
+
+const scannerSymbols =
+  symbolsResponse.symbols
+    .map(item => item.marketSymbol)
+    .filter(symbol =>
+      supportedSymbols.has(symbol)
+    )
+    .slice(0, scannerLimit);
+  
   const startedAt = Date.now();
 
   const settledResults =
@@ -5091,14 +5139,19 @@ if (mode === "scanner") {
   return res.status(200).json({
     ok: failed.length === 0,
 
-    version: "0.1",
+    version: "0.2",
 
     source:
       "Sergey AI Trader Probability AI",
 
     scanned:
       scannerSymbols.length,
+    requestedLimit:
+      scannerLimit,
 
+    availableSupportedSymbols:
+      supportedSymbols.size,
+    
     successful:
       successful.length,
 
@@ -5117,20 +5170,10 @@ if (mode === "scanner") {
   const symbol = 
     (req.query.symbol || "SOLUSDT")
        .toUpperCase();
-
-const map = {
-  SOLUSDT: "solana",
-  BTCUSDT: "bitcoin",
-  ETHUSDT: "ethereum",
-  BNBUSDT: "binancecoin",
-  RNDRUSDT: "render-token",
-  TAOUSDT: "bittensor",
-  XRPUSDT: "ripple",
-  AAVEUSDT: "aave"
-};
   
-const id = map[symbol];
-
+const id =
+  COINGECKO_SYMBOL_MAP[symbol];
+  
 if (!id) {
   return res.status(400).json({
     ok: false,
