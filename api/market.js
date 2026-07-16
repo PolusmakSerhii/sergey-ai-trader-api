@@ -5466,6 +5466,27 @@ const scannerPage =
   String(req.query.ready || "false")
     .toLowerCase() === "true";
   
+const allowedSorts =
+  new Set([
+    "opportunity",
+    "confidence",
+    "readiness",
+    "smartmoney",
+    "environment",
+    "volume",
+    "score"
+  ]);
+
+const requestedSort =
+  String(
+    req.query.sort || "opportunity"
+  ).toLowerCase();
+
+const scannerSort =
+  allowedSorts.has(requestedSort)
+    ? requestedSort
+    : "opportunity";
+  
    const [
      symbolsResponse,
      tickersResponse
@@ -5662,9 +5683,44 @@ const results =
     results.filter(
       item => item.ok !== true
     );
-  
+  function getScannerSortValue(item) {
+  if (scannerSort === "confidence") {
+    return item.confidence || 0;
+  }
+
+  if (scannerSort === "readiness") {
+    return item.tradeReadiness?.score || 0;
+  }
+
+  if (scannerSort === "smartmoney") {
+    return item.smartMoneyScore || 0;
+  }
+
+  if (scannerSort === "environment") {
+    return item.marketEnvironmentScore || 0;
+  }
+
+  if (scannerSort === "volume") {
+    return item.liquidity?.volumeQuote24h || 0;
+  }
+
+  if (scannerSort === "score") {
+    return item.score || 0;
+  }
+
+  return item.opportunityScore || 0;
+}
+
 const ranked = [...filteredSuccessful]
   .sort((a, b) => {
+    const primaryDifference =
+      getScannerSortValue(b) -
+      getScannerSortValue(a);
+
+    if (primaryDifference !== 0) {
+      return primaryDifference;
+    }
+
     const opportunityDifference =
       (b.opportunityScore || 0) -
       (a.opportunityScore || 0);
@@ -5673,24 +5729,15 @@ const ranked = [...filteredSuccessful]
       return opportunityDifference;
     }
 
-    const readinessDifference =
-      (b.tradeReadiness?.score || 0) -
-      (a.tradeReadiness?.score || 0);
-
-    if (readinessDifference !== 0) {
-      return readinessDifference;
-    }
-
     return (
       (b.confidence || 0) -
       (a.confidence || 0)
     );
   })
-  
-    .map((item, index) => ({
-      rank: index + 1,
-      ...item
-    }));
+  .map((item, index) => ({
+    rank: index + 1,
+    ...item
+  }));
   
 const topLongs = filteredSuccessful
   .filter(item =>
@@ -5978,8 +6025,10 @@ const marketSummary = {
 
    totalAvailableSymbols:
      allScannerSymbols.length,
-   sorting:
-     "Opportunity Score descending",
+   sorting: {
+    field: scannerSort,
+    direction: "descending"
+  },
     readyFilter:
      readyOnly,
 
