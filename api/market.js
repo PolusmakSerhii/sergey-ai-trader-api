@@ -189,7 +189,9 @@ function calculateATR(ohlc, period = 14) {
 
   const atr = ranges.reduce((sum, value) => sum + value, 0) / period;
 
-  return Number(atr.toFixed(2));
+  return Number(
+  atr.toPrecision(6)
+);
 }
 
 function calculateVolumeStats(volumes) {
@@ -5599,31 +5601,42 @@ const marketSummary = {
      await fetchOKXKlines(
         symbol,
           "1D"
-         );   
-
+         );  
+   
 const okxDailyCandles =
   okxDailyResponse.ok
     ? okxDailyResponse.data
     : [];
 
+/*
+ * Для индикаторов используем только закрытые свечи.
+ * Незакрытая дневная свеча имеет неполный объём
+ * и искажает Volume Ratio, ATR, RSI и MACD.
+ */
+const okxConfirmedDailyCandles =
+  okxDailyCandles.filter(
+    candle => candle.confirmed === true
+  );
+
 const okxDailyCloses =
-  okxDailyCandles.map(
+  okxConfirmedDailyCandles.map(
     candle => candle.close
   );
-   
+
 const okxDailyVolumes =
-  okxDailyCandles.map(
+  okxConfirmedDailyCandles.map(
     candle => candle.volume
   );
 
 const okxDailyOhlc =
-  okxDailyCandles.map(candle => [
+  okxConfirmedDailyCandles.map(candle => [
     candle.openTime,
     candle.open,
     candle.high,
     candle.low,
     candle.close
   ]);
+   
 let coin = null;
 let marketDataSource = null;
 
@@ -5928,17 +5941,20 @@ const marketSummary =
       derivativesHistory,
         
       okxKlines: {
-  available: okxDailyResponse.ok,
-  source: "OKX",
-  interval: "1D",
-  candles: okxDailyCandles.length,
-
-  latest:
-    okxDailyCandles.length > 0
-      ? okxDailyCandles[
-          okxDailyCandles.length - 1
-        ]
-      : null,
+        available: okxDailyResponse.ok,
+        source: "OKX",
+        interval: "1D",
+        candles: okxDailyCandles.length,
+        
+        confirmedCandles:
+          okxConfirmedDailyCandles.length,
+        
+        latest:
+          okxDailyCandles.length > 0
+            ? okxDailyCandles[
+              okxDailyCandles.length - 1
+           ]
+         : null,
 
   error: okxDailyResponse.ok
     ? null
