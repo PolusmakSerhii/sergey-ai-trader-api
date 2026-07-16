@@ -4184,7 +4184,23 @@ function calculateDerivativesHistory(coinGlass) {
     liquidations.find(
       item => item?.exchange === "All"
     ) || null;
+  
+const liquidationAssessment =
+  calculateLiquidationAssessment(
+    aggregatedLiquidations
+      ? {
+          totalUsd:
+            aggregatedLiquidations.liquidation_usd,
 
+          longUsd:
+            aggregatedLiquidations.longLiquidation_usd,
+
+          shortUsd:
+            aggregatedLiquidations.shortLiquidation_usd
+        }
+      : null
+  );
+  
   return {
     version: "1.0",
 
@@ -4360,8 +4376,9 @@ function calculateDerivativesHistory(coinGlass) {
 
       historyAvailable: false,
 
-      source: "CoinGlass",
+      analysis: liquidationAssessment,
 
+      source: "CoinGlass",
       timeframe: "24H",
 
       lastUpdated
