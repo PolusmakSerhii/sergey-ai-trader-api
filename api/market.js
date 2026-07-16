@@ -6025,7 +6025,7 @@ const marketSummary = {
   const coinGeckoId =
     COINGECKO_SYMBOL_MAP[symbol] || null;
 
- try {
+  try {
     const coinGlass = 
       await getCoinGlassMarketData(symbol);
    
