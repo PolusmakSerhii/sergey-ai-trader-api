@@ -5775,7 +5775,7 @@ const bullishSetups =
     (item.longScore || 0) >
     (item.shortScore || 0)
   );
-  
+
 const bearishSetups =
   filteredSuccessful.filter(item =>
     (item.shortScore || 0) >
@@ -5793,7 +5793,7 @@ const readyTrades =
     item.tradeReadiness?.ready === true ||
     item.tradeAllowed === true
   );
-  
+
 const averageConfidence =
   filteredSuccessful.length > 0
     ? Math.round(
@@ -5804,6 +5804,21 @@ const averageConfidence =
         ) / filteredSuccessful.length
       )
     : 0;
+
+const averageNeutralProbability =
+  filteredSuccessful.length > 0
+    ? Math.round(
+        filteredSuccessful.reduce(
+          (sum, item) =>
+            sum +
+            (
+              item.probabilities?.neutral ??
+              100
+            ),
+          0
+        ) / filteredSuccessful.length
+      )
+    : 100;
   
 const averageNeutralProbability =
   filteredSuccessful.length > 0
