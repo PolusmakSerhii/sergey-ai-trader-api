@@ -3198,6 +3198,7 @@ async function fetchOKXKlines(
     };
   }
 }
+
 function normalizeFundingHistory(response) {
   if (
     !response?.ok ||
@@ -3259,6 +3260,65 @@ function normalizeFundingHistory(response) {
     })
     .filter(Boolean)
     .sort((a, b) => a.time - b.time);
+}
+
+function calculateTrendAnalysis(history, valueField = "funding") {
+  if (!Array.isArray(history) || history.length < 2) {
+    return {
+      available: false
+    };
+  }
+
+  const first = Number(history[0]?.[valueField]);
+  const last = Number(
+    history[history.length - 1]?.[valueField]
+  );
+
+  if (
+    !Number.isFinite(first) ||
+    !Number.isFinite(last)
+  ) {
+    return {
+      available: false
+    };
+  }
+
+  const change = last - first;
+
+  let trend = "Sideways";
+
+  if (change > 0)
+    trend = "Increasing";
+
+  if (change < 0)
+    trend = "Decreasing";
+
+  const strength = Math.min(
+    100,
+    Math.round(Math.abs(change) * 10000)
+  );
+
+  let signal = "Neutral";
+
+  if (trend === "Increasing")
+    signal = "Bullish";
+
+  if (trend === "Decreasing")
+    signal = "Bearish";
+
+  return {
+    available: true,
+
+    trend,
+
+    signal,
+
+    change: Number(
+      change.toFixed(6)
+    ),
+
+    strength
+  };
 }
 
 function calculateDerivativesHistory(coinGlass) {
