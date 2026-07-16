@@ -3262,62 +3262,141 @@ function normalizeFundingHistory(response) {
     .sort((a, b) => a.time - b.time);
 }
 
-function calculateTrendAnalysis(history, valueField = "funding") {
-  if (!Array.isArray(history) || history.length < 2) {
-    return {
-      available: false
-    };
-  }
-
-  const first = Number(history[0]?.[valueField]);
-  const last = Number(
-    history[history.length - 1]?.[valueField]
-  );
-
+function calculateTrendAnalysis(
+  history,
+  valueField = "funding"
+) {
   if (
-    !Number.isFinite(first) ||
-    !Number.isFinite(last)
+    !Array.isArray(history) ||
+    history.length < 2
   ) {
     return {
-      available: false
+      version: "1.1",
+      available: false,
+      trend: "Unknown",
+      direction: "Unknown",
+      momentum: "Unknown",
+      change: null,
+      recentChange: null,
+      strength: 0
     };
   }
+
+  const values = history
+    .map(item => Number(item?.[valueField]))
+    .filter(value => Number.isFinite(value));
+
+  if (values.length < 2) {
+    return {
+      version: "1.1",
+      available: false,
+      trend: "Unknown",
+      direction: "Unknown",
+      momentum: "Unknown",
+      change: null,
+      recentChange: null,
+      strength: 0
+    };
+  }
+
+  const first = values[0];
+  const last = values[values.length - 1];
 
   const change = last - first;
 
-  let trend = "Sideways";
-
-  if (change > 0)
-    trend = "Increasing";
-
-  if (change < 0)
-    trend = "Decreasing";
-
-  const strength = Math.min(
-    100,
-    Math.round(Math.abs(change) * 10000)
+  /*
+   * Последние 25% наблюдений показывают
+   * текущее краткосрочное движение.
+   */
+  const recentWindowSize = Math.max(
+    2,
+    Math.ceil(values.length * 0.25)
   );
 
-  let signal = "Neutral";
+  const recentValues =
+    values.slice(-recentWindowSize);
 
-  if (trend === "Increasing")
-    signal = "Bullish";
+  const recentFirst =
+    recentValues[0];
 
-  if (trend === "Decreasing")
-    signal = "Bearish";
+  const recentLast =
+    recentValues[
+      recentValues.length - 1
+    ];
+
+  const recentChange =
+    recentLast - recentFirst;
+
+  let trend = "Sideways";
+  let direction = "Flat";
+
+  if (change > 0) {
+    trend = "Increasing";
+    direction = "Up";
+  } else if (change < 0) {
+    trend = "Decreasing";
+    direction = "Down";
+  }
+
+  /*
+   * Momentum показывает, совпадает ли
+   * последнее движение с общим трендом.
+   */
+  let momentum = "Neutral";
+
+  if (
+    change > 0 &&
+    recentChange > 0
+  ) {
+    momentum = "Accelerating Up";
+  } else if (
+    change < 0 &&
+    recentChange < 0
+  ) {
+    momentum = "Accelerating Down";
+  } else if (
+    change > 0 &&
+    recentChange < 0
+  ) {
+    momentum = "Uptrend Weakening";
+  } else if (
+    change < 0 &&
+    recentChange > 0
+  ) {
+    momentum = "Downtrend Weakening";
+  }
+
+  /*
+   * Пока масштаб рассчитан для Funding.
+   * Позже сделаем нормализацию под разные метрики.
+   */
+  const strength = Math.min(
+    100,
+    Math.round(
+      Math.abs(change) * 10000
+    )
+  );
 
   return {
+    version: "1.1",
     available: true,
 
     trend,
-
-    signal,
+    direction,
+    momentum,
 
     change: Number(
       change.toFixed(6)
     ),
 
-    strength
+    recentChange: Number(
+      recentChange.toFixed(6)
+    ),
+
+    strength,
+
+    observations: values.length,
+    recentWindowSize
   };
 }
 
