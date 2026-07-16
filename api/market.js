@@ -5462,6 +5462,9 @@ const scannerPage =
   Number.isFinite(requestedPage)
     ? Math.max(1, requestedPage)
     : 1;
+  const readyOnly =
+  String(req.query.ready || "false")
+    .toLowerCase() === "true";
   
    const [
      symbolsResponse,
@@ -5647,12 +5650,20 @@ const results =
       };
     });
   
+   const filteredSuccessful =
+    readyOnly
+      ? successful.filter(item =>
+          item.tradeReadiness?.ready === true ||
+          item.tradeAllowed === true
+       )
+     : successful; 
+  
   const failed =
     results.filter(
       item => item.ok !== true
     );
   
-const ranked = [...successful]
+const ranked = [...filteredSuccessful]
   .sort((a, b) => {
     const opportunityDifference =
       (b.opportunityScore || 0) -
@@ -5968,6 +5979,11 @@ const marketSummary = {
      allScannerSymbols.length,
    sorting:
      "Opportunity Score descending",
+    readyFilter:
+     readyOnly,
+
+    matched:
+     filteredSuccessful.length,    
     
    range: {
      from:
