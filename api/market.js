@@ -3999,6 +3999,128 @@ function calculateLongShortAssessment(
           : "Balanced"
   };
 }
+function calculateLiquidationAssessment(
+  liquidationData
+) {
+  const totalUsd =
+    typeof liquidationData?.totalUsd === "number"
+      ? liquidationData.totalUsd
+      : null;
+
+  const longUsd =
+    typeof liquidationData?.longUsd === "number"
+      ? liquidationData.longUsd
+      : null;
+
+  const shortUsd =
+    typeof liquidationData?.shortUsd === "number"
+      ? liquidationData.shortUsd
+      : null;
+
+  if (
+    totalUsd === null ||
+    longUsd === null ||
+    shortUsd === null ||
+    totalUsd <= 0
+  ) {
+    return {
+      version: "1.0",
+      available: false,
+      state: "Unknown",
+      bias: "Neutral",
+      risk: "Unknown",
+      dominantSide: "Unknown"
+    };
+  }
+
+  const longShare =
+    longUsd / totalUsd * 100;
+
+  const shortShare =
+    shortUsd / totalUsd * 100;
+
+  let state = "Balanced Liquidations";
+  let bias = "Neutral";
+  let risk = "Low";
+  let dominantSide = "Balanced";
+
+  if (longShare >= 75) {
+    state = "Extreme Long Liquidation Event";
+    bias = "Bullish Contrarian";
+    risk = "High";
+    dominantSide = "Long";
+  } else if (longShare >= 60) {
+    state = "Long Liquidations Dominant";
+    bias = "Bullish Contrarian";
+    risk = "Medium";
+    dominantSide = "Long";
+  } else if (shortShare >= 75) {
+    state = "Extreme Short Liquidation Event";
+    bias = "Bearish Contrarian";
+    risk = "High";
+    dominantSide = "Short";
+  } else if (shortShare >= 60) {
+    state = "Short Liquidations Dominant";
+    bias = "Bearish Contrarian";
+    risk = "Medium";
+    dominantSide = "Short";
+  }
+
+  let eventSize = "Small";
+
+  if (totalUsd >= 100000000) {
+    eventSize = "Extreme";
+    risk = "High";
+  } else if (totalUsd >= 50000000) {
+    eventSize = "Very Large";
+    risk = "High";
+  } else if (totalUsd >= 10000000) {
+    eventSize = "Large";
+    risk =
+      risk === "Low"
+        ? "Medium"
+        : risk;
+  } else if (totalUsd >= 5000000) {
+    eventSize = "Moderate";
+  }
+
+  return {
+    version: "1.0",
+    available: true,
+
+    state,
+    bias,
+    risk,
+    eventSize,
+    dominantSide,
+
+    totalUsd: Number(
+      totalUsd.toFixed(2)
+    ),
+
+    longUsd: Number(
+      longUsd.toFixed(2)
+    ),
+
+    shortUsd: Number(
+      shortUsd.toFixed(2)
+    ),
+
+    longShare: Number(
+      longShare.toFixed(2)
+    ),
+
+    shortShare: Number(
+      shortShare.toFixed(2)
+    ),
+
+    imbalance: Number(
+      Math.abs(
+        longShare - shortShare
+      ).toFixed(2)
+    )
+  };
+}
 
 function calculateDerivativesHistory(coinGlass) {
   const source = coinGlass || {};
