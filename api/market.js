@@ -3015,12 +3015,11 @@ if (tradePlan.validTrade) {
   };
 }
 
-async function fetchBinanceFuturesSymbols() {
-  const url =
-    "https://fapi.binance.com/fapi/v1/exchangeInfo";
-
+async function fetchOKXSwapSymbols() {
   try {
-    const response = await fetch(url);
+    const response = await fetch(
+      "https://www.okx.com/api/v5/public/instruments?instType=SWAP"
+    );
 
     const payload = await response
       .json()
@@ -3028,29 +3027,33 @@ async function fetchBinanceFuturesSymbols() {
 
     if (
       !response.ok ||
-      !Array.isArray(payload?.symbols)
+      payload?.code !== "0" ||
+      !Array.isArray(payload?.data)
     ) {
       return {
         ok: false,
+        count: 0,
         symbols: [],
         error:
           payload?.msg ||
-          `Binance Futures request failed: ${response.status}`
+          `OKX instruments request failed: ${response.status}`
       };
     }
 
-    const symbols = payload.symbols
+    const symbols = payload.data
       .filter(item =>
-        item?.status === "TRADING" &&
-        item?.quoteAsset === "USDT" &&
-        item?.contractType === "PERPETUAL"
+        item?.state === "live" &&
+        item?.settleCcy === "USDT" &&
+        item?.instType === "SWAP"
       )
       .map(item => ({
-        symbol: item.symbol,
-        baseAsset: item.baseAsset,
-        quoteAsset: item.quoteAsset,
-        contractType: item.contractType,
-        status: item.status
+        symbol: item.instId,
+        marketSymbol:
+          `${item.baseCcy}${item.quoteCcy}`,
+        baseAsset: item.baseCcy,
+        quoteAsset: item.quoteCcy,
+        settleAsset: item.settleCcy,
+        state: item.state
       }))
       .sort((a, b) =>
         a.symbol.localeCompare(b.symbol)
@@ -3058,6 +3061,7 @@ async function fetchBinanceFuturesSymbols() {
 
     return {
       ok: true,
+      source: "OKX",
       count: symbols.length,
       symbols,
       error: null
@@ -3065,6 +3069,8 @@ async function fetchBinanceFuturesSymbols() {
   } catch (error) {
     return {
       ok: false,
+      source: "OKX",
+      count: 0,
       symbols: [],
       error: error.message
     };
@@ -4829,8 +4835,8 @@ export default async function handler(req, res) {
 
    if (mode === "symbols") {
    const result =
-     await fetchBinanceFuturesSymbols();
-
+     await fetchOKXSwapSymbols();
+     
    return res.status(200).json(result);
  }
   const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
