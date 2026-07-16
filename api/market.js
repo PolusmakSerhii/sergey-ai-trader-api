@@ -3705,6 +3705,178 @@ function calculateFundingAnalysis(
     recentWindowSize
   };
 }
+function calculateOpenInterestAnalysis(
+  history,
+  currentOpenInterest = null,
+  priceChange24h = null
+) {
+  if (
+    !Array.isArray(history) ||
+    history.length < 2
+  ) {
+    return {
+      version: "1.0",
+      available: false,
+      state: "Unknown",
+      bias: "Neutral",
+      risk: "Unknown"
+    };
+  }
+
+  const values = history
+    .map(item => Number(item?.openInterest))
+    .filter(value => Number.isFinite(value));
+
+  if (values.length < 2) {
+    return {
+      version: "1.0",
+      available: false,
+      state: "Unknown",
+      bias: "Neutral",
+      risk: "Unknown"
+    };
+  }
+
+  const first = values[0];
+  const last =
+    typeof currentOpenInterest === "number"
+      ? currentOpenInterest
+      : values[values.length - 1];
+
+  const change =
+    last - first;
+
+  const changePercent =
+    first !== 0
+      ? change / Math.abs(first) * 100
+      : null;
+
+  const recentWindowSize = Math.max(
+    3,
+    Math.ceil(values.length * 0.1)
+  );
+
+  const recentValues =
+    values.slice(-recentWindowSize);
+
+  const recentFirst =
+    recentValues[0];
+
+  const recentLast =
+    recentValues[
+      recentValues.length - 1
+    ];
+
+  const recentChange =
+    recentLast - recentFirst;
+
+  const recentChangePercent =
+    recentFirst !== 0
+      ? recentChange /
+        Math.abs(recentFirst) *
+        100
+      : null;
+
+  let state = "Stable Open Interest";
+  let bias = "Neutral";
+  let risk = "Low";
+
+  if (
+    recentChangePercent !== null &&
+    recentChangePercent >= 5
+  ) {
+    state = "Strong Position Build-Up";
+    risk = "High";
+  } else if (
+    recentChangePercent !== null &&
+    recentChangePercent >= 1
+  ) {
+    state = "Position Build-Up";
+    risk = "Medium";
+  } else if (
+    recentChangePercent !== null &&
+    recentChangePercent <= -5
+  ) {
+    state = "Strong Deleveraging";
+    risk = "High";
+  } else if (
+    recentChangePercent !== null &&
+    recentChangePercent <= -1
+  ) {
+    state = "Position Reduction";
+    risk = "Medium";
+  }
+
+  if (
+    recentChangePercent !== null &&
+    priceChange24h !== null
+  ) {
+    if (
+      recentChangePercent > 0 &&
+      priceChange24h > 0
+    ) {
+      bias = "Bullish Confirmation";
+    } else if (
+      recentChangePercent > 0 &&
+      priceChange24h < 0
+    ) {
+      bias = "Bearish Confirmation";
+    } else if (
+      recentChangePercent < 0 &&
+      priceChange24h > 0
+    ) {
+      bias = "Short Covering";
+    } else if (
+      recentChangePercent < 0 &&
+      priceChange24h < 0
+    ) {
+      bias = "Long Liquidation";
+    }
+  }
+
+  return {
+    version: "1.0",
+    available: true,
+
+    state,
+    bias,
+    risk,
+
+    currentOpenInterest: Number(
+      last.toFixed(2)
+    ),
+
+    change: Number(
+      change.toFixed(2)
+    ),
+
+    changePercent:
+      changePercent !== null
+        ? Number(
+            changePercent.toFixed(4)
+          )
+        : null,
+
+    recentChange: Number(
+      recentChange.toFixed(2)
+    ),
+
+    recentChangePercent:
+      recentChangePercent !== null
+        ? Number(
+            recentChangePercent.toFixed(4)
+          )
+        : null,
+
+    priceChange24h:
+      typeof priceChange24h === "number"
+        ? Number(priceChange24h.toFixed(4))
+        : null,
+
+    observations: values.length,
+    recentWindowSize
+  };
+}
 
 function calculateDerivativesHistory(coinGlass) {
   const source = coinGlass || {};
