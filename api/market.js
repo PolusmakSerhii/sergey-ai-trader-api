@@ -4369,12 +4369,23 @@ const liquidationAssessment =
       : null
   );
   
+const derivativesProbabilitySignal =
+  calculateDerivativesProbabilitySignal({
+    funding: fundingAnalysis,
+    openInterest: openInterestAssessment,
+    longShort: longShortAssessment,
+    liquidations: liquidationAssessment
+  });  
+  
   return {
     version: "1.0",
 
     available:
       source.available === true,
 
+    probabilitySignal:
+      derivativesProbabilitySignal,
+    
     funding: {
       current: fundingRate
         ? {
