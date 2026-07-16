@@ -3100,6 +3100,142 @@ async function fetchOKXSwapSymbols() {
     };
   }
 }
+async function fetchScannerSymbol(
+  baseUrl,
+  symbol
+) {
+  try {
+    const url =
+      `${baseUrl}/api/market?symbol=${encodeURIComponent(symbol)}`;
+
+    const response = await fetch(url);
+
+    const payload = await response
+      .json()
+      .catch(() => null);
+
+    if (
+      !response.ok ||
+      payload?.ok !== true
+    ) {
+      return {
+        symbol,
+        ok: false,
+        error:
+          payload?.error ||
+          `Market analysis failed: ${response.status}`
+      };
+    }
+
+    const technical =
+      payload.technical || {};
+
+    const probability =
+      technical.probability || {};
+
+    const confidence =
+      probability.confidence || {};
+
+    const aiAssessment =
+      probability.aiAssessment || {};
+
+    const recommendation =
+      technical.recommendation || {};
+
+    const marketBias =
+      technical.marketBias || {};
+
+    const tradeReadiness =
+      technical.tradeReadiness || {};
+
+    return {
+      symbol,
+      ok: true,
+
+      price:
+        typeof payload.price === "number"
+          ? payload.price
+          : null,
+
+      change24h:
+        typeof payload.change24h === "number"
+          ? payload.change24h
+          : null,
+
+      direction:
+        aiAssessment.direction ||
+        probability.direction ||
+        "Neutral",
+
+      signal:
+        probability.signal || "Neutral",
+
+      score:
+        typeof probability.score === "number"
+          ? probability.score
+          : 0,
+
+      longScore:
+        typeof probability.longScore === "number"
+          ? probability.longScore
+          : 0,
+
+      shortScore:
+        typeof probability.shortScore === "number"
+          ? probability.shortScore
+          : 0,
+
+      probabilities: {
+        bullish:
+          probability.probabilities?.bullish ?? 0,
+
+        bearish:
+          probability.probabilities?.bearish ?? 0,
+
+        neutral:
+          probability.probabilities?.neutral ?? 100
+      },
+
+      confidence:
+        typeof confidence.score === "number"
+          ? confidence.score
+          : 0,
+
+      grade:
+        recommendation.grade ||
+        aiAssessment.grade ||
+        "D",
+
+      marketBias:
+        marketBias.bias || "Neutral",
+
+      tradeAllowed:
+        aiAssessment.tradeAllowed === true,
+
+      tradeReadiness: {
+        score:
+          typeof tradeReadiness.score === "number"
+            ? tradeReadiness.score
+            : 0,
+
+        ready:
+          tradeReadiness.ready === true,
+
+        status:
+          tradeReadiness.status || "Unknown"
+      },
+
+      action:
+        recommendation.action || "Wait"
+    };
+  } catch (error) {
+    return {
+      symbol,
+      ok: false,
+      error: error.message
+    };
+  }
+}
 
 async function fetchOKXKlines(
   symbol,
@@ -4863,7 +4999,124 @@ export default async function handler(req, res) {
      
    return res.status(200).json(result);
  }
-  const symbol = (req.query.symbol || "SOLUSDT").toUpperCase();
+if (mode === "scanner") {
+  const protocol =
+    req.headers["x-forwarded-proto"] ||
+    "https";
+
+  const host =
+    req.headers.host;
+
+  const baseUrl =
+    `${protocol}://${host}`;
+
+  const scannerSymbols = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "AAVEUSDT"
+  ];
+
+  const startedAt = Date.now();
+
+  const settledResults =
+    await Promise.allSettled(
+      scannerSymbols.map(symbol =>
+        fetchScannerSymbol(
+          baseUrl,
+          symbol
+        )
+      )
+    );
+
+  const results =
+    settledResults.map(
+      (result, index) => {
+        if (result.status === "fulfilled") {
+          return result.value;
+        }
+
+        return {
+          symbol:
+            scannerSymbols[index],
+
+          ok: false,
+
+          error:
+            result.reason?.message ||
+            "Unknown scanner error"
+        };
+      }
+    );
+
+  const successful =
+    results.filter(
+      item => item.ok === true
+    );
+
+  const failed =
+    results.filter(
+      item => item.ok !== true
+    );
+
+  const ranked = [...successful]
+    .sort((a, b) => {
+      const scoreA =
+        Math.max(
+          a.longScore || 0,
+          a.shortScore || 0
+        );
+
+      const scoreB =
+        Math.max(
+          b.longScore || 0,
+          b.shortScore || 0
+        );
+
+      if (scoreB !== scoreA) {
+        return scoreB - scoreA;
+      }
+
+      return (
+        (b.confidence || 0) -
+        (a.confidence || 0)
+      );
+    })
+    .map((item, index) => ({
+      rank: index + 1,
+      ...item
+    }));
+
+  return res.status(200).json({
+    ok: failed.length === 0,
+
+    version: "0.1",
+
+    source:
+      "Sergey AI Trader Probability AI",
+
+    scanned:
+      scannerSymbols.length,
+
+    successful:
+      successful.length,
+
+    failed:
+      failed.length,
+
+    durationMs:
+      Date.now() - startedAt,
+
+    results: ranked,
+
+    errors: failed
+  });
+}
+  
+  const symbol = 
+    (req.query.symbol || "SOLUSDT")
+       .toUpperCase();
 
   const map = {
     SOLUSDT: "solana",
