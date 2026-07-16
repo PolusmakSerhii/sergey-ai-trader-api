@@ -822,172 +822,119 @@ const shortLiquidations =
       "Bearish candle imbalance"
     );
   }
-// 13. FUNDING RATE — максимум 6 баллов
-if (fundingRate !== null) {
-  if (fundingRate <= -0.01) {
-    longScore += 6;
-    longReasons.push(
-      `Strong negative funding: ${fundingRate}`
-    );
-  } else if (fundingRate < -0.003) {
-    longScore += 3;
-    longReasons.push(
-      `Negative funding: ${fundingRate}`
-    );
-  }
-
-  if (fundingRate >= 0.01) {
-    shortScore += 6;
-    shortReasons.push(
-      `Strong positive funding: ${fundingRate}`
-    );
-  } else if (fundingRate > 0.003) {
-    shortScore += 3;
-    shortReasons.push(
-      `Positive funding: ${fundingRate}`
-    );
-  }
-}
-
-// 14. OPEN INTEREST + PRICE — максимум 8 баллов
-const effectiveOiChange =
-  openInterestChange4h ??
-  openInterestChange1h ??
-  openInterestChange24h;
-
+   
+// 13. DERIVATIVES PROBABILITY SIGNAL — максимум 15 баллов
 if (
-  effectiveOiChange !== null &&
-  priceChange24h !== null
+  derivativesProbabilitySignal?.available === true
 ) {
+  const derivativesDirection =
+    derivativesProbabilitySignal.direction ||
+    "Neutral";
+
+  const derivativesConfidence =
+    typeof derivativesProbabilitySignal.confidence === "number"
+      ? Math.max(
+          0,
+          Math.min(
+            100,
+            derivativesProbabilitySignal.confidence
+          )
+        )
+      : 0;
+
+  const derivativesNeutralScore =
+    typeof derivativesProbabilitySignal.neutralScore === "number"
+      ? derivativesProbabilitySignal.neutralScore
+      : 100;
+
+  /*
+   * Новый Derivatives Engine имеет максимум 15 баллов.
+   * Размер вклада зависит от уверенности сигнала.
+   */
+  const derivativesContribution =
+    Math.min(
+      15,
+      Math.round(
+        derivativesConfidence * 0.15
+      )
+    );
+
   if (
-    effectiveOiChange >= 1 &&
-    priceChange24h > 0
+    derivativesDirection === "Bullish" &&
+    derivativesContribution > 0
   ) {
-    longScore += 8;
+    longScore += derivativesContribution;
+
     longReasons.push(
-      `Price and OI rising: OI ${effectiveOiChange}%`
+      `Bullish derivatives signal: +${derivativesContribution}`
     );
-  } else if (
-    effectiveOiChange >= 1 &&
-    priceChange24h < 0
-  ) {
-    shortScore += 8;
-    shortReasons.push(
-      `OI rising while price falls: OI ${effectiveOiChange}%`
-    );
-  } else if (
-    effectiveOiChange <= -1 &&
-    priceChange24h > 0
-  ) {
-    shortScore += 3;
-    shortReasons.push(
-      "Price rising while OI falls — possible short covering"
-    );
-  } else if (
-    effectiveOiChange <= -1 &&
-    priceChange24h < 0
-  ) {
-    longScore += 3;
-    longReasons.push(
-      "Price and OI falling — possible long liquidation exhaustion"
-    );
-  }
-}
 
-// 15. LONG / SHORT CROWDING — максимум 8 баллов
-if (
-  longAccount !== null &&
-  shortAccount !== null
-) {
-  if (longAccount >= 75) {
-    shortScore += 8;
-    shortReasons.push(
-      `Crowded longs: ${longAccount}%`
-    );
-  } else if (longAccount >= 68) {
-    shortScore += 5;
-    shortReasons.push(
-      `Elevated long positioning: ${longAccount}%`
-    );
-  }
+    const bullishDerivativeFactors =
+      Array.isArray(
+        derivativesProbabilitySignal.bullishFactors
+      )
+        ? derivativesProbabilitySignal.bullishFactors
+        : [];
 
-  if (shortAccount >= 75) {
-    longScore += 8;
-    longReasons.push(
-      `Crowded shorts: ${shortAccount}%`
-    );
-  } else if (shortAccount >= 68) {
-    longScore += 5;
-    longReasons.push(
-      `Elevated short positioning: ${shortAccount}%`
-    );
-  }
-}
-
-if (longShortRatio !== null) {
-  if (longShortRatio >= 3) {
-    shortScore += 3;
-    shortReasons.push(
-      `Extreme long/short ratio: ${longShortRatio}`
-    );
-  }
-
-  if (longShortRatio <= 0.4) {
-    longScore += 3;
-    longReasons.push(
-      `Extreme short/long ratio: ${longShortRatio}`
-    );
-  }
-}
-
-// 16. LIQUIDATIONS — максимум 8 баллов
-if (
-  longLiquidations !== null &&
-  shortLiquidations !== null
-) {
-  const liquidationTotal =
-    longLiquidations + shortLiquidations;
-
-  if (liquidationTotal > 0) {
-    const longShare =
-      longLiquidations / liquidationTotal;
-
-    const shortShare =
-      shortLiquidations / liquidationTotal;
-
-    if (longShare >= 0.7) {
-      longScore += 8;
+    for (
+      const factor of bullishDerivativeFactors
+    ) {
       longReasons.push(
-        `Heavy long liquidations: ${Math.round(
-          longShare * 100
-        )}%`
-      );
-    } else if (longShare >= 0.6) {
-      longScore += 4;
-      longReasons.push(
-        `Long liquidations dominate: ${Math.round(
-          longShare * 100
-        )}%`
+        `Derivatives: ${factor}`
       );
     }
+  } else if (
+    derivativesDirection === "Bearish" &&
+    derivativesContribution > 0
+  ) {
+    shortScore += derivativesContribution;
 
-    if (shortShare >= 0.7) {
-      shortScore += 8;
+    shortReasons.push(
+      `Bearish derivatives signal: +${derivativesContribution}`
+    );
+
+    const bearishDerivativeFactors =
+      Array.isArray(
+        derivativesProbabilitySignal.bearishFactors
+      )
+        ? derivativesProbabilitySignal.bearishFactors
+        : [];
+
+    for (
+      const factor of bearishDerivativeFactors
+    ) {
       shortReasons.push(
-        `Heavy short liquidations: ${Math.round(
-          shortShare * 100
-        )}%`
-      );
-    } else if (shortShare >= 0.6) {
-      shortScore += 4;
-      shortReasons.push(
-        `Short liquidations dominate: ${Math.round(
-          shortShare * 100
-        )}%`
+        `Derivatives: ${factor}`
       );
     }
+  } else {
+    warnings.push(
+      "Derivatives signal is neutral or has insufficient confidence"
+    );
   }
-}  
+
+  if (derivativesNeutralScore >= 50) {
+    warnings.push(
+      `Derivatives uncertainty is elevated: ${derivativesNeutralScore}/100 neutral`
+    );
+  }
+
+  const derivativesWarnings =
+    Array.isArray(
+      derivativesProbabilitySignal.warnings
+    )
+      ? derivativesProbabilitySignal.warnings
+      : [];
+
+  warnings.push(
+    ...derivativesWarnings
+  );
+} else {
+  warnings.push(
+    "Derivatives probability signal is unavailable"
+  );
+}
+   
 // 17. VOLUME CONFIRMATION — максимум 8 баллов
 if (
   volumeSpike &&
