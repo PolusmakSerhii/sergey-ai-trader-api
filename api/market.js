@@ -3613,15 +3613,18 @@ function calculateDerivativesHistory(coinGlass) {
           }
         : null,
 
-      history: [],
+     history: openInterestHistory,
 
-      historyAvailable: false,
+     historyAvailable:
+       openInterestHistory.length > 0,
 
-      source: "CoinGlass",
+     analysis: openInterestTrend,
 
-      timeframe: null,
+     source: "CoinGlass",
 
-      lastUpdated
+     timeframe: "4H",
+
+     lastUpdated
     },
 
     longShort: {
