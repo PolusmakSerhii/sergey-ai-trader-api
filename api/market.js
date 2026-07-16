@@ -3670,13 +3670,15 @@ async function fetchCoinGlass(path, params = {}) {
 
   async function getCoinGlassMarketData(symbol) {
   const asset = symbol.replace(/USDT$/i, "");
+    
   const [
   fundingResponse,
   fundingHistoryResponse,
+  openInterestHistoryResponse,
   openInterestResponse,
   longShortResponse,
   liquidationResponse,
-] = await Promise.all([
+] = await Promise.all([  
   
   fetchCoinGlass(
     "/api/futures/funding-rate/exchange-list"
@@ -3689,6 +3691,16 @@ fetchCoinGlass(
     interval: "4h"
   }
 ),  
+    
+fetchCoinGlass(
+  "/api/futures/open-interest/aggregated-history",
+  {
+    symbol: asset,
+    interval: "4h",
+    limit: 1000
+  }
+),
+    
   fetchCoinGlass(
     "/api/futures/open-interest/exchange-list",
     {
@@ -3830,8 +3842,9 @@ available:
  liquidations,
   
  fundingHistoryResponse,  
-  
- errors: {
+ openInterestHistoryResponse,  
+ 
+  errors: {
    fundingRate: fundingResponse.ok
      ? null
      : fundingResponse.error,
