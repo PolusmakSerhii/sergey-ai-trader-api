@@ -5135,11 +5135,89 @@ const scannerSymbols =
       rank: index + 1,
       ...item
     }));
+const topLongs = successful
+  .filter(item =>
+    (item.longScore || 0) >
+    (item.shortScore || 0)
+  )
+  .sort((a, b) => {
+    const scoreDifference =
+      (b.longScore || 0) -
+      (a.longScore || 0);
 
+    if (scoreDifference !== 0) {
+      return scoreDifference;
+    }
+
+    return (
+      (b.confidence || 0) -
+      (a.confidence || 0)
+    );
+  })
+  .slice(0, 10)
+  .map((item, index) => ({
+    rank: index + 1,
+    ...item
+  }));
+
+const topShorts = successful
+  .filter(item =>
+    (item.shortScore || 0) >
+    (item.longScore || 0)
+  )
+  .sort((a, b) => {
+    const scoreDifference =
+      (b.shortScore || 0) -
+      (a.shortScore || 0);
+
+    if (scoreDifference !== 0) {
+      return scoreDifference;
+    }
+
+    return (
+      (b.confidence || 0) -
+      (a.confidence || 0)
+    );
+  })
+  .slice(0, 10)
+  .map((item, index) => ({
+    rank: index + 1,
+    ...item
+  }));
+
+const readyToTrade = successful
+  .filter(item =>
+    item.tradeReadiness?.ready === true ||
+    item.tradeAllowed === true
+  )
+  .sort((a, b) =>
+    (b.tradeReadiness?.score || 0) -
+    (a.tradeReadiness?.score || 0)
+  )
+  .slice(0, 10)
+  .map((item, index) => ({
+    rank: index + 1,
+    ...item
+  }));
+
+const highConfidence = successful
+  .filter(item =>
+    (item.confidence || 0) >= 60
+  )
+  .sort((a, b) =>
+    (b.confidence || 0) -
+    (a.confidence || 0)
+  )
+  .slice(0, 10)
+  .map((item, index) => ({
+    rank: index + 1,
+    ...item
+  }));
+  
   return res.status(200).json({
     ok: failed.length === 0,
 
-    version: "0.2",
+    version: "0.3",
 
     source:
       "Sergey AI Trader Probability AI",
@@ -5161,11 +5239,18 @@ const scannerSymbols =
     durationMs:
       Date.now() - startedAt,
 
-    results: ranked,
+   results: ranked,
 
-    errors: failed
+    categories: {
+    topLongs,
+    topShorts,
+    readyToTrade,
+    highConfidence
+  },
+
+   errors: failed
   });
-}
+ }
   
   const symbol = 
     (req.query.symbol || "SOLUSDT")
