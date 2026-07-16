@@ -4122,6 +4122,174 @@ function calculateLiquidationAssessment(
   };
 }
 
+function calculateDerivativesProbabilitySignal(
+  assessments = {}
+) {
+  const funding =
+    assessments.funding || {};
+
+  const openInterest =
+    assessments.openInterest || {};
+
+  const longShort =
+    assessments.longShort || {};
+
+  const liquidations =
+    assessments.liquidations || {};
+
+  let bullishScore = 0;
+  let bearishScore = 0;
+  let neutralScore = 0;
+
+  const bullishFactors = [];
+  const bearishFactors = [];
+  const warnings = [];
+
+  /*
+   * Максимальный вклад:
+   * Funding       — 30
+   * Open Interest — 35
+   * Long/Short    — 20
+   * Liquidations  — 15
+   */
+
+  function applyBias(
+    assessment,
+    weight,
+    label
+  ) {
+    if (assessment?.available !== true) {
+      neutralScore += weight;
+
+      warnings.push(
+        `${label} assessment is unavailable`
+      );
+
+      return;
+    }
+
+    const bias =
+      String(
+        assessment.bias || "Neutral"
+      );
+
+    if (bias.includes("Bullish")) {
+      bullishScore += weight;
+
+      bullishFactors.push(
+        `${label}: ${bias}`
+      );
+    } else if (bias.includes("Bearish")) {
+      bearishScore += weight;
+
+      bearishFactors.push(
+        `${label}: ${bias}`
+      );
+    } else {
+      neutralScore += weight;
+    }
+  }
+
+  applyBias(
+    funding,
+    30,
+    "Funding"
+  );
+
+  applyBias(
+    openInterest,
+    35,
+    "Open Interest"
+  );
+
+  applyBias(
+    longShort,
+    20,
+    "Long/Short"
+  );
+
+  applyBias(
+    liquidations,
+    15,
+    "Liquidations"
+  );
+
+  const difference =
+    Math.abs(
+      bullishScore - bearishScore
+    );
+
+  let direction = "Neutral";
+
+  if (bullishScore > bearishScore) {
+    direction = "Bullish";
+  } else if (bearishScore > bullishScore) {
+    direction = "Bearish";
+  }
+
+  let confidence = difference;
+
+  if (neutralScore >= 50) {
+    confidence = Math.min(
+      confidence,
+      40
+    );
+  }
+
+  return {
+    version: "1.0",
+
+    available:
+      funding?.available === true ||
+      openInterest?.available === true ||
+      longShort?.available === true ||
+      liquidations?.available === true,
+
+    direction,
+
+    bullishScore,
+    bearishScore,
+    neutralScore,
+    difference,
+    confidence,
+
+    components: {
+      funding: {
+        weight: 30,
+        bias:
+          funding?.bias || "Neutral"
+      },
+
+      openInterest: {
+        weight: 35,
+        bias:
+          openInterest?.bias || "Neutral"
+      },
+
+      longShort: {
+        weight: 20,
+        bias:
+          longShort?.bias || "Neutral"
+      },
+
+      liquidations: {
+        weight: 15,
+        bias:
+          liquidations?.bias || "Neutral"
+      }
+    },
+
+    bullishFactors:
+      [...new Set(bullishFactors)],
+
+    bearishFactors:
+      [...new Set(bearishFactors)],
+
+    warnings:
+      [...new Set(warnings)]
+  };
+}
+
 function calculateDerivativesHistory(coinGlass) {
   const source = coinGlass || {};
   
