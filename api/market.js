@@ -1255,6 +1255,7 @@ function calculateSignalConfidence(data, probability) {
     separationScore * 0.25 +
     confluenceScore * 0.2 +
     volumeScore * 0.15
+    
   );
 
   /*
