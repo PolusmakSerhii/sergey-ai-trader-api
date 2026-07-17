@@ -5487,6 +5487,48 @@ const scannerSort =
     ? requestedSort
     : "opportunity";
   
+const requestedMinOpportunity =
+  Number.parseInt(
+    String(
+      req.query.minOpportunity || "0"
+    ),
+    10
+  );
+
+const minOpportunity =
+  Number.isFinite(
+    requestedMinOpportunity
+  )
+    ? Math.max(
+        0,
+        Math.min(
+          100,
+          requestedMinOpportunity
+        )
+      )
+    : 0;
+
+const gradeOrder = {
+  D: 0,
+  C: 1,
+  B: 2,
+  A: 3,
+  "A+": 4
+};
+
+const requestedMinGrade =
+  String(
+    req.query.minGrade || "D"
+  ).toUpperCase();
+
+const minGrade =
+  Object.prototype.hasOwnProperty.call(
+    gradeOrder,
+    requestedMinGrade
+  )
+    ? requestedMinGrade
+    : "D";  
+  
    const [
      symbolsResponse,
      tickersResponse
@@ -5671,13 +5713,32 @@ const results =
       };
     });
   
-   const filteredSuccessful =
-    readyOnly
-      ? successful.filter(item =>
-          item.tradeReadiness?.ready === true ||
-          item.tradeAllowed === true
-       )
-     : successful; 
+  const filteredSuccessful =
+  successful.filter(item => {
+    const readyMatches =
+      !readyOnly ||
+      (
+        item.tradeReadiness?.ready === true ||
+        item.tradeAllowed === true
+      );
+
+    const opportunityMatches =
+      (item.opportunityScore || 0) >=
+      minOpportunity;
+
+    const itemGrade =
+      item.opportunityGrade || "D";
+
+    const gradeMatches =
+      (gradeOrder[itemGrade] || 0) >=
+      gradeOrder[minGrade];
+
+    return (
+      readyMatches &&
+      opportunityMatches &&
+      gradeMatches
+    );
+  });
   
   const failed =
     results.filter(
@@ -6107,9 +6168,18 @@ const marketSummary = {
     field: scannerSort,
     direction: "descending"
   },
+    
     readyFilter:
      readyOnly,
+    
+filters: {
+  ready:
+    readyOnly,
 
+  minOpportunity,
+
+  minGrade
+},    
     matched:
      filteredSuccessful.length,    
     
