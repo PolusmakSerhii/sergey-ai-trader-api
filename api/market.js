@@ -5763,6 +5763,7 @@ const results =
     results.filter(
       item => item.ok !== true
     );
+  
   function getScannerSortValue(item) {
   if (scannerSort === "confidence") {
     return item.confidence || 0;
