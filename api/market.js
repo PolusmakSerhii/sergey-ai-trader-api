@@ -2117,6 +2117,28 @@ function calculateMarketSummary(data) {
     }
   };
 }
+function formatMarketPrice(value) {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value)
+  ) {
+    return null;
+  }
+
+  if (Math.abs(value) >= 1000) {
+    return Number(value.toFixed(2));
+  }
+
+  if (Math.abs(value) >= 1) {
+    return Number(value.toFixed(4));
+  }
+
+  if (Math.abs(value) >= 0.01) {
+    return Number(value.toFixed(6));
+  }
+
+  return Number(value.toPrecision(8));
+}
 
 function calculateTradePlan(price, data) {
   if (
@@ -2238,7 +2260,7 @@ if (
 
       reasons: [],
 
-      entry: Number(price.toFixed(2)),
+      entry: formatMarketPrice(price),
       entryZone: null,
       stopLoss: null,
 
@@ -2365,24 +2387,24 @@ if (
     confidence: setupScore,
     reasons,
 
-    entry: Number(entry.toFixed(2)),
+   entry: formatMarketPrice(entry),
+    
+   entryZone: {
+  from: formatMarketPrice(entryZoneFrom),
+  to: formatMarketPrice(entryZoneTo)
+},
 
-    entryZone: {
-      from: Number(entryZoneFrom.toFixed(2)),
-      to: Number(entryZoneTo.toFixed(2))
-    },
+stopLoss: formatMarketPrice(stopLoss),
 
-    stopLoss: Number(stopLoss.toFixed(2)),
-
-    takeProfit1: Number(takeProfit1.toFixed(2)),
-    takeProfit2: Number(takeProfit2.toFixed(2)),
-    takeProfit3: Number(takeProfit3.toFixed(2)),
-
-    structuralTarget:
-      structuralTarget !== null
-        ? Number(structuralTarget.toFixed(2))
-        : null,
-
+takeProfit1: formatMarketPrice(takeProfit1),
+takeProfit2: formatMarketPrice(takeProfit2),
+takeProfit3: formatMarketPrice(takeProfit3),
+    
+  structuralTarget:
+  structuralTarget !== null
+    ? formatMarketPrice(structuralTarget)
+    : null,
+    
     riskReward: riskReward2,
 
     riskRewardByTarget: {
@@ -2394,7 +2416,7 @@ if (
 
     recommendedTakeProfit: {
       target: "takeProfit2",
-      price: Number(takeProfit2.toFixed(2)),
+      price: formatMarketPrice(takeProfit2),
       riskReward: riskReward2
     }
   };
