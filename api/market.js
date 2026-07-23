@@ -6535,7 +6535,7 @@ const probability = {
     mss
   });
 
-  const tradePlan = calculateTradePlan(coin.current_price, {
+  const tradePlan = calculateTradePlan(coin.current_price, {    
     atr14,
     levels,
     probability,
@@ -6551,7 +6551,12 @@ const probability = {
     orderBlocks,
     imbalance
   });
-   
+
+   console.log(
+    "Trade Plan Generated:",
+    JSON.stringify(tradePlan, null, 2)
+  ); 
+    
 const decisionEngine = calculateDecisionEngine({
   probability,
   tradePlan,
