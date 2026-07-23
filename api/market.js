@@ -267,7 +267,6 @@ function calculateFVG(ohlc) {
   for (let i = 2; i < ohlc.length; i++) {
     const candle1 = ohlc[i - 2];
     const candle3 = ohlc[i];
-
     const candle1High = candle1[2];
     const candle1Low = candle1[3];
     const candle3High = candle3[2];
