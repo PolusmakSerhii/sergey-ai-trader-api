@@ -3667,13 +3667,18 @@ action:
 async function fetchOKXKlines(
   symbol,
   interval = "1D",
-  limit = 1200
+  limit = 1200,
+  instrumentType = "SPOT"
 ) {
-  const instId = symbol.replace(
+  const baseInstId = symbol.replace(
     /^(.*?)(USDT)$/i,
     "$1-USDT"
   );
 
+  const instId =
+    instrumentType === "SWAP"
+      ? `${baseInstId}-SWAP`
+      : baseInstId;
   const pageLimit = 100;
   const candlesByTime = new Map();
 
@@ -5467,6 +5472,134 @@ if (mode === "ticker") {
     result.ok ? 200 : 502
   ).json(result);
 }  
+if (mode === "chart") {
+  const symbol =
+    String(
+      req.query.symbol || "DOGEUSDT"
+    )
+      .trim()
+      .toUpperCase();
+
+  const allowedTimeframes =
+    new Set([
+      "1m",
+      "5m",
+      "15m",
+      "1H",
+      "4H",
+      "1D"
+    ]);
+
+  const requestedTimeframe =
+    String(
+      req.query.timeframe || "1H"
+    );
+
+  const timeframe =
+    allowedTimeframes.has(
+      requestedTimeframe
+    )
+      ? requestedTimeframe
+      : "1H";
+
+  const requestedLimit =
+    Number.parseInt(
+      String(req.query.limit || "300"),
+      10
+    );
+
+  const chartLimit =
+    Number.isFinite(requestedLimit)
+      ? Math.max(
+          50,
+          Math.min(1000, requestedLimit)
+        )
+      : 300;
+
+  const chartResponse =
+    await fetchOKXKlines(
+      symbol,
+      timeframe,
+      chartLimit,
+      "SWAP"
+    );
+
+  if (
+    chartResponse.ok !== true ||
+    !Array.isArray(chartResponse.data)
+  ) {
+    return res.status(502).json({
+      ok: false,
+      version: "1.0",
+      mode: "chart",
+      symbol,
+      timeframe,
+      source: "OKX",
+      candles: [],
+      error:
+        chartResponse.error ||
+        "Could not load OKX chart candles"
+    });
+  }
+
+  const candles =
+    chartResponse.data
+      .map(candle => ({
+        time:
+          Math.floor(
+            candle.openTime / 1000
+          ),
+
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+        volume: candle.volume,
+
+        confirmed:
+          candle.confirmed === true
+      }))
+      .filter(candle =>
+        Number.isFinite(candle.time) &&
+        Number.isFinite(candle.open) &&
+        Number.isFinite(candle.high) &&
+        Number.isFinite(candle.low) &&
+        Number.isFinite(candle.close) &&
+        Number.isFinite(candle.volume)
+      )
+      .sort(
+        (a, b) =>
+          a.time - b.time
+      );
+
+  return res.status(200).json({
+    ok: true,
+    version: "1.0",
+    mode: "chart",
+
+    symbol,
+    instrument:
+      symbol.replace(
+        /^(.*?)(USDT)$/i,
+        "$1-USDT-SWAP"
+      ),
+
+    timeframe,
+    source: "OKX",
+
+    count:
+      candles.length,
+
+    requestedLimit:
+      chartLimit,
+
+    candles,
+
+    time:
+      new Date().toISOString()
+  });
+}
+  
 if (mode === "scanner") {
   const protocol =
     req.headers["x-forwarded-proto"] ||
