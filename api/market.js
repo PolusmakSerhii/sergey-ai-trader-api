@@ -5652,14 +5652,36 @@ const scannerSearch =
    const globalBatchSize = 10;
 
   if (globalRank) {
-  const testBatchCount = 2;
 
-  const batchRequests =
+    const totalGlobalBatches = 6;
+const globalConcurrency = 2;
+
+const batchResponses = [];
+
+for (
+  let startPage = 1;
+  startPage <= totalGlobalBatches;
+  startPage += globalConcurrency
+) {
+  const pages =
     Array.from(
-      { length: testBatchCount },
-      (_, index) => {
+      {
+        length: Math.min(
+          globalConcurrency,
+          totalGlobalBatches - startPage + 1
+        )
+      },
+      (_, index) =>
+        startPage + index
+    );
+
+  const waveResponses =
+    await Promise.all(
+      pages.map(async page => {
         const batchUrl =
-          new URL(baseUrl + "/api/market");
+          new URL(
+            baseUrl + "/api/market"
+          );
 
         batchUrl.searchParams.set(
           "mode",
@@ -5673,22 +5695,29 @@ const scannerSearch =
 
         batchUrl.searchParams.set(
           "page",
-          String(index + 1)
+          String(page)
         );
 
-        return fetch(
-          batchUrl.toString()
-        ).then(response =>
-          response.json()
-        );
-      }
+        const response =
+          await fetch(
+            batchUrl.toString()
+          );
+
+        if (!response.ok) {
+          throw new Error(
+            `Global batch ${page} failed: ${response.status}`
+          );
+        }
+
+        return response.json();
+      })
     );
 
-  const batchResponses =
-    await Promise.all(
-      batchRequests
-    );
-
+  batchResponses.push(
+    ...waveResponses
+  );
+}
+    
   const combinedResults =
     batchResponses.flatMap(
       batch =>
