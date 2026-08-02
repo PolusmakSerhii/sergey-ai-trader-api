@@ -5635,6 +5635,12 @@ const scannerPage =
   Number.isFinite(requestedPage)
     ? Math.max(1, requestedPage)
     : 1;
+  
+const scannerSearch =
+  String(req.query.search || "")
+    .trim()
+    .toUpperCase();
+  
   const readyOnly =
   String(req.query.ready || "false")
     .toLowerCase() === "true";
@@ -5762,28 +5768,43 @@ const allScannerSymbols =
   allScannerItems.map(
     item => item.marketSymbol
   );
-  
+
+const filteredScannerItems =
+  scannerSearch
+    ? allScannerItems.filter(item =>
+        String(item.marketSymbol || "")
+          .toUpperCase()
+          .includes(scannerSearch)
+      )
+    : allScannerItems;
+
+const filteredScannerSymbols =
+  filteredScannerItems.map(
+    item => item.marketSymbol
+  );
+
 const startIndex =
   (scannerPage - 1) *
   scannerLimit;
 
-  const scannerSymbols =
-    allScannerSymbols.slice(
-      startIndex,
-      startIndex + scannerLimit
-    );
- const scannerItems =
-    allScannerItems.slice(
-      startIndex,
-      startIndex + scannerLimit
-    );
-  
-const totalPages =
-  Math.ceil(
-    allScannerSymbols.length /
-    scannerLimit
+const scannerSymbols =
+  filteredScannerSymbols.slice(
+    startIndex,
+    startIndex + scannerLimit
   );
 
+const scannerItems =
+  filteredScannerItems.slice(
+    startIndex,
+    startIndex + scannerLimit
+  );
+
+const totalPages =
+  Math.ceil(
+    filteredScannerSymbols.length /
+    scannerLimit
+  );
+  
 if (scannerSymbols.length === 0) {
   return res.status(400).json({
     ok: false,
