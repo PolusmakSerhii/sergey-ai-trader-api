@@ -5804,6 +5804,38 @@ const totalPages =
     filteredScannerSymbols.length /
     scannerLimit
   );
+
+  if (filteredScannerSymbols.length === 0) {
+  return res.status(200).json({
+    ok: true,
+    version: "1.0",
+    source: "Sergey AI Trader Probability AI",
+
+    scanned: 0,
+    page: 1,
+    limit: scannerLimit,
+    totalPages: 0,
+
+    totalAvailableSymbols:
+      allScannerSymbols.length,
+
+    search: scannerSearch,
+    matched: 0,
+
+    marketSummary: {
+      scanned: 0,
+      successful: 0,
+      failed: 0,
+      marketBias: "Neutral",
+      marketCondition: "No matches",
+      readyTrades: 0,
+      highConfidenceSetups: 0,
+      averageConfidence: 0
+    },
+
+    results: []
+  });
+}
   
 if (scannerSymbols.length === 0) {
   return res.status(400).json({
