@@ -5877,6 +5877,7 @@ const totalPages =
   );
   
   if (filteredScannerSymbols.length === 0) {
+    
   return res.status(200).json({
     ok: true,
     version: "1.0",
@@ -6098,13 +6099,12 @@ const results =
 const ranked =
   rankScannerResults(
     filteredSuccessful
-  );
-  
+  )
   .map((item, index) => ({
     rank: index + 1,
     ...item
   }));
-
+  
  const globalBatchResults =
   globalScanner
     ? ranked.map(item => ({
