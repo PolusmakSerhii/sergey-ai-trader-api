@@ -6070,8 +6070,8 @@ const results =
   return item.opportunityScore || 0;
 }
 
-const ranked = [...filteredSuccessful]
-  .sort((a, b) => {
+  function rankScannerResults(items = []) {
+  return [...items].sort((a, b) => {
     const primaryDifference =
       getScannerSortValue(b) -
       getScannerSortValue(a);
@@ -6092,11 +6092,41 @@ const ranked = [...filteredSuccessful]
       (b.confidence || 0) -
       (a.confidence || 0)
     );
-  })
+  });
+}
+
+const ranked =
+  rankScannerResults(
+    filteredSuccessful
+  );
+  
   .map((item, index) => ({
     rank: index + 1,
     ...item
   }));
+
+ const globalBatchResults =
+  globalScanner
+    ? ranked.map(item => ({
+        symbol: item.symbol,
+        opportunityScore:
+          item.opportunityScore ?? 0,
+        confidence:
+          item.confidence ?? 0,
+        direction:
+          item.direction || "Neutral",
+        grade:
+          item.opportunityGrade ||
+          item.grade ||
+          "D",
+        action:
+          item.action || "Wait",
+        riskReward:
+          item.riskReward ?? null,
+        batch:
+          scannerPage
+      }))
+    : [];
   
 const topLongs = filteredSuccessful
   .filter(item =>
@@ -6499,9 +6529,14 @@ filters: {
     global: globalScanner,
 
     candidatePoolSize:
-  globalScanner
-    ? globalCandidateItems.length
-    : allScannerItems.length,
+      globalScanner
+       ? globalCandidateItems.length
+       : allScannerItems.length,
+
+   rankingMode:
+     globalScanner
+       ? "global-candidate"
+       : "standard",
     
 batch:
   scannerPage,
@@ -6511,6 +6546,8 @@ batchSize:
 
 totalBatches:
   totalPages,
+
+    globalBatchResults,
     
     durationMs:
       Date.now() - startedAt,
