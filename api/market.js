@@ -5754,16 +5754,24 @@ for (
     ok: true,
     version: "1.0",
     mode: "global-ranking",
-    status: "test-aggregation",
+   status: "ready",
+
+generatedAt:
+  new Date().toISOString(),
+
+totalAvailableSymbols:
+  batchResponses[0]?.totalAvailableSymbols ?? 0,
+
+candidatePoolSize:
+  batchResponses[0]?.candidatePoolSize ?? combinedResults.length,
+    
     batchesProcessed:
       batchResponses.length,
+    
     resultsCollected:
       combinedResults.length,
     
     globalTop10,
-    
-    results:
-      combinedResults
   });
 }
   
