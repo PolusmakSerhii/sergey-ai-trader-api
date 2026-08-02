@@ -5640,6 +5640,12 @@ const scannerSearch =
   String(req.query.search || "")
     .trim()
     .toUpperCase();
+
+  const globalScanner =
+  String(req.query.global || "false")
+    .toLowerCase() === "true";
+
+   const globalBatchSize = 10;
   
   const readyOnly =
   String(req.query.ready || "false")
@@ -5783,28 +5789,33 @@ const filteredScannerSymbols =
     item => item.marketSymbol
   );
 
+  const effectiveScannerLimit =
+  globalScanner
+    ? globalBatchSize
+    : scannerLimit;
+
 const startIndex =
   (scannerPage - 1) *
-  scannerLimit;
+  effectiveScannerLimit;
 
 const scannerSymbols =
   filteredScannerSymbols.slice(
     startIndex,
-    startIndex + scannerLimit
+    startIndex + effectiveScannerLimit
   );
 
 const scannerItems =
   filteredScannerItems.slice(
     startIndex,
-    startIndex + scannerLimit
+    startIndex + effectiveScannerLimit
   );
 
 const totalPages =
   Math.ceil(
     filteredScannerSymbols.length /
-    scannerLimit
+    effectiveScannerLimit
   );
-
+  
   if (filteredScannerSymbols.length === 0) {
   return res.status(200).json({
     ok: true,
@@ -6385,9 +6396,9 @@ const marketSummary = {
      scannerPage,
 
    limit:
-     scannerLimit,
-
-   totalPages,
+     effectiveScannerLimit,
+    
+    totalPages,
 
    totalAvailableSymbols:
      allScannerSymbols.length,
@@ -6425,6 +6436,17 @@ filters: {
     failed:
       failed.length,
 
+    global: globalScanner,
+
+batch:
+  scannerPage,
+
+batchSize:
+  effectiveScannerLimit,
+
+totalBatches:
+  totalPages,
+    
     durationMs:
       Date.now() - startedAt,
 
