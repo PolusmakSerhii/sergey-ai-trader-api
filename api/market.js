@@ -5652,13 +5652,64 @@ const scannerSearch =
    const globalBatchSize = 10;
 
   if (globalRank) {
+  const testBatchCount = 2;
+
+  const batchRequests =
+    Array.from(
+      { length: testBatchCount },
+      (_, index) => {
+        const batchUrl =
+          new URL(baseUrl + "/api/market");
+
+        batchUrl.searchParams.set(
+          "mode",
+          "scanner"
+        );
+
+        batchUrl.searchParams.set(
+          "global",
+          "true"
+        );
+
+        batchUrl.searchParams.set(
+          "page",
+          String(index + 1)
+        );
+
+        return fetch(
+          batchUrl.toString()
+        ).then(response =>
+          response.json()
+        );
+      }
+    );
+
+  const batchResponses =
+    await Promise.all(
+      batchRequests
+    );
+
+  const combinedResults =
+    batchResponses.flatMap(
+      batch =>
+        Array.isArray(
+          batch.globalBatchResults
+        )
+          ? batch.globalBatchResults
+          : []
+    );
+
   return res.status(200).json({
     ok: true,
     version: "1.0",
     mode: "global-ranking",
-    status: "initialized",
-    message:
-      "Global Ranking Engine is ready for aggregation"
+    status: "test-aggregation",
+    batchesProcessed:
+      batchResponses.length,
+    resultsCollected:
+      combinedResults.length,
+    results:
+      combinedResults
   });
 }
   
