@@ -5645,7 +5645,22 @@ const scannerSearch =
   String(req.query.global || "false")
     .toLowerCase() === "true";
 
+  const globalRank =
+   String(req.query.globalRank || "false")
+    .toLowerCase() === "true";
+  
    const globalBatchSize = 10;
+
+  if (globalRank) {
+  return res.status(200).json({
+    ok: true,
+    version: "1.0",
+    mode: "global-ranking",
+    status: "initialized",
+    message:
+      "Global Ranking Engine is ready for aggregation"
+  });
+}
   
   const readyOnly =
   String(req.query.ready || "false")
