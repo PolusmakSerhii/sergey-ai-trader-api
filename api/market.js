@@ -5775,6 +5775,64 @@ const allScannerSymbols =
     item => item.marketSymbol
   );
 
+ const globalCandidateLimit = 60;
+
+const maxVolumeQuote24h =
+  Math.max(
+    ...allScannerItems.map(
+      item =>
+        Number(item.volumeQuote24h) || 0
+    ),
+    1
+  );
+
+const globalCandidateItems =
+  globalScanner
+    ? allScannerItems
+        .map(item => {
+          const volume =
+            Number(item.volumeQuote24h) || 0;
+
+          const change24h =
+            Math.abs(
+              Number(item.change24h) || 0
+            );
+
+          const liquidityScore =
+            Math.min(
+              100,
+              Math.sqrt(
+                volume / maxVolumeQuote24h
+              ) * 100
+            );
+
+          const momentumScore =
+            Math.min(
+              100,
+              change24h * 5
+            );
+
+          const fastScore =
+            Math.round(
+              liquidityScore * 0.7 +
+              momentumScore * 0.3
+            );
+
+          return {
+            ...item,
+            fastScore
+          };
+        })
+        .sort(
+          (a, b) =>
+            b.fastScore - a.fastScore
+        )
+        .slice(
+          0,
+          globalCandidateLimit
+        )
+    : allScannerItems;
+  
 const filteredScannerItems =
   scannerSearch
     ? allScannerItems.filter(item =>
@@ -5782,8 +5840,10 @@ const filteredScannerItems =
           .toUpperCase()
           .includes(scannerSearch)
       )
+    : globalScanner
+    ? globalCandidateItems
     : allScannerItems;
-
+  
 const filteredScannerSymbols =
   filteredScannerItems.map(
     item => item.marketSymbol
@@ -6438,6 +6498,11 @@ filters: {
 
     global: globalScanner,
 
+    candidatePoolSize:
+  globalScanner
+    ? globalCandidateItems.length
+    : allScannerItems.length,
+    
 batch:
   scannerPage,
 
