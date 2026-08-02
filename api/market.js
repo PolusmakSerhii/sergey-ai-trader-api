@@ -5699,6 +5699,28 @@ const scannerSearch =
           : []
     );
 
+  const globalTop10 =
+  [...combinedResults]
+    .sort((a, b) => {
+      const opportunityDifference =
+        (b.opportunityScore || 0) -
+        (a.opportunityScore || 0);
+
+      if (opportunityDifference !== 0) {
+        return opportunityDifference;
+      }
+
+      return (
+        (b.confidence || 0) -
+        (a.confidence || 0)
+      );
+    })
+    .slice(0, 10)
+    .map((item, index) => ({
+      rank: index + 1,
+      ...item
+    }));
+    
   return res.status(200).json({
     ok: true,
     version: "1.0",
@@ -5708,6 +5730,9 @@ const scannerSearch =
       batchResponses.length,
     resultsCollected:
       combinedResults.length,
+    
+    globalTop10,
+    
     results:
       combinedResults
   });
