@@ -5728,7 +5728,7 @@ for (
           : []
     );
 
-  const globalTop10 =
+ const globalRanking =
   [...combinedResults]
     .sort((a, b) => {
       const opportunityDifference =
@@ -5744,11 +5744,13 @@ for (
         (a.confidence || 0)
       );
     })
-    .slice(0, 10)
     .map((item, index) => ({
       rank: index + 1,
       ...item
     }));
+
+const globalTop10 =
+  globalRanking.slice(0, 10);
     
   return res.status(200).json({
     ok: true,
@@ -5770,6 +5772,8 @@ candidatePoolSize:
     
     resultsCollected:
       combinedResults.length,
+    
+    globalRanking,
     
     globalTop10,
   });
