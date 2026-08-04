@@ -5645,6 +5645,10 @@ const scannerSearch =
   String(req.query.global || "false")
     .toLowerCase() === "true";
 
+  const fullGlobalScanner =
+  String(req.query.fullGlobal || "false")
+    .toLowerCase() === "true";
+  
   const globalRank =
    String(req.query.globalRank || "false")
     .toLowerCase() === "true";
@@ -5920,7 +5924,9 @@ const maxVolumeQuote24h =
 
 const globalCandidateItems =
   globalScanner
-    ? allScannerItems
+    ? fullGlobalScanner
+      ? allScannerItems
+      : allScannerItems
         .map(item => {
           const volume =
             Number(item.volumeQuote24h) || 0;
@@ -5959,7 +5965,7 @@ const globalCandidateItems =
           (a, b) =>
             b.fastScore - a.fastScore
         )
-        .slice(
+          .slice(
           0,
           globalCandidateLimit
         )
