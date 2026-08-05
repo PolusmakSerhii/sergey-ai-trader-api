@@ -5648,6 +5648,16 @@ const scannerSearch =
   const fullGlobalScanner =
   String(req.query.fullGlobal || "false")
     .toLowerCase() === "true";
+
+   if (
+  globalScanner &&
+  fullGlobalScanner
+) {
+  res.setHeader(
+    "Cache-Control",
+    "public, s-maxage=60, stale-while-revalidate=120"
+  );
+}
   
   const globalRank =
    String(req.query.globalRank || "false")
