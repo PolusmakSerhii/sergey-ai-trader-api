@@ -5699,6 +5699,10 @@ for (
         );
 
         batchUrl.searchParams.set(
+         "fullGlobal",
+         "true"
+        );        
+        batchUrl.searchParams.set(
           "page",
           String(page)
         );
