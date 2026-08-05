@@ -6247,20 +6247,42 @@ const ranked =
   globalScanner
     ? ranked.map(item => ({
         symbol: item.symbol,
+      
         opportunityScore:
           item.opportunityScore ?? 0,
+      
         confidence:
           item.confidence ?? 0,
+      
         direction:
           item.direction || "Neutral",
+      
         grade:
           item.opportunityGrade ||
           item.grade ||
           "D",
+      
         action:
           item.action || "Wait",
-        riskReward:
+      
+       tradeAllowed:
+         item.tradeAllowed === true,
+
+       tradeReadiness: {
+        score:
+          item.tradeReadiness?.score ?? 0,
+
+      ready:
+        item.tradeReadiness?.ready === true,
+
+      status:
+         item.tradeReadiness?.status ||
+         "Unknown"
+   },      
+      
+      riskReward:
           item.riskReward ?? null,
+      
         batch:
           scannerPage
       }))
