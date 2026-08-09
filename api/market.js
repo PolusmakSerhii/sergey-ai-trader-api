@@ -1,3 +1,5 @@
+import { Receiver } from "@upstash/qstash";
+
 function getDailyCloses(prices) {
   if (!Array.isArray(prices)) return [];
 
@@ -5518,6 +5520,54 @@ async function writeGlobalRankingCache(snapshot) {
   }
 }
 
+async function verifyQStashRequest(req) {
+  const currentSigningKey =
+    process.env.QSTASH_CURRENT_SIGNING_KEY;
+  const nextSigningKey =
+    process.env.QSTASH_NEXT_SIGNING_KEY;
+  const signature =
+    req.headers["upstash-signature"];
+
+  if (
+    !currentSigningKey ||
+    !nextSigningKey ||
+    typeof signature !== "string"
+  ) {
+    return false;
+  }
+
+  const protocol =
+    req.headers["x-forwarded-proto"] ||
+    "https";
+  const url =
+    `${protocol}://${req.headers.host}${req.url}`;
+  const body =
+    typeof req.body === "string"
+      ? req.body
+      : req.body == null
+        ? ""
+        : JSON.stringify(req.body);
+
+  const receiver = new Receiver({
+    currentSigningKey,
+    nextSigningKey
+  });
+
+  try {
+    return await receiver.verify({
+      signature,
+      body,
+      url
+    });
+  } catch (error) {
+    console.error(
+      "QStash signature verification failed:",
+      error
+    );
+    return false;
+  }
+}
+
 export default async function handler(req, res) {
     res.setHeader(
     "Access-Control-Allow-Origin",
@@ -5745,6 +5795,16 @@ const scannerSearch =
 const forceGlobalRefresh =
   String(req.query.refresh || "false")
     .toLowerCase() === "true";
+
+if (
+  forceGlobalRefresh &&
+  !(await verifyQStashRequest(req))
+) {
+  return res.status(401).json({
+    ok: false,
+    error: "Unauthorized ranking refresh"
+  });
+}
 
 if (!forceGlobalRefresh) {
   const cachedGlobalRanking =
