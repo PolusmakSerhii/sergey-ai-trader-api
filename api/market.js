@@ -5657,6 +5657,7 @@ const scannerSearch =
    const globalBatchSize = 10;
 
   if (globalRank) {
+const globalRankingStartedAt = Date.now();
 const globalConcurrency = 5;
 
 const loadGlobalBatch = async page => {
@@ -5749,6 +5750,28 @@ for (
           : []
     );
 
+const batchDurationsMs =
+  batchResponses
+    .map(batch => Number(batch.durationMs))
+    .filter(Number.isFinite);
+
+const resultsFailed =
+  batchResponses.reduce(
+    (total, batch) =>
+      total + (Number(batch.failed) || 0),
+    0
+  );
+
+const averageBatchDurationMs =
+  batchDurationsMs.length > 0
+    ? Math.round(
+        batchDurationsMs.reduce(
+          (total, duration) => total + duration,
+          0
+        ) / batchDurationsMs.length
+      )
+    : 0;
+
  const globalRanking =
   [...combinedResults]
     .sort((a, b) => {
@@ -5793,6 +5816,24 @@ candidatePoolSize:
     
     resultsCollected:
       combinedResults.length,
+
+    resultsFailed,
+
+    performance: {
+      durationMs:
+        Date.now() - globalRankingStartedAt,
+
+      averageBatchDurationMs,
+
+      slowestBatchDurationMs:
+        Math.max(...batchDurationsMs, 0),
+
+      concurrency:
+        globalConcurrency,
+
+      batchSize:
+        globalBatchSize
+    },
     
     globalRanking,
     
