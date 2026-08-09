@@ -5536,11 +5536,6 @@ async function verifyQStashRequest(req) {
     return false;
   }
 
-  const protocol =
-    req.headers["x-forwarded-proto"] ||
-    "https";
-  const url =
-    `${protocol}://${req.headers.host}${req.url}`;
   const body =
     typeof req.body === "string"
       ? req.body
@@ -5556,8 +5551,7 @@ async function verifyQStashRequest(req) {
   try {
     return await receiver.verify({
       signature,
-      body,
-      url
+      body
     });
   } catch (error) {
     console.error(
