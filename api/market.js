@@ -5438,6 +5438,11 @@ const COINGECKO_SYMBOL_MAP = {
 const GLOBAL_RANKING_CACHE_KEY =
   "sergey-ai:global-ranking:v1";
 
+const GLOBAL_RANKING_HISTORY_KEY =
+  "sergey-ai:global-ranking-history:v1";
+
+const GLOBAL_RANKING_HISTORY_LIMIT = 360;
+
 function getRedisConfig() {
   const url =
     String(
@@ -5520,6 +5525,151 @@ async function writeGlobalRankingCache(snapshot) {
   }
 }
 
+function createRankingHistoryEntry(snapshot) {
+  const ranking =
+    Array.isArray(snapshot.globalRanking)
+      ? snapshot.globalRanking
+      : [];
+  const actionCounts =
+    ranking.reduce(
+      (counts, item) => {
+        const action =
+          String(item.action || "Wait");
+        counts[action] =
+          (counts[action] || 0) + 1;
+        return counts;
+      },
+      {}
+    );
+  const confidenceValues =
+    ranking
+      .map(item => Number(item.confidence))
+      .filter(Number.isFinite);
+  const averageConfidence =
+    confidenceValues.length
+      ? Math.round(
+          confidenceValues.reduce(
+            (total, value) => total + value,
+            0
+          ) / confidenceValues.length
+        )
+      : 0;
+  const readyTrades =
+    ranking.filter(
+      item =>
+        item.tradeAllowed === true &&
+        item.tradeReadiness?.ready === true
+    ).length;
+  const bestOpportunity = ranking[0] || null;
+
+  return {
+    generatedAt: snapshot.generatedAt,
+    totalMarkets:
+      snapshot.totalAvailableSymbols ||
+      ranking.length,
+    resultsCollected:
+      snapshot.resultsCollected ||
+      ranking.length,
+    resultsFailed:
+      snapshot.resultsFailed || 0,
+    averageConfidence,
+    readyTrades,
+    longCount:
+      ranking.filter(
+        item => item.direction === "Long"
+      ).length,
+    shortCount:
+      ranking.filter(
+        item => item.direction === "Short"
+      ).length,
+    actionCounts,
+    bestOpportunity: bestOpportunity
+      ? {
+          symbol: bestOpportunity.symbol,
+          opportunityScore:
+            bestOpportunity.opportunityScore || 0,
+          confidence:
+            bestOpportunity.confidence || 0,
+          grade:
+            bestOpportunity.grade ||
+            bestOpportunity.opportunityGrade ||
+            "D",
+          direction:
+            bestOpportunity.direction ||
+            "Neutral",
+          action:
+            bestOpportunity.action || "Wait"
+        }
+      : null
+  };
+}
+
+async function writeRankingHistory(snapshot) {
+  if (!getRedisConfig()) {
+    return false;
+  }
+
+  try {
+    const historyEntry =
+      createRankingHistoryEntry(snapshot);
+
+    await runRedisCommand([
+      "LPUSH",
+      GLOBAL_RANKING_HISTORY_KEY,
+      JSON.stringify(historyEntry)
+    ]);
+
+    await runRedisCommand([
+      "LTRIM",
+      GLOBAL_RANKING_HISTORY_KEY,
+      "0",
+      String(
+        GLOBAL_RANKING_HISTORY_LIMIT - 1
+      )
+    ]);
+
+    return true;
+  } catch (error) {
+    console.error(
+      "Ranking history write failed:",
+      error
+    );
+    return false;
+  }
+}
+
+async function readRankingHistory() {
+  try {
+    const history =
+      await runRedisCommand([
+        "LRANGE",
+        GLOBAL_RANKING_HISTORY_KEY,
+        "0",
+        String(
+          GLOBAL_RANKING_HISTORY_LIMIT - 1
+        )
+      ]);
+
+    return Array.isArray(history)
+      ? history
+          .map(item => {
+            try {
+              return JSON.parse(item);
+            } catch {
+              return null;
+            }
+          })
+          .filter(Boolean)
+      : [];
+  } catch (error) {
+    console.error(
+      "Ranking history read failed:",
+      error
+    );
+    return [];
+  }
+}
+
 async function verifyQStashRequest(req) {
   const currentSigningKey =
     process.env.QSTASH_CURRENT_SIGNING_KEY;
@@ -5581,12 +5731,28 @@ export default async function handler(req, res) {
   }
   const { mode } = req.query;
 
-   if (mode === "symbols") {
+  if (mode === "symbols") {
    const result =
      await fetchOKXSwapSymbols();
      
    return res.status(200).json(result);
  }
+if (mode === "statistics") {
+  const history =
+    await readRankingHistory();
+
+  return res.status(200).json({
+    ok: true,
+    version: "1.0",
+    mode: "statistics",
+    historyWindowHours: 24,
+    snapshotIntervalMinutes: 4,
+    maxEntries:
+      GLOBAL_RANKING_HISTORY_LIMIT,
+    count: history.length,
+    history
+  });
+}
 if (mode === "ticker") {
   const symbol =
     String(req.query.symbol || "DOGEUSDT")
@@ -6001,11 +6167,22 @@ candidatePoolSize:
       globalRankingSnapshot
     );
 
+  const historySaved =
+    await writeRankingHistory(
+      globalRankingSnapshot
+    );
+
   return res.status(200).json({
     ...globalRankingSnapshot,
     cache: {
       status: cacheSaved ? "stored" : "unavailable",
       key: GLOBAL_RANKING_CACHE_KEY
+    },
+    history: {
+      status: historySaved ? "stored" : "unavailable",
+      key: GLOBAL_RANKING_HISTORY_KEY,
+      maxEntries:
+        GLOBAL_RANKING_HISTORY_LIMIT
     }
   });
 }
