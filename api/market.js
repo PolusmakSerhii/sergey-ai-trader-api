@@ -5657,7 +5657,7 @@ const scannerSearch =
    const globalBatchSize = 10;
 
   if (globalRank) {
-const globalConcurrency = 4;
+const globalConcurrency = 5;
 
 const loadGlobalBatch = async page => {
   const batchUrl =
