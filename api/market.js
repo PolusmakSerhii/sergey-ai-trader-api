@@ -5657,14 +5657,60 @@ const scannerSearch =
    const globalBatchSize = 10;
 
   if (globalRank) {
-
-    const totalGlobalBatches = 6;
 const globalConcurrency = 2;
 
-const batchResponses = [];
+const loadGlobalBatch = async page => {
+  const batchUrl =
+    new URL(
+      baseUrl + "/api/market"
+    );
+
+  batchUrl.searchParams.set(
+    "mode",
+    "scanner"
+  );
+
+  batchUrl.searchParams.set(
+    "global",
+    "true"
+  );
+
+  batchUrl.searchParams.set(
+    "fullGlobal",
+    "true"
+  );
+
+  batchUrl.searchParams.set(
+    "page",
+    String(page)
+  );
+
+  const response =
+    await fetch(
+      batchUrl.toString()
+    );
+
+  if (!response.ok) {
+    throw new Error(
+      `Global batch ${page} failed: ${response.status}`
+    );
+  }
+
+  return response.json();
+};
+
+const firstBatch =
+  await loadGlobalBatch(1);
+
+const totalGlobalBatches =
+  Number(firstBatch.totalBatches) || 1;
+
+const batchResponses = [
+  firstBatch
+];
 
 for (
-  let startPage = 1;
+  let startPage = 2;
   startPage <= totalGlobalBatches;
   startPage += globalConcurrency
 ) {
@@ -5682,44 +5728,10 @@ for (
 
   const waveResponses =
     await Promise.all(
-      pages.map(async page => {
-        const batchUrl =
-          new URL(
-            baseUrl + "/api/market"
-          );
-
-        batchUrl.searchParams.set(
-          "mode",
-          "scanner"
-        );
-
-        batchUrl.searchParams.set(
-          "global",
-          "true"
-        );
-
-        batchUrl.searchParams.set(
-         "fullGlobal",
-         "true"
-        );        
-        batchUrl.searchParams.set(
-          "page",
-          String(page)
-        );
-
-        const response =
-          await fetch(
-            batchUrl.toString()
-          );
-
-        if (!response.ok) {
-          throw new Error(
-            `Global batch ${page} failed: ${response.status}`
-          );
-        }
-
-        return response.json();
-      })
+      pages.map(
+        page =>
+          loadGlobalBatch(page)
+      )
     );
 
   batchResponses.push(
