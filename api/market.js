@@ -5433,6 +5433,91 @@ const COINGECKO_SYMBOL_MAP = {
   AAVEUSDT: "aave"
 };
 
+const GLOBAL_RANKING_CACHE_KEY =
+  "sergey-ai:global-ranking:v1";
+
+function getRedisConfig() {
+  const url =
+    String(
+      process.env.UPSTASH_REDIS_REST_URL || ""
+    ).replace(/\/$/, "");
+
+  const token =
+    String(
+      process.env.UPSTASH_REDIS_REST_TOKEN || ""
+    );
+
+  return url && token
+    ? { url, token }
+    : null;
+}
+
+async function runRedisCommand(command) {
+  const config = getRedisConfig();
+
+  if (!config) {
+    return null;
+  }
+
+  const response = await fetch(config.url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(command)
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Redis command failed: ${response.status}`
+    );
+  }
+
+  const payload = await response.json();
+  return payload?.result ?? null;
+}
+
+async function readGlobalRankingCache() {
+  try {
+    const cached = await runRedisCommand([
+      "GET",
+      GLOBAL_RANKING_CACHE_KEY
+    ]);
+
+    return typeof cached === "string"
+      ? JSON.parse(cached)
+      : null;
+  } catch (error) {
+    console.error(
+      "Global ranking cache read failed:",
+      error
+    );
+    return null;
+  }
+}
+
+async function writeGlobalRankingCache(snapshot) {
+  if (!getRedisConfig()) {
+    return false;
+  }
+
+  try {
+    await runRedisCommand([
+      "SET",
+      GLOBAL_RANKING_CACHE_KEY,
+      JSON.stringify(snapshot)
+    ]);
+    return true;
+  } catch (error) {
+    console.error(
+      "Global ranking cache write failed:",
+      error
+    );
+    return false;
+  }
+}
+
 export default async function handler(req, res) {
     res.setHeader(
     "Access-Control-Allow-Origin",
@@ -5654,9 +5739,28 @@ const scannerSearch =
    String(req.query.globalRank || "false")
     .toLowerCase() === "true";
   
-   const globalBatchSize = 10;
+  const globalBatchSize = 10;
 
   if (globalRank) {
+const forceGlobalRefresh =
+  String(req.query.refresh || "false")
+    .toLowerCase() === "true";
+
+if (!forceGlobalRefresh) {
+  const cachedGlobalRanking =
+    await readGlobalRankingCache();
+
+  if (cachedGlobalRanking) {
+    return res.status(200).json({
+      ...cachedGlobalRanking,
+      cache: {
+        status: "hit",
+        key: GLOBAL_RANKING_CACHE_KEY
+      }
+    });
+  }
+}
+
 const globalRankingStartedAt = Date.now();
 const globalConcurrency = 5;
 
@@ -5796,7 +5900,7 @@ const averageBatchDurationMs =
 const globalTop10 =
   globalRanking.slice(0, 10);
     
-  return res.status(200).json({
+  const globalRankingSnapshot = {
     ok: true,
     version: "1.0",
     mode: "global-ranking",
@@ -5838,6 +5942,19 @@ candidatePoolSize:
     globalRanking,
     
     globalTop10,
+  };
+
+  const cacheSaved =
+    await writeGlobalRankingCache(
+      globalRankingSnapshot
+    );
+
+  return res.status(200).json({
+    ...globalRankingSnapshot,
+    cache: {
+      status: cacheSaved ? "stored" : "unavailable",
+      key: GLOBAL_RANKING_CACHE_KEY
+    }
   });
 }
   
