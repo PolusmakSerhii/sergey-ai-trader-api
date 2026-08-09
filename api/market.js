@@ -5536,12 +5536,10 @@ async function verifyQStashRequest(req) {
     return false;
   }
 
-  const body =
-    typeof req.body === "string"
-      ? req.body
-      : req.body == null
-        ? ""
-        : JSON.stringify(req.body);
+  // This scheduled endpoint intentionally has no request body.
+  // Vercel may normalize an empty JSON body to an object, while
+  // QStash signs the original empty string.
+  const body = "";
 
   const receiver = new Receiver({
     currentSigningKey,
