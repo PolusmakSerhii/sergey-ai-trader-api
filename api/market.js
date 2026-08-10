@@ -5637,12 +5637,35 @@ function createRankingHistoryEntry(snapshot) {
           ) / confidenceValues.length
         )
       : 0;
-  const readyTrades =
+  const readyItems =
     ranking.filter(
       item =>
         item.tradeAllowed === true &&
         item.tradeReadiness?.ready === true
-    ).length;
+    );
+  const readySignals =
+    readyItems.slice(0, 20)
+      .map(item => ({
+        symbol: item.symbol,
+        price:
+          typeof item.price === "number"
+            ? item.price
+            : null,
+        direction: item.direction || "Neutral",
+        action: item.action || "Wait",
+        opportunityScore:
+          item.opportunityScore || 0,
+        confidence: item.confidence || 0,
+        grade:
+          item.grade ||
+          item.opportunityGrade ||
+          "D",
+        riskReward:
+          typeof item.riskReward === "number"
+            ? item.riskReward
+            : null
+      }));
+  const readyTrades = readyItems.length;
   const bestOpportunity = ranking[0] || null;
 
   return {
@@ -5657,6 +5680,7 @@ function createRankingHistoryEntry(snapshot) {
       snapshot.resultsFailed || 0,
     averageConfidence,
     readyTrades,
+    readySignals,
     longCount:
       ranking.filter(
         item => item.direction === "Long"
@@ -6734,6 +6758,11 @@ const ranked =
   globalScanner
     ? ranked.map(item => ({
         symbol: item.symbol,
+
+        price:
+          typeof item.price === "number"
+            ? item.price
+            : null,
       
         opportunityScore:
           item.opportunityScore ?? 0,
