@@ -1155,6 +1155,14 @@ function calculateSignalConfidence(data, probability) {
       grade: "D",
       quality: "No Data",
       agreement: "Unknown",
+      confidenceBreakdown: {
+        formulaVersion: "1.0",
+        factors: [],
+        baseScore: 0,
+        adjustments: [],
+        scoreBeforeClamp: 0,
+        finalScore: 0
+      },
       penalties: []
     };
   }
@@ -1251,13 +1259,50 @@ function calculateSignalConfidence(data, probability) {
     );
   }
 
-  let confidence = Math.round(
+  const weightedFactors = [
+    {
+      key: "strength",
+      label: "Leading direction strength",
+      rawScore: strengthScore,
+      weight: 0.4
+    },
+    {
+      key: "separation",
+      label: "Long/Short separation",
+      rawScore: separationScore,
+      weight: 0.25
+    },
+    {
+      key: "confluence",
+      label: "Factor confluence",
+      rawScore: confluenceScore,
+      weight: 0.2
+    },
+    {
+      key: "volume",
+      label: "Volume confirmation",
+      rawScore: volumeScore,
+      weight: 0.15
+    }
+  ].map(factor => ({
+    ...factor,
+    rawScore: Math.round(factor.rawScore * 100) / 100,
+    weightPercent: factor.weight * 100,
+    contribution:
+      Math.round(
+        factor.rawScore * factor.weight * 100
+      ) / 100
+  }));
+
+  const baseScore = Math.round(
     strengthScore * 0.4 +
     separationScore * 0.25 +
     confluenceScore * 0.2 +
     volumeScore * 0.15
-    
   );
+
+  let confidence = baseScore;
+  const adjustments = [];
 
   /*
    * Штраф за нейтральный EMA-тренд
@@ -1270,6 +1315,12 @@ function calculateSignalConfidence(data, probability) {
   ) {
     confidence -= 8;
 
+    adjustments.push({
+      key: "neutralEmaTrend",
+      label: "Neutral or mixed EMA trend",
+      value: -8
+    });
+
     penalties.push(
       "EMA trend is neutral or mixed"
     );
@@ -1281,6 +1332,12 @@ function calculateSignalConfidence(data, probability) {
   if (scoreDifference < 10) {
     confidence -= 10;
 
+    adjustments.push({
+      key: "signalConflict",
+      label: "Bullish and bearish signals are too close",
+      value: -10
+    });
+
     penalties.push(
       "Bullish and bearish signals are too close"
     );
@@ -1291,6 +1348,12 @@ function calculateSignalConfidence(data, probability) {
    */
   if (totalFactors < 3) {
     confidence -= 8;
+
+    adjustments.push({
+      key: "insufficientConfirmations",
+      label: "Not enough independent confirmations",
+      value: -8
+    });
 
     penalties.push(
       "Not enough independent confirmations"
@@ -1313,7 +1376,15 @@ function calculateSignalConfidence(data, probability) {
     trendSupportsShort
   ) {
     confidence += 10;
+
+    adjustments.push({
+      key: "trendAlignment",
+      label: "Strong trend supports the leading direction",
+      value: 10
+    });
   }
+
+  const scoreBeforeClamp = confidence;
 
   confidence = Math.max(
     0,
@@ -1359,6 +1430,18 @@ function calculateSignalConfidence(data, probability) {
       separation: Math.round(separationScore),
       confluence: Math.round(confluenceScore),
       volume: Math.round(volumeScore)
+    },
+
+    confidenceBreakdown: {
+      formulaVersion: "1.0",
+      factors: weightedFactors.map(({
+        weight,
+        ...factor
+      }) => factor),
+      baseScore,
+      adjustments,
+      scoreBeforeClamp,
+      finalScore: confidence
     },
 
     penalties
