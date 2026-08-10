@@ -10,6 +10,8 @@ const CHAT_MODEL =
 
 const MAX_QUESTION_LENGTH = 600;
 const MAX_CONTEXT_LENGTH = 12000;
+const MAX_HISTORY_MESSAGES = 8;
+const MAX_HISTORY_MESSAGE_LENGTH = 1200;
 const RATE_LIMIT_REQUESTS = 12;
 const RATE_LIMIT_WINDOW_SECONDS = 600;
 
@@ -143,6 +145,25 @@ function sanitizeContext(context) {
   return context;
 }
 
+function sanitizeHistory(history) {
+  if (!Array.isArray(history)) return [];
+
+  return history
+    .slice(-MAX_HISTORY_MESSAGES)
+    .map((item) => {
+      const role =
+        item?.role === "user" || item?.role === "assistant"
+          ? item.role
+          : null;
+      const content = String(item?.content || "")
+        .trim()
+        .slice(0, MAX_HISTORY_MESSAGE_LENGTH);
+
+      return role && content ? { role, content } : null;
+    })
+    .filter(Boolean);
+}
+
 function extractOutputText(responseData) {
   if (typeof responseData?.output_text === "string") {
     return responseData.output_text.trim();
@@ -237,6 +258,8 @@ export default async function handler(req, res) {
     });
   }
 
+  const conversationHistory = sanitizeHistory(req.body?.history);
+
   try {
     const openAiResponse = await fetch(
       OPENAI_RESPONSES_URL,
@@ -256,7 +279,9 @@ export default async function handler(req, res) {
             "Структура ответа: короткий вывод; максимум 3 главные причины; одна строка с Direction, Action, Confidence, Score и Readiness; одна строка с Entry Zone, Stop Loss, Take Profit и Risk/Reward, только если эти данные есть.",
             "Не повторяй одни и те же показатели и не перечисляй больше 3 причин.",
             "Предупреждение о риске сократи до одной короткой фразы.",
-            "Используй только MARKET_CONTEXT из сообщения пользователя.",
+            "Учитывай предыдущие реплики только для понимания ссылок и продолжения разговора.",
+            "Последний MARKET_CONTEXT является источником истины для актуальных рыночных данных.",
+            "Не считай старые данные из истории актуальными, если они расходятся с последним MARKET_CONTEXT.",
             "Не придумывай цены, индикаторы, новости или причины, которых нет в контексте.",
             "Всегда различай рыночный анализ и финансовый совет.",
             "Не гарантируй прибыль и не обещай точность.",
@@ -264,6 +289,10 @@ export default async function handler(req, res) {
             "Если данных недостаточно, прямо скажи об этом."
           ].join(" "),
           input: [
+            ...conversationHistory.map((message) => ({
+              role: message.role,
+              content: message.content
+            })),
             {
               role: "user",
               content: [
