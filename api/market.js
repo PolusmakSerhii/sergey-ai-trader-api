@@ -5623,7 +5623,10 @@ async function writeGlobalRankingCache(snapshot) {
   }
 }
 
-function createRankingHistoryEntry(snapshot) {
+function createRankingHistoryEntry(
+  snapshot,
+  previousEntry = null
+) {
   const capturedAt =
     snapshot.generatedAt ||
     new Date().toISOString();
@@ -5661,6 +5664,10 @@ function createRankingHistoryEntry(snapshot) {
         item.tradeAllowed === true &&
         item.tradeReadiness?.ready === true
     );
+  const previousSignals =
+    Array.isArray(previousEntry?.readySignals)
+      ? previousEntry.readySignals
+      : [];
   const readySignals =
     readyItems.slice(0, 20)
       .map(item => {
@@ -5702,12 +5709,39 @@ function createRankingHistoryEntry(snapshot) {
           hasEntryZone &&
           currentPrice >= entryLow &&
           currentPrice <= entryHigh;
+        const setupKey = [
+          item.symbol,
+          direction
+        ].join(":");
+        const previousSignal =
+          previousSignals.find(
+            signal =>
+              signal.setupKey === setupKey
+          ) || null;
+        const previousOutcome =
+          previousSignal?.outcome || {};
+        const previousIsActive =
+          previousOutcome.status === "Active";
+        const activatedAt = previousIsActive
+          ? previousOutcome.activatedAt ||
+            previousSignal.capturedAt ||
+            null
+          : entryActive
+            ? capturedAt
+            : null;
+        const entryPrice = previousIsActive
+          ? previousOutcome.entryPrice ??
+            previousSignal.price ??
+            null
+          : entryActive
+            ? currentPrice
+            : null;
 
         return {
-          setupKey: [
-            item.symbol,
-            direction
-          ].join(":"),
+          tradeId:
+            previousSignal?.tradeId ||
+            [setupKey, capturedAt].join(":"),
+          setupKey,
           setupId: [
             item.symbol,
             direction,
@@ -5743,15 +5777,15 @@ function createRankingHistoryEntry(snapshot) {
           takeProfit2: item.takeProfit2 ?? null,
           takeProfit3: item.takeProfit3 ?? null,
           outcome: {
-            status: hasEntryZone
-              ? entryActive
-                ? "Active"
-                : "WaitingEntry"
-              : "Pending",
-            activatedAt:
-              entryActive ? capturedAt : null,
-            entryPrice:
-              entryActive ? currentPrice : null,
+            status: previousIsActive
+              ? "Active"
+              : hasEntryZone
+                ? entryActive
+                  ? "Active"
+                  : "WaitingEntry"
+                : "Pending",
+            activatedAt,
+            entryPrice,
             checkedAt: null,
             exitPrice: null,
             resultR: null
@@ -5810,8 +5844,26 @@ async function writeRankingHistory(snapshot) {
   }
 
   try {
+    const previousRaw = await runRedisCommand([
+      "LINDEX",
+      GLOBAL_RANKING_HISTORY_KEY,
+      "0"
+    ]);
+    let previousEntry = null;
+
+    if (typeof previousRaw === "string") {
+      try {
+        previousEntry = JSON.parse(previousRaw);
+      } catch {
+        previousEntry = null;
+      }
+    }
+
     const historyEntry =
-      createRankingHistoryEntry(snapshot);
+      createRankingHistoryEntry(
+        snapshot,
+        previousEntry
+      );
 
     await runRedisCommand([
       "LPUSH",
