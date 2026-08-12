@@ -5704,6 +5704,10 @@ function createRankingHistoryEntry(snapshot) {
           currentPrice <= entryHigh;
 
         return {
+          setupKey: [
+            item.symbol,
+            direction
+          ].join(":"),
           setupId: [
             item.symbol,
             direction,
