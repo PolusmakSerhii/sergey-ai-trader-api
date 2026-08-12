@@ -5674,6 +5674,34 @@ function createRankingHistoryEntry(snapshot) {
           item.stopLoss ?? "NA";
         const takeProfit2 =
           item.takeProfit2 ?? "NA";
+        const currentPrice =
+          typeof item.price === "number"
+            ? item.price
+            : null;
+        const numericEntryFrom =
+          Number(item.entryZone?.from);
+        const numericEntryTo =
+          Number(item.entryZone?.to);
+        const hasEntryZone =
+          currentPrice !== null &&
+          Number.isFinite(numericEntryFrom) &&
+          Number.isFinite(numericEntryTo);
+        const entryLow = hasEntryZone
+          ? Math.min(
+              numericEntryFrom,
+              numericEntryTo
+            )
+          : null;
+        const entryHigh = hasEntryZone
+          ? Math.max(
+              numericEntryFrom,
+              numericEntryTo
+            )
+          : null;
+        const entryActive =
+          hasEntryZone &&
+          currentPrice >= entryLow &&
+          currentPrice <= entryHigh;
 
         return {
           setupId: [
@@ -5691,10 +5719,7 @@ function createRankingHistoryEntry(snapshot) {
           ].join(":"),
           capturedAt,
           symbol: item.symbol,
-          price:
-            typeof item.price === "number"
-              ? item.price
-              : null,
+          price: currentPrice,
           direction,
           action: item.action || "Wait",
           opportunityScore:
@@ -5714,7 +5739,15 @@ function createRankingHistoryEntry(snapshot) {
           takeProfit2: item.takeProfit2 ?? null,
           takeProfit3: item.takeProfit3 ?? null,
           outcome: {
-            status: "Pending",
+            status: hasEntryZone
+              ? entryActive
+                ? "Active"
+                : "WaitingEntry"
+              : "Pending",
+            activatedAt:
+              entryActive ? capturedAt : null,
+            entryPrice:
+              entryActive ? currentPrice : null,
             checkedAt: null,
             exitPrice: null,
             resultR: null
