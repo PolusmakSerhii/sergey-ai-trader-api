@@ -5720,22 +5720,108 @@ function createRankingHistoryEntry(
           ) || null;
         const previousOutcome =
           previousSignal?.outcome || {};
+        const previousIsClosed =
+          previousOutcome.status === "TP1Hit" ||
+          previousOutcome.status === "Stopped";
         const previousIsActive =
           previousOutcome.status === "Active";
-        const activatedAt = previousIsActive
+        const previousWasActivated =
+          previousIsActive || previousIsClosed;
+        const activatedAt = previousWasActivated
           ? previousOutcome.activatedAt ||
             previousSignal.capturedAt ||
             null
           : entryActive
             ? capturedAt
             : null;
-        const entryPrice = previousIsActive
+        const entryPrice = previousWasActivated
           ? previousOutcome.entryPrice ??
             previousSignal.price ??
             null
           : entryActive
             ? currentPrice
             : null;
+        const initialPlan =
+          previousSignal?.initialPlan ||
+          (previousWasActivated
+            ? {
+                entryPrice,
+                stopLoss:
+                  previousSignal.stopLoss ?? null,
+                takeProfit1:
+                  previousSignal.takeProfit1 ?? null,
+                takeProfit2:
+                  previousSignal.takeProfit2 ?? null,
+                takeProfit3:
+                  previousSignal.takeProfit3 ?? null
+              }
+            : entryActive
+            ? {
+                entryPrice: currentPrice,
+                stopLoss:
+                  item.stopLoss ?? null,
+                takeProfit1:
+                  item.takeProfit1 ?? null,
+                takeProfit2:
+                  item.takeProfit2 ?? null,
+                takeProfit3:
+                  item.takeProfit3 ?? null
+              }
+            : null);
+        const initialStopLoss =
+          Number(initialPlan?.stopLoss);
+        const initialTakeProfit1 =
+          Number(initialPlan?.takeProfit1);
+        const initialEntryPrice =
+          Number(initialPlan?.entryPrice);
+        const canCheckOutcome =
+          previousIsActive &&
+          currentPrice !== null &&
+          Number.isFinite(initialStopLoss) &&
+          Number.isFinite(initialTakeProfit1) &&
+          Number.isFinite(initialEntryPrice);
+        const stopHit = canCheckOutcome &&
+          (direction === "Long"
+            ? currentPrice <= initialStopLoss
+            : direction === "Short"
+              ? currentPrice >= initialStopLoss
+              : false);
+        const tp1Hit = canCheckOutcome &&
+          !stopHit &&
+          (direction === "Long"
+            ? currentPrice >= initialTakeProfit1
+            : direction === "Short"
+              ? currentPrice <= initialTakeProfit1
+              : false);
+        const riskDistance =
+          Math.abs(
+            initialEntryPrice - initialStopLoss
+          );
+        const tp1ResultR =
+          riskDistance > 0
+            ? Math.round(
+                Math.abs(
+                  initialTakeProfit1 -
+                  initialEntryPrice
+                ) / riskDistance * 100
+              ) / 100
+            : null;
+        const outcomeStatus = previousIsClosed
+          ? previousOutcome.status
+          : stopHit
+            ? "Stopped"
+            : tp1Hit
+              ? "TP1Hit"
+              : previousIsActive
+                ? "Active"
+                : hasEntryZone
+                  ? entryActive
+                    ? "Active"
+                    : "WaitingEntry"
+                  : "Pending";
+        const outcomeClosedNow =
+          !previousIsClosed &&
+          (stopHit || tp1Hit);
 
         return {
           tradeId:
@@ -5776,19 +5862,28 @@ function createRankingHistoryEntry(
           takeProfit1: item.takeProfit1 ?? null,
           takeProfit2: item.takeProfit2 ?? null,
           takeProfit3: item.takeProfit3 ?? null,
+          initialPlan,
           outcome: {
-            status: previousIsActive
-              ? "Active"
-              : hasEntryZone
-                ? entryActive
-                  ? "Active"
-                  : "WaitingEntry"
-                : "Pending",
+            status: outcomeStatus,
             activatedAt,
             entryPrice,
-            checkedAt: null,
-            exitPrice: null,
-            resultR: null
+            checkedAt: previousIsClosed
+              ? previousOutcome.checkedAt || null
+              : outcomeClosedNow
+                ? capturedAt
+                : null,
+            exitPrice: previousIsClosed
+              ? previousOutcome.exitPrice ?? null
+              : outcomeClosedNow
+                ? currentPrice
+                : null,
+            resultR: previousIsClosed
+              ? previousOutcome.resultR ?? null
+              : stopHit
+                ? -1
+                : tp1Hit
+                  ? tp1ResultR
+                  : null
           }
         };
       });
