@@ -3736,6 +3736,21 @@ riskReward:
     ? tradePlan.riskReward
     : null,
 
+entryZone:
+  tradePlan.entryZone || null,
+
+stopLoss:
+  tradePlan.stopLoss ?? null,
+
+takeProfit1:
+  tradePlan.takeProfit1 ?? null,
+
+takeProfit2:
+  tradePlan.takeProfit2 ?? null,
+
+takeProfit3:
+  tradePlan.takeProfit3 ?? null,
+
 action:
   recommendation.action || "Wait"
       
@@ -5663,7 +5678,12 @@ function createRankingHistoryEntry(snapshot) {
         riskReward:
           typeof item.riskReward === "number"
             ? item.riskReward
-            : null
+            : null,
+        entryZone: item.entryZone || null,
+        stopLoss: item.stopLoss ?? null,
+        takeProfit1: item.takeProfit1 ?? null,
+        takeProfit2: item.takeProfit2 ?? null,
+        takeProfit3: item.takeProfit3 ?? null
       }));
   const readyTrades = readyItems.length;
   const bestOpportunity = ranking[0] || null;
@@ -6798,6 +6818,21 @@ const ranked =
       
       riskReward:
           item.riskReward ?? null,
+
+      entryZone:
+        item.entryZone || null,
+
+      stopLoss:
+        item.stopLoss ?? null,
+
+      takeProfit1:
+        item.takeProfit1 ?? null,
+
+      takeProfit2:
+        item.takeProfit2 ?? null,
+
+      takeProfit3:
+        item.takeProfit3 ?? null,
       
         batch:
           scannerPage
