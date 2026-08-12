@@ -6017,6 +6017,47 @@ async function readRankingHistory() {
   }
 }
 
+function createOutcomeSummary(history) {
+  const completedTrades = new Map();
+
+  for (const snapshot of history) {
+    const signals = Array.isArray(snapshot?.readySignals)
+      ? snapshot.readySignals
+      : [];
+
+    for (const signal of signals) {
+      const status = signal?.outcome?.status;
+      const tradeId = signal?.tradeId;
+
+      if (
+        !tradeId ||
+        completedTrades.has(tradeId) ||
+        (status !== "TP1Hit" && status !== "Stopped")
+      ) {
+        continue;
+      }
+
+      completedTrades.set(tradeId, status);
+    }
+  }
+
+  const wins = [...completedTrades.values()]
+    .filter(status => status === "TP1Hit")
+    .length;
+  const losses = completedTrades.size - wins;
+
+  return {
+    completed: completedTrades.size,
+    wins,
+    losses,
+    winRate: completedTrades.size > 0
+      ? Math.round(
+          wins / completedTrades.size * 1000
+        ) / 10
+      : null
+  };
+}
+
 async function verifyQStashRequest(req) {
   const currentSigningKey =
     process.env.QSTASH_CURRENT_SIGNING_KEY;
@@ -6087,6 +6128,8 @@ export default async function handler(req, res) {
 if (mode === "statistics") {
   const history =
     await readRankingHistory();
+  const outcomes =
+    createOutcomeSummary(history);
 
   return res.status(200).json({
     ok: true,
@@ -6097,6 +6140,7 @@ if (mode === "statistics") {
     maxEntries:
       GLOBAL_RANKING_HISTORY_LIMIT,
     count: history.length,
+    outcomes,
     history
   });
 }
