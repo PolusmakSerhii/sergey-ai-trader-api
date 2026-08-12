@@ -6018,7 +6018,7 @@ async function readRankingHistory() {
 }
 
 function createOutcomeSummary(history) {
-  const completedTrades = new Map();
+  const latestTradeStatuses = new Map();
 
   for (const snapshot of history) {
     const signals = Array.isArray(snapshot?.readySignals)
@@ -6031,28 +6031,36 @@ function createOutcomeSummary(history) {
 
       if (
         !tradeId ||
-        completedTrades.has(tradeId) ||
-        (status !== "TP1Hit" && status !== "Stopped")
+        latestTradeStatuses.has(tradeId)
       ) {
         continue;
       }
 
-      completedTrades.set(tradeId, status);
+      latestTradeStatuses.set(tradeId, status);
     }
   }
 
-  const wins = [...completedTrades.values()]
+  const statuses = [...latestTradeStatuses.values()];
+  const wins = statuses
     .filter(status => status === "TP1Hit")
     .length;
-  const losses = completedTrades.size - wins;
+  const losses = statuses
+    .filter(status => status === "Stopped")
+    .length;
+  const active = statuses
+    .filter(status => status === "Active")
+    .length;
+  const completed = wins + losses;
 
   return {
-    completed: completedTrades.size,
+    active,
+    activated: active + completed,
+    completed,
     wins,
     losses,
-    winRate: completedTrades.size > 0
+    winRate: completed > 0
       ? Math.round(
-          wins / completedTrades.size * 1000
+          wins / completed * 1000
         ) / 10
       : null
   };
