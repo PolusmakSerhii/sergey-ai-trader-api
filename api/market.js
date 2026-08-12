@@ -5666,8 +5666,24 @@ function createRankingHistoryEntry(snapshot) {
       .map(item => {
         const direction =
           item.direction || "Neutral";
+        const entryFrom =
+          item.entryZone?.from ?? "NA";
+        const entryTo =
+          item.entryZone?.to ?? "NA";
+        const stopLoss =
+          item.stopLoss ?? "NA";
+        const takeProfit2 =
+          item.takeProfit2 ?? "NA";
 
         return {
+          setupId: [
+            item.symbol,
+            direction,
+            entryFrom,
+            entryTo,
+            stopLoss,
+            takeProfit2
+          ].join(":"),
           signalId: [
             item.symbol,
             direction,
