@@ -5624,6 +5624,9 @@ async function writeGlobalRankingCache(snapshot) {
 }
 
 function createRankingHistoryEntry(snapshot) {
+  const capturedAt =
+    snapshot.generatedAt ||
+    new Date().toISOString();
   const ranking =
     Array.isArray(snapshot.globalRanking)
       ? snapshot.globalRanking
@@ -5660,36 +5663,53 @@ function createRankingHistoryEntry(snapshot) {
     );
   const readySignals =
     readyItems.slice(0, 20)
-      .map(item => ({
-        symbol: item.symbol,
-        price:
-          typeof item.price === "number"
-            ? item.price
-            : null,
-        direction: item.direction || "Neutral",
-        action: item.action || "Wait",
-        opportunityScore:
-          item.opportunityScore || 0,
-        confidence: item.confidence || 0,
-        grade:
-          item.grade ||
-          item.opportunityGrade ||
-          "D",
-        riskReward:
-          typeof item.riskReward === "number"
-            ? item.riskReward
-            : null,
-        entryZone: item.entryZone || null,
-        stopLoss: item.stopLoss ?? null,
-        takeProfit1: item.takeProfit1 ?? null,
-        takeProfit2: item.takeProfit2 ?? null,
-        takeProfit3: item.takeProfit3 ?? null
-      }));
+      .map(item => {
+        const direction =
+          item.direction || "Neutral";
+
+        return {
+          signalId: [
+            item.symbol,
+            direction,
+            capturedAt
+          ].join(":"),
+          capturedAt,
+          symbol: item.symbol,
+          price:
+            typeof item.price === "number"
+              ? item.price
+              : null,
+          direction,
+          action: item.action || "Wait",
+          opportunityScore:
+            item.opportunityScore || 0,
+          confidence: item.confidence || 0,
+          grade:
+            item.grade ||
+            item.opportunityGrade ||
+            "D",
+          riskReward:
+            typeof item.riskReward === "number"
+              ? item.riskReward
+              : null,
+          entryZone: item.entryZone || null,
+          stopLoss: item.stopLoss ?? null,
+          takeProfit1: item.takeProfit1 ?? null,
+          takeProfit2: item.takeProfit2 ?? null,
+          takeProfit3: item.takeProfit3 ?? null,
+          outcome: {
+            status: "Pending",
+            checkedAt: null,
+            exitPrice: null,
+            resultR: null
+          }
+        };
+      });
   const readyTrades = readyItems.length;
   const bestOpportunity = ranking[0] || null;
 
   return {
-    generatedAt: snapshot.generatedAt,
+    generatedAt: capturedAt,
     totalMarkets:
       snapshot.totalAvailableSymbols ||
       ranking.length,
