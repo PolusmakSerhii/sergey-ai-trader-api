@@ -5668,8 +5668,37 @@ function createRankingHistoryEntry(
     Array.isArray(previousEntry?.readySignals)
       ? previousEntry.readySignals
       : [];
+  const previousActiveSignals =
+    previousSignals.filter(
+      signal => signal?.outcome?.status === "Active"
+    );
+  const trackedItems = readyItems.slice(0, 20);
+  const trackedSetupKeys = new Set(
+    trackedItems.map(item =>
+      [item.symbol, item.direction || "Neutral"].join(":")
+    )
+  );
+
+  for (const previousSignal of previousActiveSignals) {
+    if (trackedSetupKeys.has(previousSignal.setupKey)) {
+      continue;
+    }
+
+    const currentItem = ranking.find(
+      item => item.symbol === previousSignal.symbol
+    );
+
+    if (currentItem) {
+      trackedItems.push({
+        ...currentItem,
+        direction: previousSignal.direction
+      });
+      trackedSetupKeys.add(previousSignal.setupKey);
+    }
+  }
+
   const readySignals =
-    readyItems.slice(0, 20)
+    trackedItems
       .map(item => {
         const direction =
           item.direction || "Neutral";
