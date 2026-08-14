@@ -6066,17 +6066,34 @@ function createOutcomeSummary(history) {
         continue;
       }
 
-      completedTrades.set(tradeId, status);
+      completedTrades.set(tradeId, signal);
     }
   }
 
-  const completedStatuses = [...completedTrades.values()];
-  const wins = completedStatuses
-    .filter(status => status === "TP1Hit")
+  const completedSignals = [...completedTrades.values()];
+  const wins = completedSignals
+    .filter(signal => signal.outcome.status === "TP1Hit")
     .length;
-  const losses = completedStatuses
-    .filter(status => status === "Stopped")
+  const losses = completedSignals
+    .filter(signal => signal.outcome.status === "Stopped")
     .length;
+  const resultsR = completedSignals
+    .map(signal => signal.outcome?.resultR)
+    .filter(result => result !== null && result !== undefined)
+    .map(Number)
+    .filter(Number.isFinite);
+  const grossProfitR = resultsR
+    .filter(result => result > 0)
+    .reduce((total, result) => total + result, 0);
+  const grossLossR = Math.abs(
+    resultsR
+      .filter(result => result < 0)
+      .reduce((total, result) => total + result, 0)
+  );
+  const netR = resultsR.reduce(
+    (total, result) => total + result,
+    0
+  );
   const latestSignals = Array.isArray(history[0]?.readySignals)
     ? history[0].readySignals
     : [];
@@ -6095,6 +6112,19 @@ function createOutcomeSummary(history) {
       ? Math.round(
           wins / completed * 1000
         ) / 10
+      : null,
+    netR: resultsR.length
+      ? Math.round(netR * 100) / 100
+      : null,
+    averageR: resultsR.length
+      ? Math.round(
+          netR / resultsR.length * 100
+        ) / 100
+      : null,
+    profitFactor: grossLossR > 0
+      ? Math.round(
+          grossProfitR / grossLossR * 100
+        ) / 100
       : null
   };
 }
