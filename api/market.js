@@ -6113,7 +6113,7 @@ function createOutcomeSummary(history) {
     (total, result) => total + result,
     0
   );
-  const chronologicalResultsR = completedSignals
+  const chronologicalCompletedSignals = completedSignals
     .filter(signal =>
       signal.outcome?.resultR !== null &&
       signal.outcome?.resultR !== undefined &&
@@ -6122,11 +6122,14 @@ function createOutcomeSummary(history) {
     .sort((a, b) =>
       new Date(a.outcome?.checkedAt || 0) -
       new Date(b.outcome?.checkedAt || 0)
-    )
+    );
+  const chronologicalResultsR = chronologicalCompletedSignals
     .map(signal => Number(signal.outcome.resultR));
   let equityR = 0;
   let peakR = 0;
   let maxDrawdownR = 0;
+  let consecutiveLosses = 0;
+  let maxConsecutiveLosses = 0;
 
   for (const resultR of chronologicalResultsR) {
     equityR += resultR;
@@ -6135,6 +6138,39 @@ function createOutcomeSummary(history) {
       maxDrawdownR,
       peakR - equityR
     );
+  }
+
+  for (const signal of chronologicalCompletedSignals) {
+    if (signal.outcome.status === "Stopped") {
+      consecutiveLosses += 1;
+      maxConsecutiveLosses = Math.max(
+        maxConsecutiveLosses,
+        consecutiveLosses
+      );
+    } else {
+      consecutiveLosses = 0;
+    }
+  }
+
+  const latestCompletedSignal =
+    chronologicalCompletedSignals.at(-1) || null;
+  const latestStreakStatus =
+    latestCompletedSignal?.outcome?.status || null;
+  let currentStreakCount = 0;
+
+  for (
+    let index = chronologicalCompletedSignals.length - 1;
+    index >= 0;
+    index -= 1
+  ) {
+    if (
+      chronologicalCompletedSignals[index].outcome.status !==
+      latestStreakStatus
+    ) {
+      break;
+    }
+
+    currentStreakCount += 1;
   }
   const latestSignals = Array.isArray(history[0]?.readySignals)
     ? history[0].readySignals
@@ -6170,6 +6206,17 @@ function createOutcomeSummary(history) {
       : null,
     maxDrawdownR: chronologicalResultsR.length
       ? Math.round(maxDrawdownR * 100) / 100
+      : null,
+    currentStreak: latestStreakStatus
+      ? {
+          type: latestStreakStatus === "TP1Hit"
+            ? "Win"
+            : "Loss",
+          count: currentStreakCount
+        }
+      : null,
+    maxConsecutiveLosses: chronologicalCompletedSignals.length
+      ? maxConsecutiveLosses
       : null
   };
 }
