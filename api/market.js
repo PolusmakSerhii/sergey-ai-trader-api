@@ -6094,6 +6094,29 @@ function createOutcomeSummary(history) {
     (total, result) => total + result,
     0
   );
+  const chronologicalResultsR = completedSignals
+    .filter(signal =>
+      signal.outcome?.resultR !== null &&
+      signal.outcome?.resultR !== undefined &&
+      Number.isFinite(Number(signal.outcome.resultR))
+    )
+    .sort((a, b) =>
+      new Date(a.outcome?.checkedAt || 0) -
+      new Date(b.outcome?.checkedAt || 0)
+    )
+    .map(signal => Number(signal.outcome.resultR));
+  let equityR = 0;
+  let peakR = 0;
+  let maxDrawdownR = 0;
+
+  for (const resultR of chronologicalResultsR) {
+    equityR += resultR;
+    peakR = Math.max(peakR, equityR);
+    maxDrawdownR = Math.max(
+      maxDrawdownR,
+      peakR - equityR
+    );
+  }
   const latestSignals = Array.isArray(history[0]?.readySignals)
     ? history[0].readySignals
     : [];
@@ -6125,6 +6148,9 @@ function createOutcomeSummary(history) {
       ? Math.round(
           grossProfitR / grossLossR * 100
         ) / 100
+      : null,
+    maxDrawdownR: chronologicalResultsR.length
+      ? Math.round(maxDrawdownR * 100) / 100
       : null
   };
 }
