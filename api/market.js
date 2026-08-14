@@ -6016,27 +6016,46 @@ async function writeRankingHistory(snapshot) {
 
 async function readRankingHistory() {
   try {
-    const history =
-      await runRedisCommand([
+    const history = [];
+    const chunkSize = 60;
+
+    for (
+      let start = 0;
+      start < GLOBAL_RANKING_HISTORY_LIMIT;
+      start += chunkSize
+    ) {
+      const chunk = await runRedisCommand([
         "LRANGE",
         GLOBAL_RANKING_HISTORY_KEY,
-        "0",
+        String(start),
         String(
-          GLOBAL_RANKING_HISTORY_LIMIT - 1
+          Math.min(
+            start + chunkSize - 1,
+            GLOBAL_RANKING_HISTORY_LIMIT - 1
+          )
         )
       ]);
 
-    return Array.isArray(history)
-      ? history
-          .map(item => {
-            try {
-              return JSON.parse(item);
-            } catch {
-              return null;
-            }
-          })
-          .filter(Boolean)
-      : [];
+      if (!Array.isArray(chunk) || !chunk.length) {
+        break;
+      }
+
+      history.push(...chunk);
+
+      if (chunk.length < chunkSize) {
+        break;
+      }
+    }
+
+    return history
+      .map(item => {
+        try {
+          return JSON.parse(item);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
   } catch (error) {
     console.error(
       "Ranking history read failed:",
@@ -6227,6 +6246,19 @@ if (mode === "statistics") {
     await readRankingHistory();
   const outcomes =
     createOutcomeSummary(history);
+  const responseHistory = history.map(
+    (snapshot, index) => ({
+      ...snapshot,
+      readySignals: index === 0
+        ? snapshot.readySignals || []
+        : Array.isArray(snapshot.readySignals)
+          ? snapshot.readySignals.filter(signal =>
+              signal?.outcome?.status === "TP1Hit" ||
+              signal?.outcome?.status === "Stopped"
+            )
+          : []
+    })
+  );
 
   return res.status(200).json({
     ok: true,
@@ -6238,7 +6270,7 @@ if (mode === "statistics") {
       GLOBAL_RANKING_HISTORY_LIMIT,
     count: history.length,
     outcomes,
-    history
+    history: responseHistory
   });
 }
 if (mode === "ticker") {
