@@ -5896,6 +5896,14 @@ function createRankingHistoryEntry(
             status: outcomeStatus,
             activatedAt,
             entryPrice,
+            lastPriceCheckedAt:
+              outcomeStatus === "Active"
+                ? capturedAt
+                : previousIsClosed
+                  ? previousOutcome.lastPriceCheckedAt ||
+                    previousOutcome.checkedAt ||
+                    null
+                  : null,
             checkedAt: previousIsClosed
               ? previousOutcome.checkedAt || null
               : outcomeClosedNow
