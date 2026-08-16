@@ -1,5 +1,8 @@
 {
   "type": "module",
+  "scripts": {
+    "test": "node scripts/validate-project.mjs"
+  },
   "dependencies": {
     "@upstash/qstash": "2.11.3"
   }
