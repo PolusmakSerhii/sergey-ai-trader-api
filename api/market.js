@@ -6726,7 +6726,7 @@ if (!forceGlobalRefresh) {
 }
 
 const globalRankingStartedAt = Date.now();
-const globalConcurrency = 5;
+const globalConcurrency = 2;
 
 const loadGlobalBatch = async page => {
   const batchUrl =
