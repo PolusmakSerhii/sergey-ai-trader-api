@@ -4,6 +4,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const apiDirectory = new URL("../api/", import.meta.url);
+const scriptsDirectory = new URL("./", import.meta.url);
 const apiFiles = (await readdir(apiDirectory))
   .filter((name) => name.endsWith(".js"))
   .sort();
@@ -21,4 +22,19 @@ for (const name of apiFiles) {
   assert.match(source, /export\s+default/, `${name} must export a default handler`);
 }
 
-console.log(`Backend validation passed (${apiFiles.length} API handlers checked).`);
+const scriptFiles = (await readdir(scriptsDirectory))
+  .filter((name) => name.endsWith(".mjs"))
+  .sort();
+
+for (const name of scriptFiles) {
+  const fileUrl = new URL(name, scriptsDirectory);
+  const syntaxCheck = spawnSync(process.execPath, ["--check", fileURLToPath(fileUrl)], {
+    encoding: "utf8"
+  });
+
+  assert.equal(syntaxCheck.status, 0, syntaxCheck.stderr || `${name} has invalid syntax`);
+}
+
+console.log(
+  `Backend validation passed (${apiFiles.length} API handlers and ${scriptFiles.length} scripts checked).`
+);
