@@ -14,6 +14,8 @@ const MAX_HISTORY_MESSAGES = 8;
 const MAX_HISTORY_MESSAGE_LENGTH = 1200;
 const RATE_LIMIT_REQUESTS = 12;
 const RATE_LIMIT_WINDOW_SECONDS = 600;
+const DAILY_REQUEST_LIMIT = 120;
+const DAILY_WINDOW_SECONDS = 86400;
 
 function setCorsHeaders(req, res) {
   const origin = req.headers.origin;
@@ -97,37 +99,83 @@ async function checkRateLimit(req) {
   );
   const key =
     `sergey-ai:chat-rate:${clientIp}:${windowId}`;
+  const dailyWindowId = Math.floor(
+    Date.now() /
+      (DAILY_WINDOW_SECONDS * 1000)
+  );
+  const dailyKey =
+    `sergey-ai:chat-daily:${dailyWindowId}`;
 
   try {
-    const result = await runRedisCommand([
-      "INCR",
-      key
-    ]);
-
-    if (!result) {
-      return { allowed: true };
-    }
-
-    const requestCount = Number(result.result) || 0;
-
-    if (requestCount === 1) {
-      await runRedisCommand([
-        "EXPIRE",
-        key,
-        RATE_LIMIT_WINDOW_SECONDS
+    const incrementCounter = async (
+      counterKey,
+      expiresIn
+    ) => {
+      const result = await runRedisCommand([
+        "INCR",
+        counterKey
       ]);
+
+      if (!result) {
+        throw new Error(
+          "Redis rate limiter is unavailable"
+        );
+      }
+
+      const count = Number(result.result) || 0;
+
+      if (count === 1) {
+        await runRedisCommand([
+          "EXPIRE",
+          counterKey,
+          expiresIn
+        ]);
+      }
+
+      return count;
+    };
+
+    const requestCount = await incrementCounter(
+      key,
+      RATE_LIMIT_WINDOW_SECONDS
+    );
+
+    if (requestCount > RATE_LIMIT_REQUESTS) {
+      return {
+        allowed: false,
+        remaining: 0,
+        reason: "client"
+      };
     }
+
+    const dailyRequestCount =
+      await incrementCounter(
+        dailyKey,
+        DAILY_WINDOW_SECONDS
+      );
 
     return {
-      allowed: requestCount <= RATE_LIMIT_REQUESTS,
+      allowed:
+        dailyRequestCount <= DAILY_REQUEST_LIMIT,
       remaining: Math.max(
         0,
-        RATE_LIMIT_REQUESTS - requestCount
-      )
+        Math.min(
+          RATE_LIMIT_REQUESTS - requestCount,
+          DAILY_REQUEST_LIMIT - dailyRequestCount
+        )
+      ),
+      reason:
+        dailyRequestCount > DAILY_REQUEST_LIMIT
+          ? "daily"
+          : null
     };
   } catch (error) {
     console.error("Chat rate limit error:", error);
-    return { allowed: true };
+    return {
+      allowed: false,
+      unavailable: true,
+      remaining: 0
+    };
   }
 }
 
@@ -238,10 +286,20 @@ export default async function handler(req, res) {
 
   const rateLimit = await checkRateLimit(req);
 
+  if (rateLimit.unavailable) {
+    return res.status(503).json({
+      ok: false,
+      error: "AI protection is temporarily unavailable"
+    });
+  }
+
   if (!rateLimit.allowed) {
     return res.status(429).json({
       ok: false,
-      error: "Слишком много вопросов. Повторите через несколько минут."
+      error:
+        rateLimit.reason === "daily"
+          ? "Дневной лимит AI исчерпан. Повторите завтра."
+          : "Слишком много вопросов. Повторите через несколько минут."
     });
   }
 
