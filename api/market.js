@@ -3584,44 +3584,21 @@ function calculateScannerOpportunity(data) {
 }
 
 async function fetchScannerSymbol(
-  request,
+  baseUrl,
   symbol
 ) {
   try {
-    let statusCode = 200;
-    let payload = null;
+    const url =
+      `${baseUrl}/api/market?symbol=${encodeURIComponent(symbol)}`;
 
-    const internalRequest = {
-      ...request,
-      method: "GET",
-      query: { symbol }
-    };
+    const response = await fetch(url);
 
-    const internalResponse = {
-      setHeader() {
-        return this;
-      },
-      status(code) {
-        statusCode = code;
-        return this;
-      },
-      json(body) {
-        payload = body;
-        return body;
-      },
-      end() {
-        return null;
-      }
-    };
-
-    await handler(
-      internalRequest,
-      internalResponse
-    );
+    const payload = await response
+      .json()
+      .catch(() => null);
 
     if (
-      statusCode < 200 ||
-      statusCode >= 300 ||
+      !response.ok ||
       payload?.ok !== true
     ) {
       return {
@@ -3629,7 +3606,7 @@ async function fetchScannerSymbol(
         ok: false,
         error:
           payload?.error ||
-          `Market analysis failed: ${statusCode}`
+          `Market analysis failed: ${response.status}`
       };
     }
 
@@ -7246,7 +7223,7 @@ if (scannerSymbols.length === 0) {
     await Promise.allSettled(
       scannerSymbols.map(symbol =>
         fetchScannerSymbol(
-          req,
+          baseUrl,
           symbol
         )
       )
