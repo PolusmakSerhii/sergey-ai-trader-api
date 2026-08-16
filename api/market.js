@@ -1,5 +1,8 @@
 import { Receiver } from "@upstash/qstash";
 
+const DEBUG_LOGS =
+  process.env.DEBUG_LOGS === "true";
+
 function getDailyCloses(prices) {
   if (!Array.isArray(prices)) return [];
 
@@ -5619,7 +5622,7 @@ const GLOBAL_RANKING_CACHE_KEY =
 const GLOBAL_RANKING_HISTORY_KEY =
   "sergey-ai:global-ranking-history:v1";
 
-const GLOBAL_RANKING_HISTORY_LIMIT = 360;
+const GLOBAL_RANKING_HISTORY_LIMIT = 240;
 
 function getRedisConfig() {
   const url =
@@ -6488,7 +6491,7 @@ if (mode === "statistics") {
     version: "1.0",
     mode: "statistics",
     historyWindowHours: 24,
-    snapshotIntervalMinutes: 4,
+    snapshotIntervalMinutes: 6,
     maxEntries:
       GLOBAL_RANKING_HISTORY_LIMIT,
     count: history.length,
@@ -8188,10 +8191,12 @@ const probability = {
     imbalance
   });
 
-   console.log(
-    "Trade Plan Generated:",
-    JSON.stringify(tradePlan, null, 2)
-  ); 
+   if (DEBUG_LOGS) {
+     console.log(
+       "Trade Plan Generated:",
+       JSON.stringify(tradePlan, null, 2)
+     );
+   }
     
 const decisionEngine = calculateDecisionEngine({
   probability,
