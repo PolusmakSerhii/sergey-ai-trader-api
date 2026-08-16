@@ -3585,33 +3585,13 @@ function calculateScannerOpportunity(data) {
 
 async function fetchScannerSymbol(
   baseUrl,
-  symbol,
-  fearGreed = null
+  symbol
 ) {
   try {
-    const url = new URL(
-      `${baseUrl}/api/market`
-    );
+    const url =
+      `${baseUrl}/api/market?symbol=${encodeURIComponent(symbol)}`;
 
-    url.searchParams.set(
-      "symbol",
-      symbol
-    );
-
-    if (fearGreed) {
-      url.searchParams.set(
-        "fearGreedValue",
-        fearGreed.value
-      );
-      url.searchParams.set(
-        "fearGreedClassification",
-        fearGreed.classification
-      );
-    }
-
-    const response = await fetch(
-      url.toString()
-    );
+    const response = await fetch(url);
 
     const payload = await response
       .json()
@@ -3784,48 +3764,6 @@ action:
       ok: false,
       error: error.message
     };
-  }
-}
-
-function readFearGreedFromQuery(query = {}) {
-  const value = String(
-    query.fearGreedValue || ""
-  ).trim();
-  const classification = String(
-    query.fearGreedClassification || ""
-  ).trim();
-
-  return value && classification
-    ? { value, classification }
-    : null;
-}
-
-async function fetchFearGreedSnapshot() {
-  try {
-    const response = await fetch(
-      "https://api.alternative.me/fng/?limit=1"
-    );
-    const payload = await response
-      .json()
-      .catch(() => null);
-    const item = payload?.data?.[0];
-
-    if (
-      !response.ok ||
-      item?.value == null ||
-      !item?.value_classification
-    ) {
-      return null;
-    }
-
-    return {
-      value: String(item.value),
-      classification: String(
-        item.value_classification
-      )
-    };
-  } catch {
-    return null;
   }
 }
 
@@ -6789,9 +6727,6 @@ if (!forceGlobalRefresh) {
 
 const globalRankingStartedAt = Date.now();
 const globalConcurrency = 2;
-const globalFearGreed =
-  readFearGreedFromQuery(req.query) ||
-  await fetchFearGreedSnapshot();
 
 const loadGlobalBatch = async page => {
   const batchUrl =
@@ -6818,17 +6753,6 @@ const loadGlobalBatch = async page => {
     "page",
     String(page)
   );
-
-  if (globalFearGreed) {
-    batchUrl.searchParams.set(
-      "fearGreedValue",
-      globalFearGreed.value
-    );
-    batchUrl.searchParams.set(
-      "fearGreedClassification",
-      globalFearGreed.classification
-    );
-  }
 
   const response =
     await fetch(
@@ -7293,18 +7217,14 @@ if (scannerSymbols.length === 0) {
 });
 }
   
-const startedAt = Date.now();
-const scannerFearGreed =
-  readFearGreedFromQuery(req.query) ||
-  await fetchFearGreedSnapshot();
+  const startedAt = Date.now();
 
   const settledResults =
     await Promise.allSettled(
       scannerSymbols.map(symbol =>
         fetchScannerSymbol(
           baseUrl,
-          symbol,
-          scannerFearGreed
+          symbol
         )
       )
     );
@@ -8124,15 +8044,8 @@ if (
   );
 }    
     
-    const fearGreed =
-      readFearGreedFromQuery(req.query) ||
-      await fetchFearGreedSnapshot();
-
-    if (!fearGreed) {
-      throw new Error(
-        "Fear & Greed data is unavailable"
-      );
-    }
+    const fg = await fetch("https://api.alternative.me/fng/?limit=1");
+    const fgData = await fg.json(); 
 
    const rsi14 = calculateRSI(okxDailyCloses, 14);
    const ema20 = calculateEMA(okxDailyCloses, 20);
@@ -8370,9 +8283,8 @@ const marketSummary =
 },
       
       fearGreed: {
-          value: fearGreed.value,
-          classification:
-            fearGreed.classification
+          value: fgData.data[0].value,
+          classification: fgData.data[0].value_classification
 }, 
       
 technical: {
