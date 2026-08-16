@@ -6459,7 +6459,25 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") {
     return res.status(204).end();
   }
+
   const { mode } = req.query;
+  const isRankingRefreshRequest =
+    req.method === "POST" &&
+    mode === "scanner" &&
+    String(req.query.globalRank || "false")
+      .toLowerCase() === "true" &&
+    String(req.query.refresh || "false")
+      .toLowerCase() === "true";
+
+  if (
+    req.method !== "GET" &&
+    !isRankingRefreshRequest
+  ) {
+    return res.status(405).json({
+      ok: false,
+      error: "Method not allowed"
+    });
+  }
 
   if (mode === "symbols") {
    const result =
@@ -7900,9 +7918,18 @@ totalBatches:
  });
  }
   
-  const symbol = 
-    (req.query.symbol || "SOLUSDT")
-      .toUpperCase();
+  const symbol = String(
+    req.query.symbol || "SOLUSDT"
+  )
+    .trim()
+    .toUpperCase();
+
+  if (!/^[A-Z0-9]{2,30}USDT$/.test(symbol)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Invalid symbol"
+    });
+  }
   
   const coinGeckoId =
     COINGECKO_SYMBOL_MAP[symbol] || null;
