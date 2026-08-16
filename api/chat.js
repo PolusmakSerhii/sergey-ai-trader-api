@@ -6,7 +6,7 @@ const OPENAI_RESPONSES_URL =
 
 const CHAT_MODEL =
   process.env.OPENAI_CHAT_MODEL ||
-  "gpt-5.6-luna";
+  "gpt-5-mini";
 
 const MAX_QUESTION_LENGTH = 600;
 const MAX_CONTEXT_LENGTH = 12000;
