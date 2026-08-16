@@ -310,7 +310,10 @@ export default async function handler(req, res) {
               ]
             }
           ],
-          max_output_tokens: 400,
+          max_output_tokens: 800,
+          reasoning: {
+            effort: "low"
+          },
           text: {
             verbosity: "low"
           }
