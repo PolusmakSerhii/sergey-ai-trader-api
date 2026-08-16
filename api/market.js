@@ -7924,7 +7924,7 @@ totalBatches:
     .trim()
     .toUpperCase();
 
-  if (!/^[A-Z0-9]{2,30}USDT$/.test(symbol)) {
+  if (!/^[A-Z0-9]{1,30}USDT$/.test(symbol)) {
     return res.status(400).json({
       ok: false,
       error: "Invalid symbol"
