@@ -3764,6 +3764,86 @@ action:
   }
 }
 
+async function fetchOKXRecentPriceRange(
+  symbol,
+  fromTime,
+  toTime
+) {
+  const fromTimestamp = Date.parse(fromTime || "");
+  const toTimestamp = Date.parse(toTime || "");
+
+  if (
+    !Number.isFinite(fromTimestamp) ||
+    !Number.isFinite(toTimestamp) ||
+    toTimestamp < fromTimestamp
+  ) {
+    return null;
+  }
+
+  const normalizedSymbol = String(symbol || "")
+    .toUpperCase()
+    .replace(/USDT$/i, "");
+  const instId = `${normalizedSymbol}-USDT-SWAP`;
+  const requestedMinutes = Math.ceil(
+    (toTimestamp - fromTimestamp) / 60000
+  ) + 2;
+  const limit = Math.max(
+    3,
+    Math.min(100, requestedMinutes)
+  );
+  const url = new URL(
+    "https://www.okx.com/api/v5/market/candles"
+  );
+
+  url.searchParams.set("instId", instId);
+  url.searchParams.set("bar", "1m");
+  url.searchParams.set("limit", String(limit));
+
+  try {
+    const response = await fetch(url);
+    const payload = await response
+      .json()
+      .catch(() => null);
+
+    if (
+      !response.ok ||
+      payload?.code !== "0" ||
+      !Array.isArray(payload?.data)
+    ) {
+      return null;
+    }
+
+    const candles = payload.data
+      .map(item => ({
+        timestamp: Number(item?.[0]),
+        high: Number(item?.[2]),
+        low: Number(item?.[3])
+      }))
+      .filter(candle =>
+        Number.isFinite(candle.timestamp) &&
+        Number.isFinite(candle.high) &&
+        Number.isFinite(candle.low) &&
+        candle.timestamp >= fromTimestamp - 60000 &&
+        candle.timestamp <= toTimestamp
+      );
+
+    if (!candles.length) {
+      return null;
+    }
+
+    return {
+      source: "OKX 1m candles",
+      fromTime,
+      toTime,
+      candles: candles.length,
+      high: Math.max(...candles.map(candle => candle.high)),
+      low: Math.min(...candles.map(candle => candle.low))
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchOKXKlines(
   symbol,
   interval = "1D",
@@ -5623,7 +5703,7 @@ async function writeGlobalRankingCache(snapshot) {
   }
 }
 
-function createRankingHistoryEntry(
+async function createRankingHistoryEntry(
   snapshot,
   previousEntry = null
 ) {
@@ -5672,6 +5752,48 @@ function createRankingHistoryEntry(
     previousSignals.filter(
       signal => signal?.outcome?.status === "Active"
     );
+  const activePriceRanges = new Map();
+  const priceRangeConcurrency = 10;
+
+  for (
+    let start = 0;
+    start < previousActiveSignals.length;
+    start += priceRangeConcurrency
+  ) {
+    const batch = previousActiveSignals.slice(
+      start,
+      start + priceRangeConcurrency
+    );
+    const ranges = await Promise.all(
+      batch.map(signal =>
+        fetchOKXRecentPriceRange(
+          signal.symbol,
+          signal.outcome?.lastPriceCheckedAt ||
+            previousEntry?.generatedAt ||
+            signal.capturedAt,
+          capturedAt
+        )
+      )
+    );
+
+    batch.forEach((signal, index) => {
+      if (ranges[index]) {
+        activePriceRanges.set(
+          signal.tradeId,
+          ranges[index]
+        );
+      }
+    });
+
+    if (
+      start + priceRangeConcurrency <
+      previousActiveSignals.length
+    ) {
+      await new Promise(resolve =>
+        setTimeout(resolve, 500)
+      );
+    }
+  }
   const trackedItems = readyItems.slice(0, 20);
   const trackedSetupKeys = new Set(
     trackedItems.map(item =>
@@ -5754,6 +5876,9 @@ function createRankingHistoryEntry(
           previousOutcome.status === "Stopped";
         const previousIsActive =
           previousOutcome.status === "Active";
+        const recentPriceRange = previousIsActive
+          ? activePriceRanges.get(previousSignal?.tradeId) || null
+          : null;
         const previousWasActivated =
           previousIsActive || previousIsClosed;
         const activatedAt = previousWasActivated
@@ -5803,24 +5928,45 @@ function createRankingHistoryEntry(
           Number(initialPlan?.takeProfit1);
         const initialEntryPrice =
           Number(initialPlan?.entryPrice);
+        const checkedHigh =
+          recentPriceRange?.high !== null &&
+          recentPriceRange?.high !== undefined &&
+          Number.isFinite(Number(recentPriceRange.high))
+          ? Number(recentPriceRange.high)
+          : currentPrice;
+        const checkedLow =
+          recentPriceRange?.low !== null &&
+          recentPriceRange?.low !== undefined &&
+          Number.isFinite(Number(recentPriceRange.low))
+          ? Number(recentPriceRange.low)
+          : currentPrice;
         const canCheckOutcome =
           previousIsActive &&
-          currentPrice !== null &&
+          checkedHigh !== null &&
+          checkedLow !== null &&
           Number.isFinite(initialStopLoss) &&
           Number.isFinite(initialTakeProfit1) &&
           Number.isFinite(initialEntryPrice);
         const stopHit = canCheckOutcome &&
           (direction === "Long"
-            ? currentPrice <= initialStopLoss
+            ? checkedLow <= initialStopLoss
             : direction === "Short"
-              ? currentPrice >= initialStopLoss
+              ? checkedHigh >= initialStopLoss
               : false);
         const tp1Hit = canCheckOutcome &&
           !stopHit &&
           (direction === "Long"
-            ? currentPrice >= initialTakeProfit1
+            ? checkedHigh >= initialTakeProfit1
             : direction === "Short"
-              ? currentPrice <= initialTakeProfit1
+              ? checkedLow <= initialTakeProfit1
+              : false);
+        const bothLevelsTouched = canCheckOutcome &&
+          (direction === "Long"
+            ? checkedLow <= initialStopLoss &&
+              checkedHigh >= initialTakeProfit1
+            : direction === "Short"
+              ? checkedHigh >= initialStopLoss &&
+                checkedLow <= initialTakeProfit1
               : false);
         const riskDistance =
           Math.abs(
@@ -5904,6 +6050,26 @@ function createRankingHistoryEntry(
                     previousOutcome.checkedAt ||
                     null
                   : null,
+            priceCheck: previousIsClosed
+              ? previousOutcome.priceCheck || null
+              : previousIsActive
+                ? {
+                    source:
+                      recentPriceRange?.source ||
+                      "snapshot price",
+                    fromTime:
+                      recentPriceRange?.fromTime ||
+                      previousOutcome.lastPriceCheckedAt ||
+                      previousEntry?.generatedAt ||
+                      null,
+                    toTime: capturedAt,
+                    candles:
+                      recentPriceRange?.candles || 0,
+                    high: checkedHigh,
+                    low: checkedLow,
+                    bothLevelsTouched
+                  }
+                : null,
             checkedAt: previousIsClosed
               ? previousOutcome.checkedAt || null
               : outcomeClosedNow
@@ -5912,7 +6078,9 @@ function createRankingHistoryEntry(
             exitPrice: previousIsClosed
               ? previousOutcome.exitPrice ?? null
               : outcomeClosedNow
-                ? currentPrice
+                ? stopHit
+                  ? initialStopLoss
+                  : initialTakeProfit1
                 : null,
             resultR: previousIsClosed
               ? previousOutcome.resultR ?? null
@@ -5992,7 +6160,7 @@ async function writeRankingHistory(snapshot) {
     }
 
     const historyEntry =
-      createRankingHistoryEntry(
+      await createRankingHistoryEntry(
         snapshot,
         previousEntry
       );
