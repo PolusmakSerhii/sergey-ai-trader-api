@@ -1,0 +1,51 @@
+name: Monitor production
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check global ranking health
+        env:
+          MARKET_URL: https://sergey-ai-trader-api.vercel.app/api/market?mode=scanner&globalRank=true
+        run: |
+          response_file="$(mktemp)"
+          http_code="$(curl --silent --show-error --location \
+            --retry 2 --retry-delay 5 \
+            --max-time 120 \
+            --output "$response_file" \
+            --write-out "%{http_code}" \
+            "$MARKET_URL")"
+
+          if [ "$http_code" != "200" ]; then
+            echo "Production API returned HTTP $http_code"
+            exit 1
+          fi
+
+          jq -e '
+            .ok == true and
+            .status == "ready" and
+            .resultsFailed == 0 and
+            .resultsCollected == .totalAvailableSymbols and
+            .resultsCollected >= 400 and
+            .performance.durationMs < 300000 and
+            ((now - (.generatedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) < 1200)
+          ' "$response_file" > /dev/null
+
+          jq '{
+            status,
+            generatedAt,
+            results: ((.resultsCollected | tostring) + "/" + (.totalAvailableSymbols | tostring)),
+            errors: .resultsFailed,
+            durationMs: .performance.durationMs,
+            concurrency: .performance.concurrency,
+            cache: .cache.status
+          }' "$response_file"
