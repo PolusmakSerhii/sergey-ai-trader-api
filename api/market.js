@@ -5629,6 +5629,20 @@ const GLOBAL_RANKING_HISTORY_KEY =
 
 const GLOBAL_RANKING_HISTORY_LIMIT = 240;
 
+const COMPLETED_TRADES_KEY =
+  "sergey-ai:completed-trades:v1";
+
+const COMPLETED_TRADE_IDS_KEY =
+  "sergey-ai:completed-trade-ids:v1";
+
+const COMPLETED_TRADE_STATS_KEY =
+  "sergey-ai:completed-trade-stats:v1";
+
+const COMPLETED_TRADE_INIT_LOCK_KEY =
+  "sergey-ai:completed-trade-init-lock:v1";
+
+const COMPLETED_TRADES_DISPLAY_LIMIT = 20;
+
 function getRedisConfig() {
   const url =
     String(
@@ -6188,6 +6202,10 @@ async function writeRankingHistory(snapshot) {
       )
     ]);
 
+    await recordCompletedTradeSignals(
+      historyEntry.readySignals || []
+    );
+
     return true;
   } catch (error) {
     console.error(
@@ -6195,6 +6213,256 @@ async function writeRankingHistory(snapshot) {
       error
     );
     return false;
+  }
+}
+
+function createEmptyPersistentTradeStats() {
+  return {
+    completed: 0,
+    wins: 0,
+    losses: 0,
+    grossProfitR: 0,
+    grossLossR: 0,
+    netR: 0,
+    equityR: 0,
+    peakR: 0,
+    maxDrawdownR: 0,
+    currentStreak: null,
+    maxConsecutiveLosses: 0,
+    startedAt: null,
+    updatedAt: null
+  };
+}
+
+function isCompletedTradeSignal(signal) {
+  const status = signal?.outcome?.status;
+
+  return Boolean(signal?.tradeId) &&
+    (status === "TP1Hit" || status === "Stopped");
+}
+
+function addTradeToPersistentStats(stats, signal) {
+  const next = {
+    ...createEmptyPersistentTradeStats(),
+    ...stats
+  };
+  const isWin = signal.outcome.status === "TP1Hit";
+  const resultR = Number(signal.outcome?.resultR);
+  const safeResultR = Number.isFinite(resultR)
+    ? resultR
+    : isWin
+      ? 1
+      : -1;
+  const closedAt =
+    signal.outcome?.checkedAt ||
+    new Date().toISOString();
+  const previousStreak = next.currentStreak;
+  const streakType = isWin ? "Win" : "Loss";
+
+  next.completed += 1;
+  next.wins += isWin ? 1 : 0;
+  next.losses += isWin ? 0 : 1;
+  next.grossProfitR += safeResultR > 0
+    ? safeResultR
+    : 0;
+  next.grossLossR += safeResultR < 0
+    ? Math.abs(safeResultR)
+    : 0;
+  next.netR += safeResultR;
+  next.equityR += safeResultR;
+  next.peakR = Math.max(
+    next.peakR,
+    next.equityR
+  );
+  next.maxDrawdownR = Math.max(
+    next.maxDrawdownR,
+    next.peakR - next.equityR
+  );
+  next.currentStreak = {
+    type: streakType,
+    count: previousStreak?.type === streakType
+      ? Number(previousStreak.count || 0) + 1
+      : 1
+  };
+  next.maxConsecutiveLosses = Math.max(
+    next.maxConsecutiveLosses,
+    next.currentStreak.type === "Loss"
+      ? next.currentStreak.count
+      : 0
+  );
+  next.startedAt = next.startedAt || closedAt;
+  next.updatedAt = closedAt;
+
+  return next;
+}
+
+async function recordCompletedTradeSignals(signals) {
+  if (!getRedisConfig()) {
+    return null;
+  }
+
+  const completedSignals = signals
+    .filter(isCompletedTradeSignal)
+    .sort((a, b) =>
+      new Date(a.outcome?.checkedAt || 0) -
+      new Date(b.outcome?.checkedAt || 0)
+    );
+
+  if (!completedSignals.length) {
+    return null;
+  }
+
+  try {
+    const storedStats = await runRedisCommand([
+      "GET",
+      COMPLETED_TRADE_STATS_KEY
+    ]);
+    let stats = createEmptyPersistentTradeStats();
+
+    if (typeof storedStats === "string") {
+      try {
+        stats = {
+          ...stats,
+          ...JSON.parse(storedStats)
+        };
+      } catch {
+        stats = createEmptyPersistentTradeStats();
+      }
+    }
+
+    let added = 0;
+
+    for (const signal of completedSignals) {
+      const wasAdded = Number(
+        await runRedisCommand([
+          "SADD",
+          COMPLETED_TRADE_IDS_KEY,
+          signal.tradeId
+        ])
+      );
+
+      if (wasAdded !== 1) {
+        continue;
+      }
+
+      stats = addTradeToPersistentStats(
+        stats,
+        signal
+      );
+      await runRedisCommand([
+        "LPUSH",
+        COMPLETED_TRADES_KEY,
+        JSON.stringify(signal)
+      ]);
+      added += 1;
+    }
+
+    if (added > 0) {
+      await runRedisCommand([
+        "LTRIM",
+        COMPLETED_TRADES_KEY,
+        "0",
+        String(COMPLETED_TRADES_DISPLAY_LIMIT - 1)
+      ]);
+      await runRedisCommand([
+        "SET",
+        COMPLETED_TRADE_STATS_KEY,
+        JSON.stringify(stats)
+      ]);
+    }
+
+    return stats;
+  } catch (error) {
+    console.error(
+      "Completed trade ledger write failed:",
+      error
+    );
+    return null;
+  }
+}
+
+async function readPersistentTradeData(history) {
+  if (!getRedisConfig()) {
+    return null;
+  }
+
+  try {
+    let storedStats = await runRedisCommand([
+      "GET",
+      COMPLETED_TRADE_STATS_KEY
+    ]);
+
+    if (typeof storedStats !== "string") {
+      const lockAcquired = await runRedisCommand([
+        "SET",
+        COMPLETED_TRADE_INIT_LOCK_KEY,
+        String(Date.now()),
+        "NX",
+        "EX",
+        "30"
+      ]);
+
+      if (lockAcquired === "OK") {
+        const historicalSignals = [];
+
+        for (const snapshot of history) {
+          if (Array.isArray(snapshot?.readySignals)) {
+            historicalSignals.push(
+              ...snapshot.readySignals
+                .filter(isCompletedTradeSignal)
+            );
+          }
+        }
+
+        await recordCompletedTradeSignals(
+          historicalSignals
+        );
+        await runRedisCommand([
+          "DEL",
+          COMPLETED_TRADE_INIT_LOCK_KEY
+        ]);
+      } else {
+        await new Promise(resolve =>
+          setTimeout(resolve, 500)
+        );
+      }
+
+      storedStats = await runRedisCommand([
+        "GET",
+        COMPLETED_TRADE_STATS_KEY
+      ]);
+    }
+
+    const recentRaw = await runRedisCommand([
+      "LRANGE",
+      COMPLETED_TRADES_KEY,
+      "0",
+      String(COMPLETED_TRADES_DISPLAY_LIMIT - 1)
+    ]);
+    const recentTrades = Array.isArray(recentRaw)
+      ? recentRaw
+          .map(value => {
+            try {
+              return JSON.parse(value);
+            } catch {
+              return null;
+            }
+          })
+          .filter(Boolean)
+      : [];
+
+    return {
+      stats: typeof storedStats === "string"
+        ? JSON.parse(storedStats)
+        : createEmptyPersistentTradeStats(),
+      recentTrades
+    };
+  } catch (error) {
+    console.error(
+      "Completed trade ledger read failed:",
+      error
+    );
+    return null;
   }
 }
 
@@ -6493,8 +6761,69 @@ export default async function handler(req, res) {
 if (mode === "statistics") {
   const history =
     await readRankingHistory();
-  const outcomes =
+  const rollingOutcomes =
     createOutcomeSummary(history);
+  const persistentTradeData =
+    await readPersistentTradeData(history);
+  const persistentStats =
+    persistentTradeData?.stats || null;
+  const persistentCompleted =
+    Number(persistentStats?.completed) || 0;
+  const persistentWins =
+    Number(persistentStats?.wins) || 0;
+  const persistentLosses =
+    Number(persistentStats?.losses) || 0;
+  const persistentNetR =
+    Number(persistentStats?.netR) || 0;
+  const persistentGrossProfitR =
+    Number(persistentStats?.grossProfitR) || 0;
+  const persistentGrossLossR =
+    Number(persistentStats?.grossLossR) || 0;
+  const outcomes = persistentCompleted > 0
+    ? {
+        ...rollingOutcomes,
+        activated:
+          rollingOutcomes.active + persistentCompleted,
+        completed: persistentCompleted,
+        wins: persistentWins,
+        losses: persistentLosses,
+        winRate: Math.round(
+          persistentWins / persistentCompleted * 1000
+        ) / 10,
+        lossRate: Math.round(
+          persistentLosses / persistentCompleted * 1000
+        ) / 10,
+        netR: Math.round(persistentNetR * 100) / 100,
+        averageR: Math.round(
+          persistentNetR / persistentCompleted * 100
+        ) / 100,
+        profitFactor: persistentGrossLossR > 0
+          ? Math.round(
+              persistentGrossProfitR /
+              persistentGrossLossR * 100
+            ) / 100
+          : null,
+        maxDrawdownR: Math.round(
+          Number(persistentStats.maxDrawdownR || 0) * 100
+        ) / 100,
+        currentStreak:
+          persistentStats.currentStreak || null,
+        maxConsecutiveLosses:
+          Number(
+            persistentStats.maxConsecutiveLosses
+          ) || 0,
+        startedAt: persistentStats.startedAt || null,
+        updatedAt: persistentStats.updatedAt || null
+      }
+    : {
+        ...rollingOutcomes,
+        lossRate: rollingOutcomes.completed > 0
+          ? Math.round(
+              rollingOutcomes.losses /
+              rollingOutcomes.completed * 1000
+            ) / 10
+          : null
+      };
   const responseHistory = history.map(
     (snapshot, index) => ({
       ...snapshot,
@@ -6519,6 +6848,10 @@ if (mode === "statistics") {
       GLOBAL_RANKING_HISTORY_LIMIT,
     count: history.length,
     outcomes,
+    completedTrades:
+      persistentTradeData?.recentTrades || [],
+    completedTradesLimit:
+      COMPLETED_TRADES_DISPLAY_LIMIT,
     history: responseHistory
   });
 }

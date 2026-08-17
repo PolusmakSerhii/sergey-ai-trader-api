@@ -10,9 +10,10 @@ npm test
 
 ## Redis backup
 
-The backup contains the current global ranking and the complete ranking history
-used for statistics and completed trades. Backup files are written with owner-only
-permissions and the `backups/` directory is excluded from Git.
+The backup contains the current global ranking, the rolling ranking history,
+persistent completed-trade statistics, the latest 20 completed trades, and the
+trade IDs used to prevent duplicate results. Backup files are written with
+owner-only permissions and the `backups/` directory is excluded from Git.
 
 Set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`, then run:
 
@@ -30,8 +31,9 @@ Do not commit backup files or Redis credentials.
 
 ## Redis restore
 
-Restore replaces the current ranking cache and ranking history. Create a fresh
-backup first, pause the QStash ranking schedule, and only then run:
+Restore replaces the current ranking cache, ranking history, and (for version 2
+backups) the persistent completed-trade data. Create a fresh backup first, pause
+the QStash ranking schedule, and only then run:
 
 ```bash
 npm run restore:redis -- /safe/path/sergey-ai-backup.json --confirm=RESTORE

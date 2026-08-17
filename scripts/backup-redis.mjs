@@ -3,6 +3,9 @@ import { dirname, resolve } from "node:path";
 
 const RANKING_KEY = "sergey-ai:global-ranking:v1";
 const HISTORY_KEY = "sergey-ai:global-ranking-history:v1";
+const COMPLETED_TRADES_KEY = "sergey-ai:completed-trades:v1";
+const COMPLETED_TRADE_IDS_KEY = "sergey-ai:completed-trade-ids:v1";
+const COMPLETED_TRADE_STATS_KEY = "sergey-ai:completed-trade-stats:v1";
 
 const redisUrl = String(
   process.env.UPSTASH_REDIS_REST_URL || ""
@@ -55,9 +58,18 @@ const outputPath = resolve(
     `backups/sergey-ai-redis-${safeTimestamp}.json`
 );
 
-const [rankingRaw, historyRaw] = await Promise.all([
+const [
+  rankingRaw,
+  historyRaw,
+  completedTradesRaw,
+  completedTradeIds,
+  completedTradeStatsRaw
+] = await Promise.all([
   redis(["GET", RANKING_KEY]),
-  redis(["LRANGE", HISTORY_KEY, "0", "-1"])
+  redis(["LRANGE", HISTORY_KEY, "0", "-1"]),
+  redis(["LRANGE", COMPLETED_TRADES_KEY, "0", "-1"]),
+  redis(["SMEMBERS", COMPLETED_TRADE_IDS_KEY]),
+  redis(["GET", COMPLETED_TRADE_STATS_KEY])
 ]);
 
 const history = Array.isArray(historyRaw)
@@ -68,14 +80,29 @@ const history = Array.isArray(historyRaw)
 
 const backup = {
   format: "sergey-ai-redis-backup",
-  version: 1,
+  version: 2,
   exportedAt: new Date().toISOString(),
   keys: {
     ranking: RANKING_KEY,
-    history: HISTORY_KEY
+    history: HISTORY_KEY,
+    completedTrades: COMPLETED_TRADES_KEY,
+    completedTradeIds: COMPLETED_TRADE_IDS_KEY,
+    completedTradeStats: COMPLETED_TRADE_STATS_KEY
   },
   ranking: parseJson(rankingRaw, "Ranking"),
-  history
+  history,
+  completedTrades: Array.isArray(completedTradesRaw)
+    ? completedTradesRaw.map((item, index) =>
+        parseJson(item, `Completed trade ${index}`)
+      )
+    : [],
+  completedTradeIds: Array.isArray(completedTradeIds)
+    ? completedTradeIds
+    : [],
+  completedTradeStats: parseJson(
+    completedTradeStatsRaw,
+    "Completed trade stats"
+  )
 };
 
 await mkdir(dirname(outputPath), { recursive: true });
@@ -87,3 +114,4 @@ await writeFile(
 
 console.log(`Backup written: ${outputPath}`);
 console.log(`History entries: ${history.length}`);
+console.log(`Completed trades: ${backup.completedTradeIds.length}`);

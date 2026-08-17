@@ -31,7 +31,7 @@ const backup = JSON.parse(
 
 if (
   backup?.format !== "sergey-ai-redis-backup" ||
-  backup?.version !== 1 ||
+  ![1, 2].includes(backup?.version) ||
   typeof backup?.keys?.ranking !== "string" ||
   typeof backup?.keys?.history !== "string" ||
   !backup?.ranking ||
@@ -39,6 +39,14 @@ if (
 ) {
   throw new Error("Backup file has an unsupported or invalid format");
 }
+
+const hasCompletedTradeData =
+  backup.version >= 2 &&
+  typeof backup?.keys?.completedTrades === "string" &&
+  typeof backup?.keys?.completedTradeIds === "string" &&
+  typeof backup?.keys?.completedTradeStats === "string" &&
+  Array.isArray(backup?.completedTrades) &&
+  Array.isArray(backup?.completedTradeIds);
 
 async function redis(command) {
   const response = await fetch(redisUrl, {
@@ -79,5 +87,39 @@ for (let start = 0; start < backup.history.length; start += 50) {
   }
 }
 
+if (hasCompletedTradeData) {
+  await redis(["DEL", backup.keys.completedTrades]);
+  await redis(["DEL", backup.keys.completedTradeIds]);
+
+  if (backup.completedTrades.length) {
+    await redis([
+      "RPUSH",
+      backup.keys.completedTrades,
+      ...backup.completedTrades.map(entry => JSON.stringify(entry))
+    ]);
+  }
+
+  if (backup.completedTradeIds.length) {
+    await redis([
+      "SADD",
+      backup.keys.completedTradeIds,
+      ...backup.completedTradeIds
+    ]);
+  }
+
+  if (backup.completedTradeStats) {
+    await redis([
+      "SET",
+      backup.keys.completedTradeStats,
+      JSON.stringify(backup.completedTradeStats)
+    ]);
+  } else {
+    await redis(["DEL", backup.keys.completedTradeStats]);
+  }
+}
+
 console.log("Redis restore completed.");
 console.log(`History entries: ${backup.history.length}`);
+if (hasCompletedTradeData) {
+  console.log(`Completed trades: ${backup.completedTradeIds.length}`);
+}
