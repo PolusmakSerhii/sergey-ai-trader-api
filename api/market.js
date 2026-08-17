@@ -7841,6 +7841,9 @@ const ranked =
       
         confidence:
           item.confidence ?? 0,
+
+        recommendationConfidence:
+          item.recommendationConfidence ?? 0,
       
         direction:
           item.direction || "Neutral",
