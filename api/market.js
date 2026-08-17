@@ -3691,6 +3691,11 @@ async function fetchScannerSymbol(
           ? confidence.score
           : 0,
 
+      recommendationConfidence:
+        typeof recommendation.confidence === "number"
+          ? recommendation.confidence
+          : 0,
+
       grade:
         recommendation.grade ||
         aiAssessment.grade ||
