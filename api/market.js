@@ -7610,6 +7610,8 @@ const totalPages =
     totalAvailableSymbols:
       allScannerSymbols.length,
 
+    totalMatchedSymbols: 0,
+
     search: scannerSearch,
     matched: 0,
 
@@ -8253,6 +8255,9 @@ const marketSummary = {
 
    totalAvailableSymbols:
      allScannerSymbols.length,
+
+   totalMatchedSymbols:
+     filteredScannerSymbols.length,
    sorting: {
     field: scannerSort,
     direction: "descending"
