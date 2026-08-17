@@ -331,7 +331,7 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           model: CHAT_MODEL,
           instructions: [
-            "Ты AI-ассистент платформы Sergey AI Trader PRO.",
+            "Ты AI-ассистент платформы Crypto AI Trader PRO.",
             "Отвечай на русском языке кратко и понятно.",
             "Ответ должен занимать не более 6 коротких абзацев и примерно 110 слов.",
             "Структура ответа: короткий вывод; максимум 3 главные причины; одна строка с Direction, Action, Confidence, Score и Readiness; одна строка с Entry Zone, Stop Loss, Take Profit и Risk/Reward, только если эти данные есть.",

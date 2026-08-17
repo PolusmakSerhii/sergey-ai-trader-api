@@ -7600,7 +7600,7 @@ const totalPages =
   return res.status(200).json({
     ok: true,
     version: "1.0",
-    source: "Sergey AI Trader Probability AI",
+    source: "Crypto AI Trader Probability AI",
 
     scanned: 0,
     page: 1,
@@ -8243,7 +8243,7 @@ const marketSummary = {
     version: "1.0",
 
     source:
-      "Sergey AI Trader Probability AI",
+      "Crypto AI Trader Probability AI",
 
    scanned:
      scannerSymbols.length,

@@ -1,6 +1,6 @@
-# Sergey AI Trader PRO API
+# Crypto AI Trader PRO API
 
-Production backend for the Sergey AI Trader PRO market scanner. It reads OKX
+Production backend for the Crypto AI Trader PRO market scanner. It reads OKX
 market data, calculates probability and opportunity metrics, builds the global
 ranking, verifies trade outcomes with OKX one-minute candles, and persists the
 ranking and cumulative result statistics in Upstash Redis.
