@@ -6044,7 +6044,18 @@ async function createRankingHistoryEntry(
           direction,
           action: item.action || "Wait",
           opportunityScore:
-            item.opportunityScore || 0,
+            previousWasActivated
+              ? previousSignal?.opportunityScore || 0
+              : item.opportunityScore || 0,
+          opportunityGrade:
+            previousWasActivated
+              ? previousSignal?.opportunityGrade ||
+                (Number(previousSignal?.opportunityScore) >= 85
+                  ? "A+"
+                  : previousSignal?.grade || "D")
+              : item.opportunityGrade ||
+                item.grade ||
+                "D",
           confidence: item.confidence || 0,
           grade:
             item.grade ||
@@ -6221,6 +6232,9 @@ function createEmptyPersistentTradeStats() {
     completed: 0,
     wins: 0,
     losses: 0,
+    aPlusCompleted: 0,
+    aPlusWins: 0,
+    aPlusLosses: 0,
     grossProfitR: 0,
     grossLossR: 0,
     netR: 0,
@@ -6239,6 +6253,11 @@ function isCompletedTradeSignal(signal) {
 
   return Boolean(signal?.tradeId) &&
     (status === "TP1Hit" || status === "Stopped");
+}
+
+function isAPlusTradeSignal(signal) {
+  return signal?.opportunityGrade === "A+" ||
+    Number(signal?.opportunityScore) >= 85;
 }
 
 function addTradeToPersistentStats(stats, signal) {
@@ -6262,6 +6281,13 @@ function addTradeToPersistentStats(stats, signal) {
   next.completed += 1;
   next.wins += isWin ? 1 : 0;
   next.losses += isWin ? 0 : 1;
+
+  if (isAPlusTradeSignal(signal)) {
+    next.aPlusCompleted += 1;
+    next.aPlusWins += isWin ? 1 : 0;
+    next.aPlusLosses += isWin ? 0 : 1;
+  }
+
   next.grossProfitR += safeResultR > 0
     ? safeResultR
     : 0;
@@ -6451,10 +6477,36 @@ async function readPersistentTradeData(history) {
           .filter(Boolean)
       : [];
 
+    let parsedStats = typeof storedStats === "string"
+      ? JSON.parse(storedStats)
+      : createEmptyPersistentTradeStats();
+
+    if (!Object.hasOwn(parsedStats, "aPlusCompleted")) {
+      const aPlusTrades = recentTrades.filter(
+        isAPlusTradeSignal
+      );
+      parsedStats = {
+        ...parsedStats,
+        aPlusCompleted: aPlusTrades.length,
+        aPlusWins: aPlusTrades.filter(
+          signal => signal.outcome?.status === "TP1Hit"
+        ).length,
+        aPlusLosses: aPlusTrades.filter(
+          signal => signal.outcome?.status === "Stopped"
+        ).length
+      };
+      await runRedisCommand([
+        "SET",
+        COMPLETED_TRADE_STATS_KEY,
+        JSON.stringify(parsedStats)
+      ]);
+    }
+
     return {
-      stats: typeof storedStats === "string"
-        ? JSON.parse(storedStats)
-        : createEmptyPersistentTradeStats(),
+      stats: {
+        ...createEmptyPersistentTradeStats(),
+        ...parsedStats
+      },
       recentTrades
     };
   } catch (error) {
@@ -6779,6 +6831,27 @@ if (mode === "statistics") {
     Number(persistentStats?.grossProfitR) || 0;
   const persistentGrossLossR =
     Number(persistentStats?.grossLossR) || 0;
+  const aPlusCompleted =
+    Number(persistentStats?.aPlusCompleted) || 0;
+  const aPlusWins =
+    Number(persistentStats?.aPlusWins) || 0;
+  const aPlusLosses =
+    Number(persistentStats?.aPlusLosses) || 0;
+  const aPlusOutcomes = {
+    completed: aPlusCompleted,
+    wins: aPlusWins,
+    losses: aPlusLosses,
+    winRate: aPlusCompleted > 0
+      ? Math.round(
+          aPlusWins / aPlusCompleted * 1000
+        ) / 10
+      : null,
+    lossRate: aPlusCompleted > 0
+      ? Math.round(
+          aPlusLosses / aPlusCompleted * 1000
+        ) / 10
+      : null
+  };
   const outcomes = persistentCompleted > 0
     ? {
         ...rollingOutcomes,
@@ -6813,7 +6886,8 @@ if (mode === "statistics") {
             persistentStats.maxConsecutiveLosses
           ) || 0,
         startedAt: persistentStats.startedAt || null,
-        updatedAt: persistentStats.updatedAt || null
+        updatedAt: persistentStats.updatedAt || null,
+        aPlus: aPlusOutcomes
       }
     : {
         ...rollingOutcomes,
@@ -6822,7 +6896,8 @@ if (mode === "statistics") {
               rollingOutcomes.losses /
               rollingOutcomes.completed * 1000
             ) / 10
-          : null
+          : null,
+        aPlus: aPlusOutcomes
       };
   const responseHistory = history.map(
     (snapshot, index) => ({

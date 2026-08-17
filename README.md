@@ -14,6 +14,8 @@ The backup contains the current global ranking, the rolling ranking history,
 persistent completed-trade statistics, the latest 20 completed trades, and the
 trade IDs used to prevent duplicate results. Backup files are written with
 owner-only permissions and the `backups/` directory is excluded from Git.
+Persistent statistics include overall results and a separate A+ result summary
+based on the opportunity grade fixed when the trade enters its Entry Zone.
 
 Set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`, then run:
 
