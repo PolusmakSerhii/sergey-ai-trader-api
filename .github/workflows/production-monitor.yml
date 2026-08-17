@@ -36,6 +36,8 @@ jobs:
             .resultsFailed == 0 and
             .resultsCollected == .totalAvailableSymbols and
             .resultsCollected >= 400 and
+            (.globalRanking | length) == .resultsCollected and
+            (all(.globalRanking[]; (.recommendationConfidence | type) == "number")) and
             .performance.durationMs < 300000 and
             ((now - (.generatedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) < 1200)
           ' "$response_file" > /dev/null

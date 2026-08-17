@@ -22,6 +22,22 @@ for (const name of apiFiles) {
   assert.match(source, /export\s+default/, `${name} must export a default handler`);
 }
 
+const marketSource = await readFile(
+  new URL("../api/market.js", import.meta.url),
+  "utf8"
+);
+
+assert.match(
+  marketSource,
+  /totalMatchedSymbols:\s*filteredScannerSymbols\.length/,
+  "Scanner responses must expose the total matched symbol count"
+);
+assert.match(
+  marketSource,
+  /recommendationConfidence:\s*item\.recommendationConfidence\s*\?\?\s*0/,
+  "Global ranking batches must preserve recommendation confidence"
+);
+
 const scriptFiles = (await readdir(scriptsDirectory))
   .filter((name) => name.endsWith(".mjs"))
   .sort();
