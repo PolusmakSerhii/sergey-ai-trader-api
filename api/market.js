@@ -7980,6 +7980,7 @@ const okxDailyOhlc =
    
 let coin = null;
 let marketDataSource = null;
+let coinGeckoError = null;
 
 /*
  * Для известных монет используем CoinGecko:
@@ -7992,24 +7993,31 @@ if (coinGeckoId) {
     `&ids=${encodeURIComponent(coinGeckoId)}` +
     `&price_change_percentage=24h`;
 
-  const response = await fetch(url);
+  try {
+    const response = await fetch(url);
 
-  const data = await response
-    .json()
-    .catch(() => null);
+    const data = await response
+      .json()
+      .catch(() => null);
 
-  if (
-    !response.ok ||
-    !Array.isArray(data) ||
-    data.length === 0
-  ) {
-    throw new Error(
-      `CoinGecko request failed for ${symbol}: ${response.status}`
-    );
+    if (
+      !response.ok ||
+      !Array.isArray(data) ||
+      data.length === 0
+    ) {
+      throw new Error(
+        `CoinGecko request failed for ${symbol}: ${response.status}`
+      );
+    }
+
+    coin = data[0];
+    marketDataSource = "CoinGecko";
+  } catch (error) {
+    coinGeckoError =
+      error instanceof Error
+        ? error.message
+        : `CoinGecko request failed for ${symbol}`;
   }
-
-  coin = data[0];
-  marketDataSource = "CoinGecko";
 }
 
 /*
@@ -8276,7 +8284,8 @@ const marketSummary =
       source: "CoinGecko + OKX + CoinGlass V4",
       
      dataErrors: {
-        coinGlass: coinGlass.errors
+        coinGlass: coinGlass.errors,
+        coinGecko: coinGeckoError
       },
       
       symbol,
