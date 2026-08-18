@@ -38,6 +38,15 @@ assert.match(
   "Global ranking batches must preserve recommendation confidence"
 );
 
+const newsSource = await readFile(
+  new URL("../api/news.js", import.meta.url),
+  "utf8"
+);
+
+assert.match(newsSource, /NEWS_CACHE_TTL_SECONDS\s*=\s*10\s*\*\s*60/, "News cache must limit source requests");
+assert.match(newsSource, /affectsTradingScore:\s*false/, "News must not change trading score before validation");
+assert.match(newsSource, /sentiment:\s*"Neutral"/, "News failure must return a neutral fallback");
+
 const scriptFiles = (await readdir(scriptsDirectory))
   .filter((name) => name.endsWith(".mjs"))
   .sort();

@@ -1,0 +1,204 @@
+const NEWS_CACHE_KEY = "crypto-ai:news-context:v1";
+const NEWS_CACHE_TTL_SECONDS = 10 * 60;
+const NEWS_LIMIT = 30;
+
+const BULLISH_TERMS = [
+  "adoption", "approval", "approved", "breakout", "bullish",
+  "growth", "launch", "partnership", "record high", "rally",
+  "surge", "upgrade"
+];
+
+const BEARISH_TERMS = [
+  "attack", "ban", "bearish", "breach", "crash", "decline",
+  "exploit", "fraud", "hack", "lawsuit", "liquidation",
+  "outflow", "sell-off"
+];
+
+const HIGH_IMPACT_TERMS = [
+  "bitcoin", "ethereum", "etf", "federal reserve", "fed",
+  "inflation", "regulation", "sec", "stablecoin"
+];
+
+function getRedisConfig() {
+  const url = String(process.env.UPSTASH_REDIS_REST_URL || "")
+    .replace(/\/$/, "");
+  const token = String(process.env.UPSTASH_REDIS_REST_TOKEN || "");
+  return url && token ? { url, token } : null;
+}
+
+async function runRedisCommand(command) {
+  const config = getRedisConfig();
+  if (!config) return null;
+
+  const response = await fetch(config.url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(command)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Redis command failed: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  return payload?.result ?? null;
+}
+
+async function readNewsCache() {
+  try {
+    const cached = await runRedisCommand(["GET", NEWS_CACHE_KEY]);
+    return typeof cached === "string" ? JSON.parse(cached) : null;
+  } catch (error) {
+    console.error("News cache read failed:", error);
+    return null;
+  }
+}
+
+async function writeNewsCache(context) {
+  if (!getRedisConfig()) return false;
+
+  try {
+    await runRedisCommand([
+      "SET",
+      NEWS_CACHE_KEY,
+      JSON.stringify(context),
+      "EX",
+      String(NEWS_CACHE_TTL_SECONDS)
+    ]);
+    return true;
+  } catch (error) {
+    console.error("News cache write failed:", error);
+    return false;
+  }
+}
+
+function countTerms(text, terms) {
+  return terms.reduce(
+    (count, term) => count + (text.includes(term) ? 1 : 0),
+    0
+  );
+}
+
+function sanitizeArticle(article) {
+  const title = String(article?.title || "").trim();
+  const body = String(article?.body || "").trim();
+  const text = `${title} ${body}`.toLowerCase();
+  const bullish = countTerms(text, BULLISH_TERMS);
+  const bearish = countTerms(text, BEARISH_TERMS);
+  const score = Math.max(-3, Math.min(3, bullish - bearish));
+
+  return {
+    id: String(article?.id || article?.guid || title),
+    title,
+    url: String(article?.url || ""),
+    source: String(article?.source_info?.name || article?.source || "Unknown"),
+    publishedAt: Number.isFinite(Number(article?.published_on))
+      ? new Date(Number(article.published_on) * 1000).toISOString()
+      : null,
+    score,
+    sentiment: score > 0 ? "Bullish" : score < 0 ? "Bearish" : "Neutral",
+    highImpact: HIGH_IMPACT_TERMS.some(term => text.includes(term))
+  };
+}
+
+function createNewsContext(rawArticles) {
+  const articles = rawArticles
+    .map(sanitizeArticle)
+    .filter(article => article.title)
+    .slice(0, NEWS_LIMIT);
+  const totalScore = articles.reduce((sum, article) => sum + article.score, 0);
+  const normalizedScore = articles.length > 0
+    ? Math.round((totalScore / (articles.length * 3)) * 100)
+    : 0;
+  const sentiment = normalizedScore >= 12
+    ? "Bullish"
+    : normalizedScore <= -12
+      ? "Bearish"
+      : "Neutral";
+
+  return {
+    ok: true,
+    version: "1.0",
+    source: "CryptoCompare News",
+    generatedAt: new Date().toISOString(),
+    sentiment,
+    score: normalizedScore,
+    articleCount: articles.length,
+    highImpactCount: articles.filter(article => article.highImpact).length,
+    informationalOnly: true,
+    affectsTradingScore: false,
+    articles: articles.slice(0, 8)
+  };
+}
+
+async function fetchNewsContext() {
+  const headers = { Accept: "application/json" };
+  const apiKey = String(process.env.CRYPTOCOMPARE_API_KEY || "").trim();
+
+  if (apiKey) {
+    headers.authorization = `Apikey ${apiKey}`;
+  }
+
+  const response = await fetch(
+    "https://min-api.cryptocompare.com/data/v2/news/?lang=EN",
+    { headers }
+  );
+
+  if (!response.ok) {
+    throw new Error(`News source failed: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const articles = Array.isArray(payload?.Data) ? payload.Data : [];
+
+  if (articles.length === 0) {
+    throw new Error("News source returned no articles");
+  }
+
+  return createNewsContext(articles);
+}
+
+export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "GET") {
+    return res.status(405).json({ ok: false, error: "Method not allowed" });
+  }
+
+  const cached = await readNewsCache();
+  if (cached) {
+    return res.status(200).json({ ...cached, cache: { status: "hit" } });
+  }
+
+  try {
+    const context = await fetchNewsContext();
+    const cacheSaved = await writeNewsCache(context);
+    return res.status(200).json({
+      ...context,
+      cache: { status: cacheSaved ? "stored" : "unavailable" }
+    });
+  } catch (error) {
+    console.error("News context failed:", error);
+    return res.status(200).json({
+      ok: false,
+      version: "1.0",
+      source: "Unavailable",
+      generatedAt: new Date().toISOString(),
+      sentiment: "Neutral",
+      score: 0,
+      articleCount: 0,
+      highImpactCount: 0,
+      informationalOnly: true,
+      affectsTradingScore: false,
+      articles: [],
+      error: "News context temporarily unavailable",
+      cache: { status: "unavailable" }
+    });
+  }
+}
