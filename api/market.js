@@ -3035,8 +3035,8 @@ if (tradePlan.validTrade) {
 
   if (grade === "A+") {
     positionSize = {
-      riskPercent: 2,
-      leverage: "5x-10x"
+      riskPercent: 1,
+      leverage: "3x-5x"
     };
   }
 
@@ -5760,12 +5760,9 @@ async function createRankingHistoryEntry(
           ) / confidenceValues.length
         )
       : 0;
-  const readyItems =
-    ranking.filter(
-      item =>
-        item.tradeAllowed === true &&
-        item.tradeReadiness?.ready === true
-    );
+  const readyItems = ranking.filter(
+    isConfirmedAPlusTrade
+  );
   const previousSignals =
     Array.isArray(previousEntry?.readySignals)
       ? previousEntry.readySignals
@@ -6042,7 +6039,9 @@ async function createRankingHistoryEntry(
           symbol: item.symbol,
           price: currentPrice,
           direction,
-          action: item.action || "Wait",
+          action: previousWasActivated
+            ? previousSignal?.action || "Wait"
+            : item.action || "Wait",
           opportunityScore:
             previousWasActivated
               ? previousSignal?.opportunityScore || 0
@@ -6056,14 +6055,22 @@ async function createRankingHistoryEntry(
               : item.opportunityGrade ||
                 item.grade ||
                 "D",
-          confidence: item.confidence || 0,
+          confidence: previousWasActivated
+            ? previousSignal?.confidence || 0
+            : item.confidence || 0,
           grade:
-            item.grade ||
-            item.opportunityGrade ||
-            "D",
+            previousWasActivated
+              ? previousSignal?.grade ||
+                previousSignal?.opportunityGrade ||
+                "D"
+              : item.grade ||
+                item.opportunityGrade ||
+                "D",
           riskReward:
-            typeof item.riskReward === "number"
-              ? item.riskReward
+            previousWasActivated
+              ? previousSignal?.riskReward ?? null
+              : typeof item.riskReward === "number"
+                ? item.riskReward
               : null,
           entryZone: item.entryZone || null,
           stopLoss: item.stopLoss ?? null,
@@ -6232,9 +6239,6 @@ function createEmptyPersistentTradeStats() {
     completed: 0,
     wins: 0,
     losses: 0,
-    aPlusCompleted: 0,
-    aPlusWins: 0,
-    aPlusLosses: 0,
     grossProfitR: 0,
     grossLossR: 0,
     netR: 0,
@@ -6255,9 +6259,41 @@ function isCompletedTradeSignal(signal) {
     (status === "TP1Hit" || status === "Stopped");
 }
 
-function isAPlusTradeSignal(signal) {
-  return signal?.opportunityGrade === "A+" ||
-    Number(signal?.opportunityScore) >= 85;
+function isConfirmedAPlusTrade(signal) {
+  const entryFrom = Number(signal?.entryZone?.from);
+  const entryTo = Number(signal?.entryZone?.to);
+  const stopLoss = Number(signal?.stopLoss);
+  const takeProfit1 = Number(signal?.takeProfit1);
+  const action = String(signal?.action || "");
+
+  return signal?.tradeAllowed === true &&
+    signal?.tradeReadiness?.ready === true &&
+    (signal?.opportunityGrade || signal?.grade) === "A+" &&
+    Number(signal?.opportunityScore) >= 85 &&
+    Number(signal?.confidence) >= 85 &&
+    Number(signal?.riskReward) >= 2 &&
+    (action === "Strong Buy" || action === "Strong Sell") &&
+    Number.isFinite(entryFrom) &&
+    entryFrom > 0 &&
+    Number.isFinite(entryTo) &&
+    entryTo > 0 &&
+    Number.isFinite(stopLoss) &&
+    stopLoss > 0 &&
+    Number.isFinite(takeProfit1);
+}
+
+function isConfirmedAPlusTradeSignal(signal) {
+  const action = String(signal?.action || "");
+  const initialPlan = signal?.initialPlan || {};
+
+  return signal?.opportunityGrade === "A+" &&
+    Number(signal?.opportunityScore) >= 85 &&
+    Number(signal?.confidence) >= 85 &&
+    Number(signal?.riskReward) >= 2 &&
+    (action === "Strong Buy" || action === "Strong Sell") &&
+    Number(initialPlan.entryPrice) > 0 &&
+    Number(initialPlan.stopLoss) > 0 &&
+    Number(initialPlan.takeProfit1) > 0;
 }
 
 function addTradeToPersistentStats(stats, signal) {
@@ -6281,12 +6317,6 @@ function addTradeToPersistentStats(stats, signal) {
   next.completed += 1;
   next.wins += isWin ? 1 : 0;
   next.losses += isWin ? 0 : 1;
-
-  if (isAPlusTradeSignal(signal)) {
-    next.aPlusCompleted += 1;
-    next.aPlusWins += isWin ? 1 : 0;
-    next.aPlusLosses += isWin ? 0 : 1;
-  }
 
   next.grossProfitR += safeResultR > 0
     ? safeResultR
@@ -6328,7 +6358,10 @@ async function recordCompletedTradeSignals(signals) {
   }
 
   const completedSignals = signals
-    .filter(isCompletedTradeSignal)
+    .filter(signal =>
+      isCompletedTradeSignal(signal) &&
+      isConfirmedAPlusTradeSignal(signal)
+    )
     .sort((a, b) =>
       new Date(a.outcome?.checkedAt || 0) -
       new Date(b.outcome?.checkedAt || 0)
@@ -6481,20 +6514,24 @@ async function readPersistentTradeData(history) {
       ? JSON.parse(storedStats)
       : createEmptyPersistentTradeStats();
 
-    if (!Object.hasOwn(parsedStats, "aPlusCompleted")) {
-      const aPlusTrades = recentTrades.filter(
-        isAPlusTradeSignal
-      );
-      parsedStats = {
-        ...parsedStats,
-        aPlusCompleted: aPlusTrades.length,
-        aPlusWins: aPlusTrades.filter(
-          signal => signal.outcome?.status === "TP1Hit"
-        ).length,
-        aPlusLosses: aPlusTrades.filter(
-          signal => signal.outcome?.status === "Stopped"
-        ).length
-      };
+    const statisticsScope = "confirmed-a-plus-v1";
+
+    if (parsedStats.scope !== statisticsScope) {
+      parsedStats = recentTrades
+        .filter(signal =>
+          isCompletedTradeSignal(signal) &&
+          isConfirmedAPlusTradeSignal(signal)
+        )
+        .sort((a, b) =>
+          new Date(a.outcome?.checkedAt || 0) -
+          new Date(b.outcome?.checkedAt || 0)
+        )
+        .reduce(
+          (stats, signal) =>
+            addTradeToPersistentStats(stats, signal),
+          createEmptyPersistentTradeStats()
+        );
+      parsedStats.scope = statisticsScope;
       await runRedisCommand([
         "SET",
         COMPLETED_TRADE_STATS_KEY,
@@ -6507,7 +6544,9 @@ async function readPersistentTradeData(history) {
         ...createEmptyPersistentTradeStats(),
         ...parsedStats
       },
-      recentTrades
+      recentTrades: recentTrades.filter(
+        isConfirmedAPlusTradeSignal
+      )
     };
   } catch (error) {
     console.error(
@@ -6813,8 +6852,16 @@ export default async function handler(req, res) {
 if (mode === "statistics") {
   const history =
     await readRankingHistory();
+  const confirmedHistory = history.map(snapshot => ({
+    ...snapshot,
+    readySignals: Array.isArray(snapshot?.readySignals)
+      ? snapshot.readySignals.filter(
+          isConfirmedAPlusTradeSignal
+        )
+      : []
+  }));
   const rollingOutcomes =
-    createOutcomeSummary(history);
+    createOutcomeSummary(confirmedHistory);
   const persistentTradeData =
     await readPersistentTradeData(history);
   const persistentStats =
@@ -6831,27 +6878,6 @@ if (mode === "statistics") {
     Number(persistentStats?.grossProfitR) || 0;
   const persistentGrossLossR =
     Number(persistentStats?.grossLossR) || 0;
-  const aPlusCompleted =
-    Number(persistentStats?.aPlusCompleted) || 0;
-  const aPlusWins =
-    Number(persistentStats?.aPlusWins) || 0;
-  const aPlusLosses =
-    Number(persistentStats?.aPlusLosses) || 0;
-  const aPlusOutcomes = {
-    completed: aPlusCompleted,
-    wins: aPlusWins,
-    losses: aPlusLosses,
-    winRate: aPlusCompleted > 0
-      ? Math.round(
-          aPlusWins / aPlusCompleted * 1000
-        ) / 10
-      : null,
-    lossRate: aPlusCompleted > 0
-      ? Math.round(
-          aPlusLosses / aPlusCompleted * 1000
-        ) / 10
-      : null
-  };
   const outcomes = persistentCompleted > 0
     ? {
         ...rollingOutcomes,
@@ -6887,7 +6913,7 @@ if (mode === "statistics") {
           ) || 0,
         startedAt: persistentStats.startedAt || null,
         updatedAt: persistentStats.updatedAt || null,
-        aPlus: aPlusOutcomes
+        scope: "Confirmed A+"
       }
     : {
         ...rollingOutcomes,
@@ -6897,17 +6923,20 @@ if (mode === "statistics") {
               rollingOutcomes.completed * 1000
             ) / 10
           : null,
-        aPlus: aPlusOutcomes
+        scope: "Confirmed A+"
       };
   const responseHistory = history.map(
     (snapshot, index) => ({
       ...snapshot,
       readySignals: index === 0
-        ? snapshot.readySignals || []
+        ? (snapshot.readySignals || []).filter(
+            isConfirmedAPlusTradeSignal
+          )
         : Array.isArray(snapshot.readySignals)
           ? snapshot.readySignals.filter(signal =>
-              signal?.outcome?.status === "TP1Hit" ||
-              signal?.outcome?.status === "Stopped"
+              isConfirmedAPlusTradeSignal(signal) &&
+              (signal?.outcome?.status === "TP1Hit" ||
+                signal?.outcome?.status === "Stopped")
             )
           : []
     })
