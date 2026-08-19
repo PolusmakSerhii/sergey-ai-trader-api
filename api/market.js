@@ -3042,8 +3042,8 @@ if (tradePlan.validTrade) {
 
   else if (grade === "A") {
     positionSize = {
-      riskPercent: 1.5,
-      leverage: "3x-8x"
+      riskPercent: 1,
+      leverage: "3x-5x"
     };
   }
 
