@@ -1,6 +1,16 @@
-const NEWS_CACHE_KEY = "crypto-ai:news-context:v1";
+const NEWS_CACHE_KEY = "crypto-ai:news-context:v2";
 const NEWS_CACHE_TTL_SECONDS = 10 * 60;
 const NEWS_LIMIT = 30;
+const RSS_SOURCES = [
+  {
+    name: "CoinDesk",
+    url: "https://www.coindesk.com/arc/outboundfeeds/rss/"
+  },
+  {
+    name: "Cointelegraph",
+    url: "https://cointelegraph.com/rss"
+  }
+];
 
 const BULLISH_TERMS = [
   "adoption", "approval", "approved", "breakout", "bullish",
@@ -82,6 +92,46 @@ function countTerms(text, terms) {
   );
 }
 
+function decodeXml(value) {
+  return String(value || "")
+    .replace(/^<!\[CDATA\[|\]\]>$/g, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)))
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;|&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function readXmlTag(item, tag) {
+  const match = item.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "i"));
+  return decodeXml(match?.[1]);
+}
+
+function parseRss(xml, source) {
+  return [...String(xml || "").matchAll(/<item(?:\s[^>]*)?>([\s\S]*?)<\/item>/gi)]
+    .map((match, index) => {
+      const item = match[1];
+      const title = readXmlTag(item, "title");
+      const url = readXmlTag(item, "link") || readXmlTag(item, "guid");
+      const publishedAt = readXmlTag(item, "pubDate") || readXmlTag(item, "dc:date");
+
+      return {
+        id: `${source}:${url || title || index}`,
+        title,
+        body: readXmlTag(item, "description"),
+        url,
+        source,
+        publishedAt
+      };
+    })
+    .filter(article => article.title);
+}
+
 function sanitizeArticle(article) {
   const title = String(article?.title || "").trim();
   const body = String(article?.body || "").trim();
@@ -97,7 +147,9 @@ function sanitizeArticle(article) {
     source: String(article?.source_info?.name || article?.source || "Unknown"),
     publishedAt: Number.isFinite(Number(article?.published_on))
       ? new Date(Number(article.published_on) * 1000).toISOString()
-      : null,
+      : Number.isFinite(Date.parse(article?.publishedAt))
+        ? new Date(article.publishedAt).toISOString()
+        : null,
     score,
     sentiment: score > 0 ? "Bullish" : score < 0 ? "Bearish" : "Neutral",
     highImpact: HIGH_IMPACT_TERMS.some(term => text.includes(term))
@@ -105,9 +157,17 @@ function sanitizeArticle(article) {
 }
 
 function createNewsContext(rawArticles) {
+  const seen = new Set();
   const articles = rawArticles
     .map(sanitizeArticle)
     .filter(article => article.title)
+    .filter(article => {
+      const key = (article.url || article.title).toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => Date.parse(b.publishedAt || 0) - Date.parse(a.publishedAt || 0))
     .slice(0, NEWS_LIMIT);
   const totalScore = articles.reduce((sum, article) => sum + article.score, 0);
   const normalizedScore = articles.length > 0
@@ -122,7 +182,7 @@ function createNewsContext(rawArticles) {
   return {
     ok: true,
     version: "1.0",
-    source: "CryptoCompare News",
+    source: [...new Set(articles.map(article => article.source))].join(" + ") || "Unavailable",
     generatedAt: new Date().toISOString(),
     sentiment,
     score: normalizedScore,
@@ -134,13 +194,12 @@ function createNewsContext(rawArticles) {
   };
 }
 
-async function fetchNewsContext() {
+async function fetchCryptoCompareNews() {
   const headers = { Accept: "application/json" };
   const apiKey = String(process.env.CRYPTOCOMPARE_API_KEY || "").trim();
 
-  if (apiKey) {
-    headers.authorization = `Apikey ${apiKey}`;
-  }
+  if (!apiKey) return [];
+  headers.authorization = `Apikey ${apiKey}`;
 
   const response = await fetch(
     "https://min-api.cryptocompare.com/data/v2/news/?lang=EN",
@@ -156,6 +215,42 @@ async function fetchNewsContext() {
 
   if (articles.length === 0) {
     throw new Error("News source returned no articles");
+  }
+
+  return articles;
+}
+
+async function fetchRssNews(source) {
+  const response = await fetch(source.url, {
+    headers: {
+      Accept: "application/rss+xml, application/xml, text/xml",
+      "User-Agent": "PhoenixAI-News/1.0"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`${source.name} RSS failed: ${response.status}`);
+  }
+
+  const articles = parseRss(await response.text(), source.name);
+  if (articles.length === 0) {
+    throw new Error(`${source.name} RSS returned no articles`);
+  }
+  return articles;
+}
+
+async function fetchNewsContext() {
+  const sources = [
+    fetchCryptoCompareNews(),
+    ...RSS_SOURCES.map(fetchRssNews)
+  ];
+  const settled = await Promise.allSettled(sources);
+  const articles = settled.flatMap(result =>
+    result.status === "fulfilled" ? result.value : []
+  );
+
+  if (articles.length === 0) {
+    throw new Error("All news sources failed");
   }
 
   return createNewsContext(articles);
