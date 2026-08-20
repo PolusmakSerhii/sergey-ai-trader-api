@@ -1,32 +1,38 @@
-const NEWS_CACHE_KEY = "crypto-ai:news-context:v2";
+const NEWS_CACHE_KEY = "crypto-ai:news-context:v3";
 const NEWS_CACHE_TTL_SECONDS = 10 * 60;
 const NEWS_LIMIT = 30;
 const RSS_SOURCES = [
   {
-    name: "CoinDesk",
-    url: "https://www.coindesk.com/arc/outboundfeeds/rss/"
+    name: "ForkLog",
+    url: "https://forklog.com/feed/"
   },
   {
-    name: "Cointelegraph",
-    url: "https://cointelegraph.com/rss"
+    name: "Bits.media",
+    url: "https://bits.media/rss2/"
   }
 ];
 
 const BULLISH_TERMS = [
   "adoption", "approval", "approved", "breakout", "bullish",
   "growth", "launch", "partnership", "record high", "rally",
-  "surge", "upgrade"
+  "surge", "upgrade", "одобрение", "одобрил", "принятие",
+  "рост", "запуск", "партнерство", "рекорд", "ралли",
+  "прорыв", "обновление", "восстановление"
 ];
 
 const BEARISH_TERMS = [
   "attack", "ban", "bearish", "breach", "crash", "decline",
   "exploit", "fraud", "hack", "lawsuit", "liquidation",
-  "outflow", "sell-off"
+  "outflow", "sell-off", "атака", "запрет", "взлом",
+  "мошенничество", "иск", "ликвидация", "отток", "падение",
+  "обвал", "уязвимость", "эксплойт"
 ];
 
 const HIGH_IMPACT_TERMS = [
   "bitcoin", "ethereum", "etf", "federal reserve", "fed",
-  "inflation", "regulation", "sec", "stablecoin"
+  "inflation", "regulation", "sec", "stablecoin", "биткоин",
+  "эфириум", "инфляция", "регулирование", "стейблкоин",
+  "центробанк", "фрс"
 ];
 
 function getRedisConfig() {
@@ -194,32 +200,6 @@ function createNewsContext(rawArticles) {
   };
 }
 
-async function fetchCryptoCompareNews() {
-  const headers = { Accept: "application/json" };
-  const apiKey = String(process.env.CRYPTOCOMPARE_API_KEY || "").trim();
-
-  if (!apiKey) return [];
-  headers.authorization = `Apikey ${apiKey}`;
-
-  const response = await fetch(
-    "https://min-api.cryptocompare.com/data/v2/news/?lang=EN",
-    { headers }
-  );
-
-  if (!response.ok) {
-    throw new Error(`News source failed: ${response.status}`);
-  }
-
-  const payload = await response.json();
-  const articles = Array.isArray(payload?.Data) ? payload.Data : [];
-
-  if (articles.length === 0) {
-    throw new Error("News source returned no articles");
-  }
-
-  return articles;
-}
-
 async function fetchRssNews(source) {
   const response = await fetch(source.url, {
     headers: {
@@ -241,7 +221,6 @@ async function fetchRssNews(source) {
 
 async function fetchNewsContext() {
   const sources = [
-    fetchCryptoCompareNews(),
     ...RSS_SOURCES.map(fetchRssNews)
   ];
   const settled = await Promise.allSettled(sources);
