@@ -47,6 +47,8 @@ assert.match(newsSource, /NEWS_CACHE_TTL_SECONDS\s*=\s*10\s*\*\s*60/, "News cach
 assert.match(newsSource, /affectsTradingScore:\s*false/, "News must not change trading score before validation");
 assert.match(newsSource, /sentiment:\s*"Neutral"/, "News failure must return a neutral fallback");
 assert.match(newsSource, /marketMode:\s*"NormalTrading"/, "News failure must keep normal trading mode");
+assert.match(newsSource, /const marketMode = criticalCount > 0/, "Stop trading must require a critical event");
+assert.doesNotMatch(newsSource, /conflictingSignals/, "Mixed sentiment must not stop trading");
 assert.match(newsSource, /articles:\s*strongArticles\.slice\(0,\s*8\)/, "News response must show only strong articles and events");
 assert.match(newsSource, /plannedEventCount/, "News response must expose planned event count");
 

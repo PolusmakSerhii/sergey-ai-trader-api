@@ -217,11 +217,7 @@ function createNewsContext(rawArticles) {
   const criticalCount = articles.filter(
     article => article.stopTrading && article.highImpact
   ).length;
-  const conflictingSignals =
-    bullishWeight >= 5 &&
-    bearishWeight >= 5 &&
-    Math.abs(bullishWeight - bearishWeight) <= 4;
-  const marketMode = criticalCount > 0 || conflictingSignals
+  const marketMode = criticalCount > 0
     ? "StopTrading"
     : normalizedScore >= 12 && bullishWeight >= 4
       ? "BullishNews"
