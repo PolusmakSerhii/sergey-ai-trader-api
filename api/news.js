@@ -1,4 +1,4 @@
-const NEWS_CACHE_KEY = "crypto-ai:news-context:v3";
+const NEWS_CACHE_KEY = "crypto-ai:news-context:v4";
 const NEWS_CACHE_TTL_SECONDS = 10 * 60;
 const NEWS_LIMIT = 30;
 const RSS_SOURCES = [
@@ -33,6 +33,19 @@ const HIGH_IMPACT_TERMS = [
   "inflation", "regulation", "sec", "stablecoin", "биткоин",
   "эфириум", "инфляция", "регулирование", "стейблкоин",
   "центробанк", "фрс"
+];
+
+const PLANNED_EVENT_TERMS = [
+  "ожидается", "состоится", "запланирован", "запланирована",
+  "предстоит", "анонсировал", "анонсировала", "на этой неделе",
+  "завтра", "предстоящ", "дата запуска", "начнет",
+  "начнёт", "will", "scheduled", "upcoming"
+];
+
+const STOP_TRADING_TERMS = [
+  "дефолт", "чрезвычайное положение", "приостановка торгов",
+  "торги приостановлены", "массовая ликвидация", "системный сбой",
+  "взлом биржи", "bank run", "trading halted", "systemic failure"
 ];
 
 function getRedisConfig() {
@@ -145,6 +158,9 @@ function sanitizeArticle(article) {
   const bullish = countTerms(text, BULLISH_TERMS);
   const bearish = countTerms(text, BEARISH_TERMS);
   const score = Math.max(-3, Math.min(3, bullish - bearish));
+  const highImpact = HIGH_IMPACT_TERMS.some(term => text.includes(term));
+  const plannedEvent = PLANNED_EVENT_TERMS.some(term => text.includes(term));
+  const stopTrading = STOP_TRADING_TERMS.some(term => text.includes(term));
 
   return {
     id: String(article?.id || article?.guid || title),
@@ -158,7 +174,13 @@ function sanitizeArticle(article) {
         : null,
     score,
     sentiment: score > 0 ? "Bullish" : score < 0 ? "Bearish" : "Neutral",
-    highImpact: HIGH_IMPACT_TERMS.some(term => text.includes(term))
+    highImpact,
+    plannedEvent,
+    stopTrading,
+    impactStrength: Math.min(
+      5,
+      Math.abs(score) + (highImpact ? 1 : 0) + (plannedEvent ? 1 : 0) + (stopTrading ? 2 : 0)
+    )
   };
 }
 
@@ -184,6 +206,34 @@ function createNewsContext(rawArticles) {
     : normalizedScore <= -12
       ? "Bearish"
       : "Neutral";
+  const bullishWeight = articles.reduce(
+    (sum, article) => sum + (article.score > 0 ? article.score * (article.highImpact ? 2 : 1) : 0),
+    0
+  );
+  const bearishWeight = articles.reduce(
+    (sum, article) => sum + (article.score < 0 ? Math.abs(article.score) * (article.highImpact ? 2 : 1) : 0),
+    0
+  );
+  const criticalCount = articles.filter(
+    article => article.stopTrading && article.highImpact
+  ).length;
+  const conflictingSignals =
+    bullishWeight >= 5 &&
+    bearishWeight >= 5 &&
+    Math.abs(bullishWeight - bearishWeight) <= 4;
+  const marketMode = criticalCount > 0 || conflictingSignals
+    ? "StopTrading"
+    : normalizedScore >= 12 && bullishWeight >= 4
+      ? "BullishNews"
+      : normalizedScore <= -12 && bearishWeight >= 4
+        ? "BearishNews"
+        : "NormalTrading";
+  const strongArticles = articles.filter(article =>
+    article.plannedEvent ||
+    article.stopTrading ||
+    Math.abs(article.score) >= 2 ||
+    (article.highImpact && Math.abs(article.score) >= 1)
+  );
 
   return {
     ok: true,
@@ -191,12 +241,18 @@ function createNewsContext(rawArticles) {
     source: [...new Set(articles.map(article => article.source))].join(" + ") || "Unavailable",
     generatedAt: new Date().toISOString(),
     sentiment,
+    marketMode,
     score: normalizedScore,
     articleCount: articles.length,
     highImpactCount: articles.filter(article => article.highImpact).length,
+    strongArticleCount: strongArticles.length,
+    plannedEventCount: articles.filter(article => article.plannedEvent).length,
+    criticalCount,
+    bullishWeight,
+    bearishWeight,
     informationalOnly: true,
     affectsTradingScore: false,
-    articles: articles.slice(0, 8)
+    articles: strongArticles.slice(0, 8)
   };
 }
 
@@ -265,9 +321,15 @@ export default async function handler(req, res) {
       source: "Unavailable",
       generatedAt: new Date().toISOString(),
       sentiment: "Neutral",
+      marketMode: "NormalTrading",
       score: 0,
       articleCount: 0,
       highImpactCount: 0,
+      strongArticleCount: 0,
+      plannedEventCount: 0,
+      criticalCount: 0,
+      bullishWeight: 0,
+      bearishWeight: 0,
       informationalOnly: true,
       affectsTradingScore: false,
       articles: [],

@@ -46,6 +46,9 @@ const newsSource = await readFile(
 assert.match(newsSource, /NEWS_CACHE_TTL_SECONDS\s*=\s*10\s*\*\s*60/, "News cache must limit source requests");
 assert.match(newsSource, /affectsTradingScore:\s*false/, "News must not change trading score before validation");
 assert.match(newsSource, /sentiment:\s*"Neutral"/, "News failure must return a neutral fallback");
+assert.match(newsSource, /marketMode:\s*"NormalTrading"/, "News failure must keep normal trading mode");
+assert.match(newsSource, /articles:\s*strongArticles\.slice\(0,\s*8\)/, "News response must show only strong articles and events");
+assert.match(newsSource, /plannedEventCount/, "News response must expose planned event count");
 
 const scriptFiles = (await readdir(scriptsDirectory))
   .filter((name) => name.endsWith(".mjs"))
