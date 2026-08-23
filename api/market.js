@@ -3824,16 +3824,21 @@ async function fetchOKXRecentPriceRange(
     const candles = payload.data
       .map(item => ({
         timestamp: Number(item?.[0]),
+        open: Number(item?.[1]),
         high: Number(item?.[2]),
-        low: Number(item?.[3])
+        low: Number(item?.[3]),
+        close: Number(item?.[4])
       }))
       .filter(candle =>
         Number.isFinite(candle.timestamp) &&
+        Number.isFinite(candle.open) &&
         Number.isFinite(candle.high) &&
         Number.isFinite(candle.low) &&
+        Number.isFinite(candle.close) &&
         candle.timestamp >= fromTimestamp - 60000 &&
         candle.timestamp <= toTimestamp
-      );
+      )
+      .sort((a, b) => a.timestamp - b.timestamp);
 
     if (!candles.length) {
       return null;
@@ -3845,7 +3850,8 @@ async function fetchOKXRecentPriceRange(
       toTime,
       candles: candles.length,
       high: Math.max(...candles.map(candle => candle.high)),
-      low: Math.min(...candles.map(candle => candle.low))
+      low: Math.min(...candles.map(candle => candle.low)),
+      data: candles
     };
   } catch {
     return null;
@@ -5643,6 +5649,11 @@ const COMPLETED_TRADE_INIT_LOCK_KEY =
 
 const COMPLETED_TRADES_DISPLAY_LIMIT = 20;
 
+const CONFIRMED_TRADE_PLAN_TTL_MINUTES = 60;
+
+const OPEN_TRADES_KEY =
+  "sergey-ai:open-trades:v1";
+
 function getRedisConfig() {
   const url =
     String(
@@ -5767,19 +5778,22 @@ async function createRankingHistoryEntry(
     Array.isArray(previousEntry?.readySignals)
       ? previousEntry.readySignals
       : [];
-  const previousActiveSignals =
+  const previousOpenSignals =
     previousSignals.filter(
-      signal => signal?.outcome?.status === "Active"
+      signal =>
+        signal?.outcome?.status === "Active" ||
+        signal?.outcome?.status === "WaitingEntry" ||
+        signal?.outcome?.status === "Pending"
     );
-  const activePriceRanges = new Map();
+  const openPriceRanges = new Map();
   const priceRangeConcurrency = 10;
 
   for (
     let start = 0;
-    start < previousActiveSignals.length;
+    start < previousOpenSignals.length;
     start += priceRangeConcurrency
   ) {
-    const batch = previousActiveSignals.slice(
+    const batch = previousOpenSignals.slice(
       start,
       start + priceRangeConcurrency
     );
@@ -5797,7 +5811,7 @@ async function createRankingHistoryEntry(
 
     batch.forEach((signal, index) => {
       if (ranges[index]) {
-        activePriceRanges.set(
+        openPriceRanges.set(
           signal.tradeId,
           ranges[index]
         );
@@ -5806,7 +5820,7 @@ async function createRankingHistoryEntry(
 
     if (
       start + priceRangeConcurrency <
-      previousActiveSignals.length
+      previousOpenSignals.length
     ) {
       await new Promise(resolve =>
         setTimeout(resolve, 500)
@@ -5820,14 +5834,14 @@ async function createRankingHistoryEntry(
     )
   );
 
-  for (const previousSignal of previousActiveSignals) {
+  for (const previousSignal of previousOpenSignals) {
     if (trackedSetupKeys.has(previousSignal.setupKey)) {
       continue;
     }
 
     const currentItem = ranking.find(
       item => item.symbol === previousSignal.symbol
-    );
+    ) || previousSignal;
 
     if (currentItem) {
       trackedItems.push({
@@ -5875,10 +5889,6 @@ async function createRankingHistoryEntry(
               numericEntryTo
             )
           : null;
-        const entryActive =
-          hasEntryZone &&
-          currentPrice >= entryLow &&
-          currentPrice <= entryHigh;
         const setupKey = [
           item.symbol,
           direction
@@ -5895,30 +5905,37 @@ async function createRankingHistoryEntry(
           previousOutcome.status === "Stopped";
         const previousIsActive =
           previousOutcome.status === "Active";
-        const recentPriceRange = previousIsActive
-          ? activePriceRanges.get(previousSignal?.tradeId) || null
-          : null;
+        const previousIsWaiting =
+          previousOutcome.status === "WaitingEntry" ||
+          previousOutcome.status === "Pending";
+        const recentPriceRange =
+          previousIsActive || previousIsWaiting
+            ? openPriceRanges.get(previousSignal?.tradeId) || null
+            : null;
         const previousWasActivated =
           previousIsActive || previousIsClosed;
-        const activatedAt = previousWasActivated
-          ? previousOutcome.activatedAt ||
-            previousSignal.capturedAt ||
-            null
-          : entryActive
-            ? capturedAt
-            : null;
-        const entryPrice = previousWasActivated
-          ? previousOutcome.entryPrice ??
-            previousSignal.price ??
-            null
-          : entryActive
-            ? currentPrice
-            : null;
-        const initialPlan =
+        const plannedAt =
+          previousSignal?.initialPlan?.plannedAt ||
+          previousOutcome.plannedAt ||
+          capturedAt;
+        const expiresAt =
+          previousSignal?.initialPlan?.expiresAt ||
+          previousOutcome.expiresAt ||
+          new Date(
+            Date.parse(plannedAt) +
+            CONFIRMED_TRADE_PLAN_TTL_MINUTES * 60000
+          ).toISOString();
+        const plannedEntryPrice = hasEntryZone
+          ? Math.round((entryLow + entryHigh) / 2 * 1e12) / 1e12
+          : null;
+        let initialPlan =
           previousSignal?.initialPlan ||
           (previousWasActivated
             ? {
-                entryPrice,
+                entryPrice:
+                  previousOutcome.entryPrice ??
+                  previousSignal.price ??
+                  null,
                 stopLoss:
                   previousSignal.stopLoss ?? null,
                 takeProfit1:
@@ -5926,11 +5943,14 @@ async function createRankingHistoryEntry(
                 takeProfit2:
                   previousSignal.takeProfit2 ?? null,
                 takeProfit3:
-                  previousSignal.takeProfit3 ?? null
+                  previousSignal.takeProfit3 ?? null,
+                entryZone:
+                  previousSignal.entryZone ?? null,
+                plannedAt,
+                expiresAt
               }
-            : entryActive
-            ? {
-                entryPrice: currentPrice,
+            : {
+                entryPrice: plannedEntryPrice,
                 stopLoss:
                   item.stopLoss ?? null,
                 takeProfit1:
@@ -5938,15 +5958,91 @@ async function createRankingHistoryEntry(
                 takeProfit2:
                   item.takeProfit2 ?? null,
                 takeProfit3:
-                  item.takeProfit3 ?? null
-              }
-            : null);
+                  item.takeProfit3 ?? null,
+                entryZone:
+                  item.entryZone ?? null,
+                plannedAt,
+                expiresAt
+              });
+        initialPlan = {
+          ...initialPlan,
+          entryZone:
+            initialPlan?.entryZone ||
+            previousSignal?.entryZone ||
+            item.entryZone ||
+            null,
+          plannedAt:
+            initialPlan?.plannedAt || plannedAt,
+          expiresAt:
+            initialPlan?.expiresAt || expiresAt
+        };
+        const frozenEntryFrom = Number(
+          initialPlan?.entryZone?.from
+        );
+        const frozenEntryTo = Number(
+          initialPlan?.entryZone?.to
+        );
+        const frozenEntryLow = Math.min(
+          frozenEntryFrom,
+          frozenEntryTo
+        );
+        const frozenEntryHigh = Math.max(
+          frozenEntryFrom,
+          frozenEntryTo
+        );
+        const expiryTimestamp = Date.parse(expiresAt);
+        const capturedTimestamp = Date.parse(capturedAt);
+        const currentPriceInsideFrozenZone =
+          currentPrice !== null &&
+          Number.isFinite(frozenEntryLow) &&
+          Number.isFinite(frozenEntryHigh) &&
+          currentPrice >= frozenEntryLow &&
+          currentPrice <= frozenEntryHigh &&
+          (!Number.isFinite(expiryTimestamp) ||
+            capturedTimestamp <= expiryTimestamp);
+        const entryCandle = Array.isArray(recentPriceRange?.data)
+          ? recentPriceRange.data.find(candle =>
+              candle.low <= frozenEntryHigh &&
+              candle.high >= frozenEntryLow &&
+              (!Number.isFinite(expiryTimestamp) ||
+                candle.timestamp <= expiryTimestamp)
+            ) || null
+          : null;
+        const entryActive =
+          currentPriceInsideFrozenZone || Boolean(entryCandle);
+        const detectedEntryPrice = entryCandle
+            ? direction === "Long"
+              ? frozenEntryHigh
+              : direction === "Short"
+                ? frozenEntryLow
+                : initialPlan?.entryPrice ?? null
+            : currentPriceInsideFrozenZone
+              ? currentPrice
+              : null;
+        const activatedAt = previousWasActivated
+          ? previousOutcome.activatedAt ||
+            previousSignal.capturedAt ||
+            null
+          : entryActive
+            ? entryCandle
+              ? new Date(entryCandle.timestamp).toISOString()
+              : capturedAt
+            : null;
+        const entryPrice = previousWasActivated
+          ? previousOutcome.entryPrice ??
+            previousSignal.price ??
+            null
+          : detectedEntryPrice;
+        const planExpired =
+          !previousWasActivated &&
+          !entryActive &&
+          Date.parse(capturedAt) >= Date.parse(expiresAt);
         const initialStopLoss =
           Number(initialPlan?.stopLoss);
         const initialTakeProfit1 =
           Number(initialPlan?.takeProfit1);
         const initialEntryPrice =
-          Number(initialPlan?.entryPrice);
+          Number(entryPrice ?? initialPlan?.entryPrice);
         const checkedHigh =
           recentPriceRange?.high !== null &&
           recentPriceRange?.high !== undefined &&
@@ -6008,6 +6104,8 @@ async function createRankingHistoryEntry(
               ? "TP1Hit"
               : previousIsActive
                 ? "Active"
+                : planExpired
+                  ? "Expired"
                 : hasEntryZone
                   ? entryActive
                     ? "Active"
@@ -6072,19 +6170,31 @@ async function createRankingHistoryEntry(
               : typeof item.riskReward === "number"
                 ? item.riskReward
               : null,
-          entryZone: item.entryZone || null,
-          stopLoss: item.stopLoss ?? null,
-          takeProfit1: item.takeProfit1 ?? null,
-          takeProfit2: item.takeProfit2 ?? null,
-          takeProfit3: item.takeProfit3 ?? null,
+          entryZone:
+            initialPlan?.entryZone || item.entryZone || null,
+          stopLoss:
+            initialPlan?.stopLoss ?? item.stopLoss ?? null,
+          takeProfit1:
+            initialPlan?.takeProfit1 ?? item.takeProfit1 ?? null,
+          takeProfit2:
+            initialPlan?.takeProfit2 ?? item.takeProfit2 ?? null,
+          takeProfit3:
+            initialPlan?.takeProfit3 ?? item.takeProfit3 ?? null,
           initialPlan,
           outcome: {
             status: outcomeStatus,
+            plannedAt,
+            expiresAt,
             activatedAt,
             entryPrice,
             lastPriceCheckedAt:
               outcomeStatus === "Active"
-                ? capturedAt
+                ? previousIsActive
+                  ? capturedAt
+                  : activatedAt || capturedAt
+                : outcomeStatus === "WaitingEntry" ||
+                    outcomeStatus === "Pending"
+                  ? capturedAt
                 : previousIsClosed
                   ? previousOutcome.lastPriceCheckedAt ||
                     previousOutcome.checkedAt ||
@@ -6199,6 +6309,45 @@ async function writeRankingHistory(snapshot) {
       }
     }
 
+    const openTradesRaw = await runRedisCommand([
+      "GET",
+      OPEN_TRADES_KEY
+    ]);
+    let persistedOpenTrades = [];
+
+    if (typeof openTradesRaw === "string") {
+      try {
+        const parsedOpenTrades = JSON.parse(openTradesRaw);
+        persistedOpenTrades = Array.isArray(parsedOpenTrades)
+          ? parsedOpenTrades
+          : [];
+      } catch {
+        persistedOpenTrades = [];
+      }
+    }
+
+    if (persistedOpenTrades.length) {
+      const previousSignals = Array.isArray(previousEntry?.readySignals)
+        ? previousEntry.readySignals
+        : [];
+      const mergedSignals = new Map(
+        previousSignals
+          .filter(signal => signal?.tradeId)
+          .map(signal => [signal.tradeId, signal])
+      );
+
+      persistedOpenTrades.forEach(signal => {
+        if (signal?.tradeId) {
+          mergedSignals.set(signal.tradeId, signal);
+        }
+      });
+
+      previousEntry = {
+        ...(previousEntry || {}),
+        readySignals: [...mergedSignals.values()]
+      };
+    }
+
     const historyEntry =
       await createRankingHistoryEntry(
         snapshot,
@@ -6218,6 +6367,19 @@ async function writeRankingHistory(snapshot) {
       String(
         GLOBAL_RANKING_HISTORY_LIMIT - 1
       )
+    ]);
+
+    const openTrades = (historyEntry.readySignals || [])
+      .filter(signal =>
+        signal?.outcome?.status === "WaitingEntry" ||
+        signal?.outcome?.status === "Pending" ||
+        signal?.outcome?.status === "Active"
+      );
+
+    await runRedisCommand([
+      "SET",
+      OPEN_TRADES_KEY,
+      JSON.stringify(openTrades)
     ]);
 
     await recordCompletedTradeSignals(

@@ -37,6 +37,31 @@ assert.match(
   /recommendationConfidence:\s*item\.recommendationConfidence\s*\?\?\s*0/,
   "Global ranking batches must preserve recommendation confidence"
 );
+assert.match(
+  marketSource,
+  /CONFIRMED_TRADE_PLAN_TTL_MINUTES\s*=\s*60/,
+  "Confirmed A+ trade plans must have a bounded waiting period"
+);
+assert.match(
+  marketSource,
+  /initialPlan\?\.entryZone\s*\|\|\s*previousSignal\?\.entryZone/,
+  "Tracked trades must preserve their original entry zone"
+);
+assert.match(
+  marketSource,
+  /candle\.low\s*<=\s*frozenEntryHigh\s*&&\s*candle\.high\s*>=\s*frozenEntryLow/,
+  "Waiting entries must be reconstructed from OKX minute candles"
+);
+assert.match(
+  marketSource,
+  /outcomeStatus === "WaitingEntry"[\s\S]*outcomeStatus === "Pending"/,
+  "Waiting plans must retain their last checked timestamp"
+);
+assert.match(
+  marketSource,
+  /OPEN_TRADES_KEY/,
+  "Open trades must be persisted independently from ranking history"
+);
 
 const newsSource = await readFile(
   new URL("../api/news.js", import.meta.url),
