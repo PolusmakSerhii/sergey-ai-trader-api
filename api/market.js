@@ -5894,7 +5894,7 @@ async function createRankingHistoryEntry(
           direction
         ].join(":");
         const previousSignal =
-          previousSignals.find(
+          previousOpenSignals.find(
             signal =>
               signal.setupKey === setupKey
           ) || null;

@@ -49,6 +49,11 @@ assert.match(
 );
 assert.match(
   marketSource,
+  /const previousSignal\s*=\s*previousOpenSignals\.find/,
+  "Closed trades must not be reused as the source for a new plan"
+);
+assert.match(
+  marketSource,
   /candle\.low\s*<=\s*frozenEntryHigh\s*&&\s*candle\.high\s*>=\s*frozenEntryLow/,
   "Waiting entries must be reconstructed from OKX minute candles"
 );
