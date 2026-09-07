@@ -3,6 +3,69 @@ import { Receiver } from "@upstash/qstash";
 const DEBUG_LOGS =
   process.env.DEBUG_LOGS === "true";
 
+// Successful source responses only; failures never replace fresh cached data.
+// This process cache also coalesces concurrent requests on a warm instance.
+const sourceResponses = new Map();
+const sourceRequests = new Map();
+const SOURCE_CACHE_LIMIT = 512;
+
+async function cachedSource(key, ttlSeconds, load, valid) {
+  const local = sourceResponses.get(key);
+  if (local && local.expiresAt > Date.now()) return structuredClone(local.value);
+  if (sourceRequests.has(key)) return structuredClone(await sourceRequests.get(key));
+  const request = (async () => {
+    const redisKey = `sergey-ai:source-cache:v1:${key}`;
+    let value;
+    try {
+      const raw = await runRedisCommand(["GET", redisKey]);
+      const cached = raw ? JSON.parse(raw) : null;
+      if (cached && cached.expiresAt > Date.now() && valid(cached.value)) {
+        sourceResponses.set(key, cached);
+        return cached.value;
+      }
+    } catch { /* An optional cache cannot disable its source. */ }
+    value = await load();
+    if (valid(value)) {
+      const entry = { value, expiresAt: Date.now() + ttlSeconds * 1000 };
+      sourceResponses.set(key, entry);
+      try {
+        await runRedisCommand(["SET", redisKey, JSON.stringify(entry), "EX", ttlSeconds]);
+      } catch { /* Keep the successful source response when Redis is unavailable. */ }
+    }
+    return value;
+  })();
+  sourceRequests.set(key, request);
+  try { return structuredClone(await request); }
+  finally {
+    sourceRequests.delete(key);
+    while (sourceResponses.size > SOURCE_CACHE_LIMIT) {
+      sourceResponses.delete(sourceResponses.keys().next().value);
+    }
+  }
+}
+
+async function fetchFearGreed() {
+  try {
+    return await cachedSource("fear-greed", 300, async () => {
+      const response = await fetch("https://api.alternative.me/fng/?limit=1", {
+        signal: AbortSignal.timeout(8000)
+      });
+      const payload = await response.json();
+      const item = payload?.data?.[0];
+      if (!response.ok || item?.value == null || !Number.isFinite(Number(item.value)) ||
+          Number(item.value) < 0 || Number(item.value) > 100 ||
+          typeof item.value_classification !== "string") {
+        throw new Error("Invalid Fear & Greed response");
+      }
+      return { value: item.value, classification: item.value_classification };
+    }, value => value?.value != null && Number.isFinite(Number(value.value)) &&
+      Number(value.value) >= 0 && Number(value.value) <= 100 &&
+      typeof value.classification === "string");
+  } catch {
+    return { value: null, classification: "N/A" };
+  }
+}
+
 function getDailyCloses(prices) {
   if (!Array.isArray(prices)) return [];
 
@@ -3130,7 +3193,8 @@ if (tradePlan.validTrade) {
 async function fetchOKXSwapSymbols() {
   try {
     const response = await fetch(
-      "https://www.okx.com/api/v5/public/instruments?instType=SWAP"
+      "https://www.okx.com/api/v5/public/instruments?instType=SWAP",
+      { signal: AbortSignal.timeout(8000) }
     );
 
     const payload = await response
@@ -3217,7 +3281,7 @@ async function fetchOKXSwapSymbols() {
 
   try {
     const response =
-      await fetch(url);
+      await fetch(url, { signal: AbortSignal.timeout(8000) });
 
     const payload =
       await response
@@ -3357,7 +3421,7 @@ async function fetchOKXTicker(symbol) {
 
   try {
     const response =
-      await fetch(url);
+      await fetch(url, { signal: AbortSignal.timeout(8000) });
 
     const payload =
       await response
@@ -3591,7 +3655,7 @@ async function fetchScannerSymbol(
     const url =
       `${baseUrl}/api/market?symbol=${encodeURIComponent(symbol)}`;
 
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(45000) });
 
     const payload = await response
       .json()
@@ -4009,7 +4073,7 @@ async function fetchOKXKlines(
         url.searchParams.set("after", String(after));
       }
 
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
 
       const payload = await response
         .json()
@@ -5482,6 +5546,19 @@ const derivativesProbabilitySignal =
 }
 
 async function fetchCoinGlass(path, params = {}) {
+  if (!process.env.COINGLASS_API_KEY) {
+    return { ok: false, error: "COINGLASS_API_KEY is not configured" };
+  }
+  const query = new URLSearchParams();
+  Object.keys(params).sort().forEach(key => {
+    if (params[key] != null) query.set(key, String(params[key]));
+  });
+  return cachedSource(`coinglass:${path}?${query}`, 60,
+    () => requestCoinGlass(path, params),
+    value => value?.ok === true && value.data != null);
+}
+
+async function requestCoinGlass(path, params = {}) {
   const apiKey = process.env.COINGLASS_API_KEY;
 
   if (!apiKey) {
@@ -5503,6 +5580,7 @@ async function fetchCoinGlass(path, params = {}) {
 
   try {
     const response = await fetch(url, {
+      signal: AbortSignal.timeout(8000),
       headers: {
         accept: "application/json",
         "CG-API-KEY": apiKey
@@ -5791,6 +5869,7 @@ async function runRedisCommand(command) {
   }
 
   const response = await fetch(config.url, {
+    signal: AbortSignal.timeout(5000),
     method: "POST",
     headers: {
       Authorization: `Bearer ${config.token}`,
@@ -7224,7 +7303,8 @@ const loadGlobalBatch = async page => {
 
   const response =
     await fetch(
-      batchUrl.toString()
+      batchUrl.toString(),
+      { signal: AbortSignal.timeout(60000) }
     );
 
   if (!response.ok) {
@@ -7375,6 +7455,17 @@ candidatePoolSize:
     
     globalTop10,
   };
+
+  // A partial refresh must not replace the last complete ranking or advance trades.
+  if (resultsFailed > 0 || combinedResults.length === 0 ||
+      batchResponses.some(batch => batch.ok !== true || !Array.isArray(batch.globalBatchResults))) {
+    return res.status(502).json({
+      ok: false,
+      error: "Incomplete global ranking refresh; previous snapshot preserved",
+      resultsCollected: combinedResults.length,
+      resultsFailed
+    });
+  }
 
   const cacheSaved =
     await writeGlobalRankingCache(
@@ -8452,7 +8543,7 @@ if (coinGeckoId) {
     `&price_change_percentage=24h`;
 
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
 
     const data = await response
       .json()
@@ -8537,8 +8628,7 @@ if (
   );
 }    
     
-    const fg = await fetch("https://api.alternative.me/fng/?limit=1");
-    const fgData = await fg.json(); 
+    const fearGreed = await fetchFearGreed();
 
    const rsi14 = calculateRSI(okxDailyCloses, 14);
    const ema20 = calculateEMA(okxDailyCloses, 20);
@@ -8776,10 +8866,7 @@ const marketSummary =
     : okxDailyResponse.error
 },
       
-      fearGreed: {
-          value: fgData.data[0].value,
-          classification: fgData.data[0].value_classification
-}, 
+      fearGreed,
       
 technical: {
     rsi14,

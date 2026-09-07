@@ -199,3 +199,29 @@ Aggregates still retain their existing scope: historical results from old rules
 and newly versioned results are not retroactively converted or reclassified.
 
 OKX reference: https://app.okx.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks-history
+
+### Source resilience and caching
+
+CoinGlass responses use a 60-second cache; Fear & Greed uses 300 seconds.
+Only successful responses are stored in the bounded process cache and optional Redis
+keys `sergey-ai:source-cache:v1:*` (with `EX`). Identical concurrent requests on the
+same instance share one request. Warm instances return independent copies of cached
+values. Expired values are never used as a fallback. Redis failure falls through to
+the original source, and source errors remain uncached. These disposable keys are
+intentionally excluded from trade-ledger backups. Concurrent cold instances can still
+make duplicate upstream requests; this is not a distributed refresh lock.
+
+External market requests have an 8-second timeout per request, Redis requests 5 seconds,
+scanner analysis calls 45 seconds, and ranking batch calls 60 seconds. Lifecycle candle
+requests retain their existing 8-second total budget and do not use this cache.
+Fear & Greed failure returns `{ value: null, classification: "N/A" }` without aborting
+technical analysis. Indicator formulas, grading and Trade Plan rules are unchanged.
+
+A ranking refresh containing failed symbols, malformed batches or no results returns
+502 before writing ranking cache or history, preserving the previous successful snapshot.
+Trade checks resume at the next successful refresh; this change does not provide a
+separate trade-monitor job. Public cache-miss scans and distributed refresh coordination
+are still existing behavior and remain follow-up work. OKX candle caching is also deferred.
+
+`tests/source-resilience.test.mjs` covers coalescing, cache expiry and isolation,
+shared-cache reuse, source/Redis failures and ranking persistence guards without live API calls.
