@@ -35,8 +35,11 @@ do not invoke a forced refresh from ordinary clients.
   (or immediately when created exactly on the boundary). `createdAt` records
   creation; `plannedAt` records this effective start. Entry requires a confirmed
   OKX 1m candle touching the fixed Entry Zone after the monitoring start.
-- TP1 reached before Stop Loss closes the plan as a win.
-- Stop Loss reached first closes it as a loss.
+- Legacy plans: TP1 reached before Stop Loss closes the full position as a win.
+- New versioned plans: TP1/TP2/TP3 close 25%/25%/50% of the initial position;
+  after TP1 the remaining stop becomes the actual entry price.
+- Initial Stop Loss reached before any target closes the position as a loss.
+  After partial exits the sign of total realized R determines the final result.
 - If both levels are touched inside the same one-minute candle, the conservative
   result is Stop Loss.
 - Confirmed candles are evaluated in timestamp order. Outcome evidence stores
@@ -149,8 +152,8 @@ errors. Keep Redis capacity and request-size limits under observation. Trade out
 
 `createRankingHistoryEntry` preserves the original plan, ID, direction and
 confirmed-setup metadata while waiting and after activation. Ranking changes
-cannot substitute a new plan. Existing status names and TP1-as-full-exit semantics
-are retained; no partial exits, break-even management, score weights or A+ gates
+cannot substitute a new plan. Legacy snapshots retain TP1-as-full-exit semantics.
+For those legacy plans, no partial exits, break-even management, score weights or A+ gates
 are changed in this phase. Closed historical records are not recalculated.
 
 `evaluateTradeLifecycle` processes only contiguous, valid, confirmed 1m candles.
@@ -295,7 +298,7 @@ Source contracts:
 
 ### Result classification and break-even accounting
 
-For newly recorded completed trades (existing TP1Hit/Stopped lifecycle statuses),
+For newly recorded completed trades (TP1Hit/TP3Hit/Stopped lifecycle statuses),
 finite numeric `resultR` determines Win (>0), Loss (<0) or BreakEven (exactly 0).
 The exit status describes the event, not the sign of the financial result. Missing,
 string or nonfinite R is rejected; Expired and Active do not enter completed totals.
@@ -308,5 +311,53 @@ the first newly recorded result under these rules; the persistent break-even cou
 covers records added from that point only. The API returns null for that counter on
 older aggregates before any new classified record has been added. Full historical
 reconciliation requires a complete ledger, not the latest 20 detail rows.
-This prepares accounting for future stop movement/partials; the current lifecycle still
-uses its original frozen stop and TP1, and frontend break-even labels remain a follow-up.
+Legacy lifecycle plans keep the original frozen stop and TP1 full exit.
+New versioned partial plans use the policy below; frontend labels distinguish event and R result.
+
+
+### Versioned partial exits: 25/25/50 and TP1 → break-even
+
+Only newly created tracked snapshots receive `initialPlan.exitStrategy` from
+`createPartialExitStrategy()`: version `partial-25-25-50-be-v1`, fractions TP1=0.25,
+TP2=0.25, TP3=0.50, allocationBasis=`initial-position`, afterTP1=`actual-entry`,
+afterTP2=`unchanged`. Existing waiting, active and closed snapshots are not upgraded.
+The evaluator reads the snapshot's policy, never current defaults. Scoring, entry
+filters and target generation are unchanged.
+
+`initialPlan.initialStopLoss` and the compatibility `initialPlan.stopLoss` stay fixed.
+`outcome.initialStopLoss` stays fixed too; `outcome.currentStopLoss` becomes actual
+entry on TP1, equally for LONG and SHORT. TP2 does not trail or move it further.
+TP1 and TP2 keep status Active. TP3 fully closes as TP3Hit; stop exits use Stopped.
+Completed accounting occurs once only after the remaining position is closed.
+
+Position size is normalized to 1 initial position, not an invented currency or
+exchange quantity. `remainingPosition` is the remaining fraction. `exits` stores
+each target/STOP, original-position fraction, execution level, weighted realized R,
+time and candle evidence. The original risk denominator is abs(actualEntry-initialSL).
+Realized R is the sum of fraction * signed(exit-entry) / original risk. For levels
+at +1R/+2R/+3R, all targets return +2.25R; TP1 then entry stop returns +0.25R.
+This retains the existing analytical level-touch execution model, without fees,
+slippage or actual exchange orders; it is not broker fill accounting.
+
+Unrealized R uses the latest fully verified candle close and remaining fraction;
+`markPriceAt` identifies its timestamp. Total R is realized plus unrealized. Missing
+or ambiguous current verification returns null unrealized/total R, retaining known
+realized exits. Full closure has zero unrealized R and resultR equal to realized R.
+
+The existing entry, gap, expiry and legacy candle handling is retained. For partial
+plans, targets already reached at an active position's candle open are processed
+before a later stop. Otherwise the existing conservative SL-first rule applies when
+an already effective stop and a target share a candle. A newly moved entry stop
+must not be applied retroactively to the candle's earlier low/high. When TP1 is
+confirmed but the ordering of the new stop and later targets cannot be determined,
+the evaluator stores that 25% exit, marks `ambiguous_management_candle`, and retains
+the checkpoint and last confirmed remainder. Replays cannot duplicate the exit or
+pretend that the uncertainty is resolved. More granular evidence/manual resolution
+is required; this stage does not add a new paid data source or automated resolver.
+
+The existing Redis keys, lease fencing, idempotent ledger and v3 backup format are
+retained. Backup/restore tests preserve a partially closed plan and its current stop.
+Frontend renders initial/current SL, the current SL marker, three fixed targets,
+snapshot fractions, remaining position and realized/unrealized/total R. Legacy
+cards keep their existing presentation. No new endpoints or polling jobs are added;
+longer-lived active trades can require more existing candle checks after TP1.

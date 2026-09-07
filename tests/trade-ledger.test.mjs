@@ -195,6 +195,13 @@ test("trade ledger and backups against isolated Redis (no TCP or production)", a
       assert.equal(await context.writeRankingHistory(snapshot(0)),true);
       const first = JSON.parse(await redis(["GET",keys.openTrades]));
       assert.equal(first[0].outcome.status,"WaitingEntry");
+      // Restore a legacy waiting snapshot to verify pre-upgrade plans retain TP1 closure.
+      delete first[0].initialPlan.exitStrategy;
+      delete first[0].initialPlan.initialStopLoss;
+      first[0].outcome = { status:"WaitingEntry", plannedAt:first[0].initialPlan.plannedAt,
+        expiresAt:first[0].initialPlan.expiresAt, lastPriceCheckedAt:first[0].initialPlan.plannedAt };
+      await redis(["SET",keys.openTrades,JSON.stringify(first)]);
+      await redis(["LSET",keys.history,"0",JSON.stringify({readySignals:first})]);
       const originalFetch = context.fetchOKXRecentPriceRange;
       context.fetchOKXRecentPriceRange = async () => ({source:"OKX 1m candles",data:[
         {timestamp:start,open:100,high:102,low:98,close:100,confirmed:true},
@@ -213,6 +220,41 @@ test("trade ledger and backups against isolated Redis (no TCP or production)", a
       await record(response.body.completedTrades);
       assert.equal((await stats()).completed,1);
       context.fetchOKXRecentPriceRange=originalFetch;
+    });
+
+    await t.test("partial exits persist across refreshes and only final TP3 enters ledger once", async () => {
+      await reset();
+      const start=Date.parse("2026-09-08T10:00:00Z");
+      const iso=m=>new Date(start+m*60000).toISOString();
+      const item={symbol:"PARTUSDT",price:100,direction:"Long",opportunityGrade:"A+",
+        opportunityScore:90,confidence:90,riskReward:2,action:"Strong Buy",tradeAllowed:true,
+        tradeReadiness:{ready:true},entryZone:{from:99,to:101},stopLoss:90,takeProfit1:110,takeProfit2:120,takeProfit3:130};
+      const snapshot=m=>({generatedAt:iso(m),globalRanking:[item]});
+      const bar=(m,open,high,low,close)=>({timestamp:start+m*60000,open,high,low,close,confirmed:true});
+      const candles=[bar(0,100,102,98,100),bar(1,105,111,104,110),bar(2,111,121,110,120),bar(3,121,131,120,130)];
+      const originalFetch=context.fetchOKXRecentPriceRange;
+      try {
+        context.fetchOKXRecentPriceRange=async()=>({source:"OKX 1m candles",data:candles});
+        assert.equal(await context.writeRankingHistory(snapshot(0)),true);
+        assert.equal(await context.writeRankingHistory(snapshot(2)),true);
+        const first=JSON.parse(await redis(["GET",keys.openTrades]))[0];
+        assert.equal(first.outcome.status,"Active");assert.equal(first.outcome.remainingPosition,.75);
+        assert.equal(first.initialPlan.exitStrategy.allocations.TP1,.25);assert.equal(first.outcome.currentStopLoss,100);
+        assert.equal(await redis(["GET",keys.completedTradeStats]),null);
+        await context.writeRankingHistory(snapshot(2));
+        assert.equal(JSON.parse(await redis(["GET",keys.openTrades]))[0].outcome.exits.length,1);
+        // Changing the live ranking cannot move frozen targets, allocation or initial stop.
+        item.stopLoss=80;item.takeProfit2=150;item.takeProfit3=170;
+        await context.writeRankingHistory(snapshot(3));
+        const second=JSON.parse(await redis(["GET",keys.openTrades]))[0];
+        assert.equal(second.outcome.remainingPosition,.5);assert.equal(second.outcome.realizedR,.75);
+        assert.equal(second.initialPlan.takeProfit2,120);
+        await context.writeRankingHistory(snapshot(4));
+        assert.equal(await redis(["GET",keys.openTrades]),"[]");
+        const final=JSON.parse((await redis(["LRANGE",keys.completedTrades,"0","0"]))[0]);
+        assert.equal(final.outcome.status,"TP3Hit");assert.equal(final.outcome.resultR,2.25);
+        await record([final]);assert.equal((await stats()).completed,1);assert.equal((await stats()).netR,2.25);
+      } finally { context.fetchOKXRecentPriceRange=originalFetch; }
     });
 
     // Run the actual CLI scripts with a test-only REST adapter to the Unix socket.
@@ -235,7 +277,13 @@ test("trade ledger and backups against isolated Redis (no TCP or production)", a
     await t.test("v3 backup/restore preserves frozen open plans and all 35 IDs", async () => {
       await reset();
       await record(Array.from({length:35}, (_, i) => signal(`backup-${i}`)));
-      const open = { ...signal("active"), outcome: { status: "Active", entryPrice: 100 } };
+      const partialPlan={entryPrice:100,entryZone:{from:99,to:101},stopLoss:90,initialStopLoss:90,
+        takeProfit1:110,takeProfit2:120,takeProfit3:130,plannedAt:"2026-09-08T10:00:00Z",expiresAt:"2026-09-08T11:00:00Z",
+        exitStrategy:context.createPartialExitStrategy()};
+      const partialOutcome=context.evaluateTradeLifecycle({initialPlan:partialPlan,direction:"Long",
+        previousOutcome:{status:"Active",entryPrice:100,activatedAt:partialPlan.plannedAt,lastPriceCheckedAt:partialPlan.plannedAt},
+        capturedAt:"2026-09-08T10:01:00Z",priceRange:{source:"OKX 1m candles",data:[{timestamp:Date.parse(partialPlan.plannedAt),open:105,high:111,low:104,close:110,confirmed:true}]}});
+      const open = JSON.parse(JSON.stringify({ ...signal("active"), initialPlan:partialPlan, outcome:partialOutcome }));
       await redis(["SET", keys.ranking, JSON.stringify({ generatedAt: "2026-09-07T12:00:00Z" })]);
       await redis(["LPUSH", keys.history, JSON.stringify({ readySignals: [open] })]);
       await redis(["SET", keys.openTrades, JSON.stringify([open])]);

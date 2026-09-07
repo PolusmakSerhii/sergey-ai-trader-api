@@ -3905,8 +3905,123 @@ function isValidLifecycleCandle(candle) {
     candle.high >= Math.max(candle.open, candle.close);
 }
 
+// Defaults are copied into each NEW tracked plan. Existing snapshots own their policy.
+function createPartialExitStrategy() {
+  return { version: "partial-25-25-50-be-v1", allocationBasis: "initial-position",
+    allocations: { TP1: 0.25, TP2: 0.25, TP3: 0.5 },
+    stopManagement: { afterTP1: "actual-entry", afterTP2: "unchanged" } };
+}
+
+function preparePartialOutcome(plan, outcome, previous, direction) {
+  const strategy = plan.exitStrategy;
+  const allocation = strategy?.allocations;
+  const fractions = [allocation?.TP1, allocation?.TP2, allocation?.TP3];
+  const levels = [plan.takeProfit1, plan.takeProfit2, plan.takeProfit3];
+  const valid = strategy?.version === "partial-25-25-50-be-v1" &&
+    strategy.allocationBasis === "initial-position" &&
+    strategy.stopManagement?.afterTP1 === "actual-entry" && strategy.stopManagement?.afterTP2 === "unchanged" &&
+    fractions.every(x => typeof x === "number" && Number.isFinite(x) && x > 0 && x <= 1) &&
+    Math.abs(fractions.reduce((a,b) => a+b, 0) - 1) < 1e-12 &&
+    plan.initialStopLoss === plan.stopLoss &&
+    levels.every(x => typeof x === "number" && Number.isFinite(x) && x > 0) &&
+    (direction === "Long" ? levels[0] < levels[1] && levels[1] < levels[2]
+      : direction === "Short" && levels[0] > levels[1] && levels[1] > levels[2]);
+  if (!valid) return false;
+  // Never silently reset a partially managed position after a damaged state load.
+  if (previous.lifecycleVersion === "partial-candles-v1" && !Array.isArray(previous.exits)) return false;
+  const exits = Array.isArray(previous.exits) ? previous.exits : [];
+  let remaining = 1, realized = 0;
+  const risk = Math.abs(outcome.entryPrice - plan.initialStopLoss);
+  for (let i = 0; i < exits.length; i += 1) {
+    const event = exits[i];
+    const expectedR = (direction === "Long" ? 1 : -1) *
+      (levels[i] - outcome.entryPrice) / risk * fractions[i];
+    if (i > 1 || event.target !== `TP${i+1}` || event.initialFraction !== fractions[i] ||
+        event.price !== levels[i] || !Number.isFinite(event.realizedR) ||
+        !Number.isFinite(expectedR) || Math.abs(event.realizedR - expectedR) > 1e-10 ||
+        !Number.isFinite(Date.parse(event.checkedAt))) return false;
+    remaining -= event.initialFraction;
+    realized += event.realizedR;
+  }
+  const currentStop = exits.length ? outcome.entryPrice : plan.initialStopLoss;
+  if (previous.lifecycleVersion === "partial-candles-v1" &&
+      (previous.remainingPosition !== remaining || previous.currentStopLoss !== currentStop ||
+       Math.abs(previous.realizedR - realized) > 1e-10 || !Number.isFinite(previous.realizedR))) return false;
+  Object.assign(outcome, { lifecycleVersion: "partial-candles-v1", initialStopLoss: plan.initialStopLoss,
+    currentStopLoss: currentStop, initialPositionSize: 1, positionSizeUnit: "normalized-initial-position",
+    remainingPosition: remaining, realizedR: realized, unrealizedR: null, totalR: null,
+    exits: exits.map(event => ({...event})) });
+  return true;
+}
+
+function processPartialCandle(plan, outcome, candle, direction) {
+  const sign = direction === "Long" ? 1 : -1;
+  const stopTouched = price => direction === "Long" ? candle.low <= price : candle.high >= price;
+  const targetTouched = price => direction === "Long" ? candle.high >= price : candle.low <= price;
+  const closeExit = (target, price, fraction, rule) => {
+    const realizedR = sign * (price - outcome.entryPrice) /
+      Math.abs(outcome.entryPrice - outcome.initialStopLoss) * fraction;
+    const checkedAt = new Date(candle.timestamp + LIFECYCLE_MINUTE_MS).toISOString();
+    const evidence = { source: "OKX 1m candles", candle, rule, timestampPrecision: "1m" };
+    outcome.exits.push({ target, price, initialFraction: fraction, realizedR, checkedAt, evidence });
+    outcome.realizedR += realizedR;
+    outcome.remainingPosition = Math.max(0, outcome.remainingPosition - fraction);
+    if (outcome.remainingPosition < 1e-12) {
+      outcome.remainingPosition = 0;
+      outcome.status = target === "STOP" ? "Stopped" : "TP3Hit";
+      outcome.exitPrice = price;
+      outcome.checkedAt = checkedAt;
+      outcome.resultR = outcome.realizedR;
+      outcome.exitCheck = evidence;
+    }
+  };
+  // Ambiguous intraminute management must not turn into a fabricated stop on retry.
+  if (outcome.managementPending) return "ambiguous_management_candle";
+  const entryInThisCandle = outcome.entryCheck && Date.parse(outcome.activatedAt) === candle.timestamp;
+  // For a position already active before this candle, the opening price provides
+  // known ordering: targets reached at the open precede a later intraminute stop.
+  if (!entryInThisCandle) {
+    for (let i = outcome.exits.length + 1; i <= 3; i += 1) {
+      const price = plan[`takeProfit${i}`];
+      if (sign * (candle.open - price) < 0) break;
+      closeExit(`TP${i}`, price, plan.exitStrategy.allocations[`TP${i}`], "target-reached-at-candle-open");
+      if (i === 1) {
+        outcome.currentStopLoss = outcome.entryPrice;
+        outcome.stopMovedAt = new Date(candle.timestamp).toISOString();
+      }
+      if (outcome.remainingPosition === 0) return "verified";
+    }
+  }
+  const nextPrice = plan[`takeProfit${outcome.exits.length + 1}`];
+  if (stopTouched(outcome.currentStopLoss)) {
+    closeExit("STOP", outcome.currentStopLoss, outcome.remainingPosition,
+      targetTouched(nextPrice) ? "same-candle-sl-first" : "first-level-in-candle-order");
+    return "verified";
+  }
+  for (let i = outcome.exits.length + 1; i <= 3; i += 1) {
+    const target = `TP${i}`, price = plan[`takeProfit${i}`];
+    if (!targetTouched(price)) break;
+    closeExit(target, price, plan.exitStrategy.allocations[target], "first-level-in-candle-order");
+    if (i === 1) {
+      outcome.currentStopLoss = outcome.entryPrice;
+      outcome.stopMovedAt = new Date(candle.timestamp + LIFECYCLE_MINUTE_MS).toISOString();
+      if (stopTouched(outcome.currentStopLoss)) {
+        const closedBeyondStop = sign * (candle.close - outcome.currentStopLoss) <= 0;
+        if (closedBeyondStop && !targetTouched(plan.takeProfit2)) {
+          closeExit("STOP", outcome.currentStopLoss, outcome.remainingPosition,
+            "tp1-then-close-confirms-break-even-stop");
+          return "verified";
+        }
+        outcome.managementPending = { candle, reason: "TP1 confirmed; order of new stop and later targets is unknown" };
+        return "ambiguous_management_candle";
+      }
+    }
+  }
+  return "verified";
+}
+
 function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, capturedAt, priceRange }) {
-  if (["TP1Hit", "Stopped", "Expired"].includes(previousOutcome.status)) return previousOutcome;
+  if (["TP1Hit", "TP3Hit", "Stopped", "Expired"].includes(previousOutcome.status)) return previousOutcome;
   const plannedAt = initialPlan.plannedAt;
   const expiresAt = initialPlan.expiresAt;
   const now = Date.parse(capturedAt);
@@ -3931,7 +4046,10 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
   const stopLoss = initialPlan.stopLoss;
   const takeProfit1 = initialPlan.takeProfit1;
   const rawLevels = [initialPlan.entryZone?.from, initialPlan.entryZone?.to, stopLoss, takeProfit1];
-  const validPlan = rawLevels.every(value => typeof value === "number" && Number.isFinite(value) && value > 0) &&
+  const partial = initialPlan.exitStrategy !== undefined;
+  if (partial) outcome.lifecycleVersion = "partial-candles-v1";
+  const partialValid = !partial || preparePartialOutcome(initialPlan, outcome, previousOutcome, direction);
+  const validPlan = partialValid && rawLevels.every(value => typeof value === "number" && Number.isFinite(value) && value > 0) &&
     (direction === "Long" ? stopLoss < frozenEntryLow && takeProfit1 > frozenEntryHigh
       : direction === "Short" && stopLoss > frozenEntryHigh && takeProfit1 < frozenEntryLow) &&
     Number.isFinite(cursor) && Number.isFinite(now) && Number.isFinite(expiry) &&
@@ -3956,9 +4074,11 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
       inspected.push(candle);
       verification = "verified";
       const touchesEntry = candle.low <= frozenEntryHigh && candle.high >= frozenEntryLow;
+      const activeStop = partial ? outcome.currentStopLoss : stopLoss;
+      const activeTarget = partial ? initialPlan[`takeProfit${outcome.exits.length + 1}`] : takeProfit1;
       const touchesExit = direction === "Long"
-        ? candle.low <= stopLoss || candle.high >= takeProfit1
-        : candle.high >= stopLoss || candle.low <= takeProfit1;
+        ? candle.low <= activeStop || candle.high >= activeTarget
+        : candle.high >= activeStop || candle.low <= activeTarget;
       if (candle.timestamp < boundaryTimestamp &&
           (outcome.status === "Active" ? touchesExit : touchesEntry)) {
         verification = outcome.status === "Active"
@@ -3999,7 +4119,16 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
             break;
           }
         }
-        if (stopHit || tp1Hit) {
+        if (partial) {
+          verification = processPartialCandle(initialPlan, outcome, candle, direction);
+          if (verification === "ambiguous_management_candle") break;
+          outcome.markPrice = candle.close;
+          outcome.markPriceAt = new Date(candle.timestamp + LIFECYCLE_MINUTE_MS).toISOString();
+          if (outcome.remainingPosition === 0) {
+            cursor += LIFECYCLE_MINUTE_MS;
+            break;
+          }
+        } else if (stopHit || tp1Hit) {
           outcome.status = stopHit ? "Stopped" : "TP1Hit";
           outcome.exitPrice = stopHit ? stopLoss : takeProfit1;
           outcome.resultR = stopHit ? -1 : Math.round(
@@ -4020,6 +4149,19 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
     }
   } else if (outcome.status !== "Active") {
     outcome.status = "Pending";
+  }
+  if (partial && !partialValid) { outcome.unrealizedR = null; outcome.totalR = null; }
+  if (partial && partialValid) {
+    if (validPlan && outcome.managementPending) verification = "ambiguous_management_candle";
+    if (outcome.remainingPosition === 0) {
+      outcome.unrealizedR = 0;
+      outcome.totalR = outcome.realizedR;
+    } else if (outcome.status === "Active" && verification === "verified" &&
+        typeof outcome.markPrice === "number" && Number.isFinite(outcome.markPrice)) {
+      outcome.unrealizedR = (direction === "Long" ? 1 : -1) *
+        (outcome.markPrice - outcome.entryPrice) / Math.abs(outcome.entryPrice - outcome.initialStopLoss) * outcome.remainingPosition;
+      outcome.totalR = outcome.realizedR + outcome.unrealizedR;
+    }
   }
   outcome.lastPriceCheckedAt = Number.isFinite(cursor) ? new Date(cursor).toISOString()
     : previousOutcome.lastPriceCheckedAt ?? null;
@@ -6240,7 +6382,7 @@ async function createRankingHistoryEntry(
         const previousOutcome =
           previousSignal?.outcome || {};
         const previousIsClosed =
-          previousOutcome.status === "TP1Hit" ||
+          previousOutcome.status === "TP1Hit" || previousOutcome.status === "TP3Hit" ||
           previousOutcome.status === "Stopped";
         const previousIsActive =
           previousOutcome.status === "Active";
@@ -6307,6 +6449,10 @@ async function createRankingHistoryEntry(
                 plannedAt,
                 expiresAt
               });
+        if (!previousSignal) {
+          initialPlan = { ...initialPlan, initialStopLoss: initialPlan.stopLoss,
+            exitStrategy: createPartialExitStrategy() };
+        }
         initialPlan = {
           ...initialPlan,
           entryZone:
@@ -6567,7 +6713,7 @@ function isCompletedTradeSignal(signal) {
   const status = signal?.outcome?.status;
 
   return Boolean(signal?.tradeId) &&
-    (status === "TP1Hit" || status === "Stopped");
+    (status === "TP1Hit" || status === "TP3Hit" || status === "Stopped");
 }
 
 function isConfirmedAPlusTrade(signal) {
@@ -7172,7 +7318,7 @@ if (mode === "statistics") {
         : Array.isArray(snapshot.readySignals)
           ? snapshot.readySignals.filter(signal =>
               isConfirmedAPlusTradeSignal(signal) &&
-              (signal?.outcome?.status === "TP1Hit" ||
+              (signal?.outcome?.status === "TP1Hit" || signal?.outcome?.status === "TP3Hit" ||
                 signal?.outcome?.status === "Stopped")
             )
           : []
