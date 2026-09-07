@@ -292,3 +292,21 @@ requires a separately validated scoring change. Frontend rendering remains a lat
 Source contracts:
 - https://docs.coinglass.com/reference/oi-ohlc-aggregated-history
 - https://app.okx.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks-history
+
+### Result classification and break-even accounting
+
+For newly recorded completed trades (existing TP1Hit/Stopped lifecycle statuses),
+finite numeric `resultR` determines Win (>0), Loss (<0) or BreakEven (exactly 0).
+The exit status describes the event, not the sign of the financial result. Missing,
+string or nonfinite R is rejected; Expired and Active do not enter completed totals.
+Persistent and rolling summaries expose `breakEvens`; break-even ends a loss streak
+and contributes zero to Total R. Win Rate remains wins / all completed trades,
+including break-even and excluding expired-before-entry plans.
+
+Existing stored totals are not reclassified. `resultClassificationSince` identifies
+the first newly recorded result under these rules; the persistent break-even counter
+covers records added from that point only. The API returns null for that counter on
+older aggregates before any new classified record has been added. Full historical
+reconciliation requires a complete ledger, not the latest 20 detail rows.
+This prepares accounting for future stop movement/partials; the current lifecycle still
+uses its original frozen stop and TP1, and frontend break-even labels remain a follow-up.

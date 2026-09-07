@@ -6548,6 +6548,8 @@ function createEmptyPersistentTradeStats() {
     completed: 0,
     wins: 0,
     losses: 0,
+    breakEvens: 0,
+    resultClassificationSince: null,
     grossProfitR: 0,
     grossLossR: 0,
     netR: 0,
@@ -6605,27 +6607,31 @@ function isConfirmedAPlusTradeSignal(signal) {
     Number(initialPlan.takeProfit1) > 0;
 }
 
+function classifyTradeResult(signal) {
+  if (!isCompletedTradeSignal(signal)) return null;
+  const resultR = signal?.outcome?.resultR;
+  if (typeof resultR !== "number" || !Number.isFinite(resultR)) return null;
+  return resultR > 0 ? "Win" : resultR < 0 ? "Loss" : "BreakEven";
+}
+
 function addTradeToPersistentStats(stats, signal) {
   const next = {
     ...createEmptyPersistentTradeStats(),
     ...stats
   };
-  const isWin = signal.outcome.status === "TP1Hit";
-  const resultR = Number(signal.outcome?.resultR);
-  const safeResultR = Number.isFinite(resultR)
-    ? resultR
-    : isWin
-      ? 1
-      : -1;
-  const closedAt =
-    signal.outcome?.checkedAt ||
-    new Date().toISOString();
+  const classification = classifyTradeResult(signal);
+  if (!classification) throw new Error("Completed trade requires a finite resultR");
+  const safeResultR = signal.outcome.resultR;
+  const closedAt = signal.outcome.checkedAt;
+  if (!Number.isFinite(Date.parse(closedAt))) throw new Error("Completed trade requires a closing time");
   const previousStreak = next.currentStreak;
-  const streakType = isWin ? "Win" : "Loss";
+  const streakType = classification;
 
   next.completed += 1;
-  next.wins += isWin ? 1 : 0;
-  next.losses += isWin ? 0 : 1;
+  next.wins += classification === "Win" ? 1 : 0;
+  next.losses += classification === "Loss" ? 1 : 0;
+  next.breakEvens += classification === "BreakEven" ? 1 : 0;
+  next.resultClassificationSince = next.resultClassificationSince || closedAt;
 
   next.grossProfitR += safeResultR > 0
     ? safeResultR
@@ -6702,7 +6708,7 @@ function parsePersistentTradeStats(raw) {
   if (!stats || typeof stats !== "object" || Array.isArray(stats)) {
     throw new Error("Invalid persistent trade statistics");
   }
-  for (const field of ["completed", "wins", "losses", "grossProfitR",
+  for (const field of ["completed", "wins", "losses", "breakEvens", "grossProfitR",
     "grossLossR", "netR", "equityR", "peakR", "maxDrawdownR",
     "maxConsecutiveLosses"]) {
     if (stats[field] !== undefined &&
@@ -6850,7 +6856,7 @@ function createOutcomeSummary(history) {
       if (
         !tradeId ||
         completedTrades.has(tradeId) ||
-        (status !== "TP1Hit" && status !== "Stopped")
+        !classifyTradeResult(signal)
       ) {
         continue;
       }
@@ -6861,11 +6867,12 @@ function createOutcomeSummary(history) {
 
   const completedSignals = [...completedTrades.values()];
   const wins = completedSignals
-    .filter(signal => signal.outcome.status === "TP1Hit")
+    .filter(signal => classifyTradeResult(signal) === "Win")
     .length;
   const losses = completedSignals
-    .filter(signal => signal.outcome.status === "Stopped")
+    .filter(signal => classifyTradeResult(signal) === "Loss")
     .length;
+  const breakEvens = completedSignals.filter(signal => classifyTradeResult(signal) === "BreakEven").length;
   const resultsR = completedSignals
     .map(signal => signal.outcome?.resultR)
     .filter(result => result !== null && result !== undefined)
@@ -6911,7 +6918,7 @@ function createOutcomeSummary(history) {
   }
 
   for (const signal of chronologicalCompletedSignals) {
-    if (signal.outcome.status === "Stopped") {
+    if (classifyTradeResult(signal) === "Loss") {
       consecutiveLosses += 1;
       maxConsecutiveLosses = Math.max(
         maxConsecutiveLosses,
@@ -6925,7 +6932,7 @@ function createOutcomeSummary(history) {
   const latestCompletedSignal =
     chronologicalCompletedSignals.at(-1) || null;
   const latestStreakStatus =
-    latestCompletedSignal?.outcome?.status || null;
+    classifyTradeResult(latestCompletedSignal);
   let currentStreakCount = 0;
 
   for (
@@ -6934,7 +6941,7 @@ function createOutcomeSummary(history) {
     index -= 1
   ) {
     if (
-      chronologicalCompletedSignals[index].outcome.status !==
+      classifyTradeResult(chronologicalCompletedSignals[index]) !==
       latestStreakStatus
     ) {
       break;
@@ -6948,7 +6955,7 @@ function createOutcomeSummary(history) {
   const active = latestSignals
     .filter(signal => signal?.outcome?.status === "Active")
     .length;
-  const completed = wins + losses;
+  const completed = wins + losses + breakEvens;
 
   return {
     active,
@@ -6956,6 +6963,7 @@ function createOutcomeSummary(history) {
     completed,
     wins,
     losses,
+    breakEvens,
     winRate: completed > 0
       ? Math.round(
           wins / completed * 1000
@@ -6979,9 +6987,7 @@ function createOutcomeSummary(history) {
       : null,
     currentStreak: latestStreakStatus
       ? {
-          type: latestStreakStatus === "TP1Hit"
-            ? "Win"
-            : "Loss",
+          type: latestStreakStatus,
           count: currentStreakCount
         }
       : null,
@@ -7113,6 +7119,8 @@ if (mode === "statistics") {
         completed: persistentCompleted,
         wins: persistentWins,
         losses: persistentLosses,
+        breakEvens: persistentStats.resultClassificationSince ? persistentStats.breakEvens : null,
+        resultClassificationSince: persistentStats.resultClassificationSince || null,
         winRate: Math.round(
           persistentWins / persistentCompleted * 1000
         ) / 10,
