@@ -31,12 +31,18 @@ do not invoke a forced refresh from ordinary clients.
 
 ## Completed-trade rules
 
-- A plan becomes active only after price enters its Entry Zone.
+- A new plan starts its 60-minute monitoring window at the next minute boundary
+  (or immediately when created exactly on the boundary). `createdAt` records
+  creation; `plannedAt` records this effective start. Entry requires a confirmed
+  OKX 1m candle touching the fixed Entry Zone after the monitoring start.
 - TP1 reached before Stop Loss closes the plan as a win.
 - Stop Loss reached first closes it as a loss.
 - If both levels are touched inside the same one-minute candle, the conservative
   result is Stop Loss.
-- Outcome evidence stores the OKX candle count plus observed Low and High.
+- Confirmed candles are evaluated in timestamp order. Outcome evidence stores
+  the exact entry/exit candles, rule, minute precision, candle count and observed
+  Low/High. Entry at a candle open inside the zone uses that open; otherwise it
+  uses the approached zone boundary. This is analytic execution, not a real fill.
 - Cumulative Win/Loss counters are deduplicated by trade ID and persist beyond
   the 24-hour ranking window.
 - Detailed Completed Trades retain the latest 20 plans; aggregate statistics
@@ -137,5 +143,59 @@ result recalculation is performed by this change.
 
 The atomic scripts prevent command interleaving and precheck expected data types;
 they do not provide rollback for Redis infrastructure failures such as out-of-memory
-errors. Keep Redis capacity and request-size limits under observation. Existing
-trade outcome rules (including their candle-order limitations) are unchanged here.
+errors. Keep Redis capacity and request-size limits under observation. Trade outcome rules are documented below; changes are versioned per outcome.
+
+## Closed-candle lifecycle (closed-candles-v2)
+
+`createRankingHistoryEntry` preserves the original plan, ID, direction and
+confirmed-setup metadata while waiting and after activation. Ranking changes
+cannot substitute a new plan. Existing status names and TP1-as-full-exit semantics
+are retained; no partial exits, break-even management, score weights or A+ gates
+are changed in this phase. Closed historical records are not recalculated.
+
+`evaluateTradeLifecycle` processes only contiguous, valid, confirmed 1m candles.
+TP1 before SL in different candles is a win; SL first is a loss. Both levels in
+one eligible candle use the documented conservative SL-first policy, including
+an entry candle. A unique level touched on the opening side of an entry candle
+may precede the entry; if the close does not resolve that ordering, the trade stays
+Active with a null result and `ambiguous_entry_candle` verification. The minute
+open/close timestamps are evidence boundaries, not tick-accurate fill times.
+
+Existing active entry prices/times are preserved, not retrospectively reverified;
+an absent `entryCheck` identifies legacy entry evidence. Legacy plans/checkpoints
+that fall inside a minute retain their existing times.
+A possible entry/exit in that boundary candle remains unverified instead of being
+assigned to the wrong side of the boundary. A candle straddling expiry is treated
+the same way. These cases require finer-grained evidence or a separately approved
+resolution policy; repeatedly retrieving the same OHLC cannot remove intrinsic
+intraminute ambiguity. No arbitrary automatic expiry closes unresolved entries.
+
+`outcome.priceCheck.status` distinguishes `verified`, `awaiting_closed_candle`,
+`unavailable`, `incomplete_candles`, `invalid_plan`, `ambiguous_start_candle`,
+`ambiguous_expiry_candle`, `ambiguous_checkpoint_candle`, and
+`ambiguous_entry_candle`. These are verification details, not new trade states.
+The existing frontend can still consume the API; dedicated verification notices
+in the UI remain a separate frontend change.
+
+`lastPriceCheckedAt` is the first unprocessed minute boundary. It never advances
+past a missing or ambiguous candle. `verificationBoundaryAt` retains a legacy
+partial-minute boundary across retries. A new `entryCheck`/`exitCheck` carries the
+supporting candle, and `lifecycleVersion` identifies the new rule set. `checkedAt`
+is the closing boundary of the exit candle; `priceCheck.verifiedAt` is when the
+analysis ran. EXPIRED requires verified coverage through the full entry window
+without entry and remains excluded from Win/Loss statistics.
+
+The fetcher uses OKX `history-candles`, accepts only `confirm=1` records, uses `after`/`before` pagination
+and a single 8-second request budget. Each check processes at most the oldest
+300 unchecked minutes in three requests; a larger outage catches up over later
+cycles rather than skipping to recent candles. Gaps/timeouts retain the checkpoint
+and never fall back to a current ticker price. This does not introduce additional
+requests for all scanner rows, only for existing tracked plans.
+
+Local behavioral tests include direction symmetry, chronological exits, entry
+candles, missing/unconfirmed data, expiry, boundary ambiguity, frozen plans,
+pagination and end-to-end persistence through the existing statistics API.
+Aggregates still retain their existing scope: historical results from old rules
+and newly versioned results are not retroactively converted or reclassified.
+
+OKX reference: https://app.okx.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks-history

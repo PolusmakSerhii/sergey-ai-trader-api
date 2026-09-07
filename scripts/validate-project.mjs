@@ -59,7 +59,7 @@ assert.match(
 );
 assert.match(
   marketSource,
-  /outcomeStatus === "WaitingEntry"[\s\S]*outcomeStatus === "Pending"/,
+  /outcome\.lastPriceCheckedAt\s*=/,
   "Waiting plans must retain their last checked timestamp"
 );
 assert.match(

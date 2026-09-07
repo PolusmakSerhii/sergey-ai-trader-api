@@ -164,6 +164,37 @@ test("trade ledger and backups against isolated Redis (no TCP or production)", a
       context.recordCompletedTradeSignals = originalRecord;
     });
 
+    await t.test("candle lifecycle persists a win once and exposes it through statistics", async () => {
+      await reset();
+      const start = Date.parse("2026-09-07T10:00:00Z");
+      const item = { symbol:"TESTUSDT", price:100, direction:"Long", grade:"A+",
+        opportunityGrade:"A+", opportunityScore:90, confidence:90, riskReward:2,
+        action:"Strong Buy", tradeAllowed:true, tradeReadiness:{ready:true},
+        entryZone:{from:99,to:101}, stopLoss:90, takeProfit1:110, takeProfit2:120, takeProfit3:130 };
+      const snapshot = minutes => ({ generatedAt:new Date(start+minutes*60000).toISOString(),globalRanking:[item] });
+      assert.equal(await context.writeRankingHistory(snapshot(0)),true);
+      const first = JSON.parse(await redis(["GET",keys.openTrades]));
+      assert.equal(first[0].outcome.status,"WaitingEntry");
+      const originalFetch = context.fetchOKXRecentPriceRange;
+      context.fetchOKXRecentPriceRange = async () => ({source:"OKX 1m candles",data:[
+        {timestamp:start,open:100,high:102,low:98,close:100,confirmed:true},
+        {timestamp:start+60000,open:100,high:111,low:98,close:110,confirmed:true},
+        {timestamp:start+120000,open:100,high:102,low:89,close:90,confirmed:true}
+      ]});
+      assert.equal(await context.writeRankingHistory(snapshot(6)),true);
+      assert.equal((await stats()).wins,1);
+      assert.equal((await stats()).losses,0);
+      assert.equal(await redis(["GET",keys.openTrades]),"[]");
+      const response={setHeader(){},status(code){this.code=code;return this;},json(body){this.body=body;return this;}};
+      await context.handler({method:"GET",query:{mode:"statistics"}},response);
+      assert.equal(response.body.completedTrades[0].outcome.status,"TP1Hit");
+      assert.equal(response.body.completedTrades[0].outcome.exitCheck.candle.timestamp,start+60000);
+      assert.equal(response.body.outcomes.winRate,100);
+      await record(response.body.completedTrades);
+      assert.equal((await stats()).completed,1);
+      context.fetchOKXRecentPriceRange=originalFetch;
+    });
+
     // Run the actual CLI scripts with a test-only REST adapter to the Unix socket.
     const adapter = join(directory, "local-rest-adapter.mjs");
     await writeFile(adapter, `import { execFileSync } from 'node:child_process';

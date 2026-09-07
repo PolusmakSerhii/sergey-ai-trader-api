@@ -3772,90 +3772,203 @@ action:
   }
 }
 
-async function fetchOKXRecentPriceRange(
-  symbol,
-  fromTime,
-  toTime
-) {
-  const fromTimestamp = Date.parse(fromTime || "");
-  const toTimestamp = Date.parse(toTime || "");
+const LIFECYCLE_MINUTE_MS = 60000;
+const LIFECYCLE_MAX_CANDLES_PER_CHECK = 300;
 
-  if (
-    !Number.isFinite(fromTimestamp) ||
-    !Number.isFinite(toTimestamp) ||
-    toTimestamp < fromTimestamp
-  ) {
-    return null;
-  }
+function getLifecycleCursor(outcome, plannedAt) {
+  const timestamp = Date.parse(outcome?.lastPriceCheckedAt ||
+    (outcome?.status === "Active" ? outcome.activatedAt : null) || plannedAt || "");
+  // Include the boundary candle: the evaluator will not attribute an ambiguous
+  // touch to the part of the minute after the plan/checkpoint.
+  return Math.floor(timestamp / LIFECYCLE_MINUTE_MS) * LIFECYCLE_MINUTE_MS;
+}
 
-  const normalizedSymbol = String(symbol || "")
-    .toUpperCase()
-    .replace(/USDT$/i, "");
-  const instId = `${normalizedSymbol}-USDT-SWAP`;
-  const requestedMinutes = Math.ceil(
-    (toTimestamp - fromTimestamp) / 60000
-  ) + 2;
-  const limit = Math.max(
-    3,
-    Math.min(100, requestedMinutes)
-  );
-  const url = new URL(
-    "https://www.okx.com/api/v5/market/candles"
-  );
+async function fetchOKXRecentPriceRange(symbol, fromTime, toTime) {
+  const fromTimestamp = getLifecycleCursor({}, fromTime);
+  const requestedEnd = Math.floor(Date.parse(toTime || "") / LIFECYCLE_MINUTE_MS) * LIFECYCLE_MINUTE_MS;
+  if (!Number.isFinite(fromTimestamp) || !Number.isFinite(requestedEnd) ||
+      requestedEnd < fromTimestamp) return null;
 
-  url.searchParams.set("instId", instId);
-  url.searchParams.set("bar", "1m");
-  url.searchParams.set("limit", String(limit));
-
+  // Recover the oldest unchecked window first, so a long outage never silently
+  // skips earlier outcomes. Larger gaps catch up over successive ranking cycles.
+  const windowEnd = Math.min(requestedEnd,
+    fromTimestamp + LIFECYCLE_MAX_CANDLES_PER_CHECK * LIFECYCLE_MINUTE_MS);
+  const normalizedSymbol = String(symbol || "").toUpperCase().replace(/USDT$/i, "");
+  const candlesByTime = new Map();
+  let after = windowEnd;
+  let requests = 0;
   try {
-    const response = await fetch(url);
-    const payload = await response
-      .json()
-      .catch(() => null);
-
-    if (
-      !response.ok ||
-      payload?.code !== "0" ||
-      !Array.isArray(payload?.data)
-    ) {
-      return null;
+    const requestSignal = AbortSignal.timeout(8000);
+    while (after > fromTimestamp && requests < 3) {
+      const url = new URL("https://www.okx.com/api/v5/market/history-candles");
+      url.searchParams.set("instId", `${normalizedSymbol}-USDT-SWAP`);
+      url.searchParams.set("bar", "1m");
+      url.searchParams.set("limit", String(Math.min(100,
+        Math.ceil((after - fromTimestamp) / LIFECYCLE_MINUTE_MS))));
+      url.searchParams.set("after", String(after));
+      url.searchParams.set("before", String(fromTimestamp - 1));
+      requests += 1;
+      const response = await fetch(url, { signal: requestSignal });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || payload?.code !== "0" || !Array.isArray(payload.data)) return null;
+      let oldest = after;
+      for (const item of payload.data) {
+        const timestamp = Number(item?.[0]);
+        if (Number.isFinite(timestamp) && timestamp < oldest) oldest = timestamp;
+        const candle = { timestamp, open: Number(item?.[1]), high: Number(item?.[2]),
+          low: Number(item?.[3]), close: Number(item?.[4]), confirmed: item?.[8] === "1" };
+        if (isValidLifecycleCandle(candle) && candle.confirmed &&
+            timestamp >= fromTimestamp && timestamp < windowEnd) {
+          candlesByTime.set(timestamp, candle);
+        }
+      }
+      if (oldest >= after || !payload.data.length) break;
+      after = oldest;
     }
-
-    const candles = payload.data
-      .map(item => ({
-        timestamp: Number(item?.[0]),
-        open: Number(item?.[1]),
-        high: Number(item?.[2]),
-        low: Number(item?.[3]),
-        close: Number(item?.[4])
-      }))
-      .filter(candle =>
-        Number.isFinite(candle.timestamp) &&
-        Number.isFinite(candle.open) &&
-        Number.isFinite(candle.high) &&
-        Number.isFinite(candle.low) &&
-        Number.isFinite(candle.close) &&
-        candle.timestamp >= fromTimestamp - 60000 &&
-        candle.timestamp <= toTimestamp
-      )
-      .sort((a, b) => a.timestamp - b.timestamp);
-
-    if (!candles.length) {
-      return null;
-    }
-
-    return {
-      source: "OKX 1m candles",
-      fromTime,
-      toTime,
-      candles: candles.length,
-      high: Math.max(...candles.map(candle => candle.high)),
-      low: Math.min(...candles.map(candle => candle.low)),
-      data: candles
-    };
+    const data = [...candlesByTime.values()].sort((a, b) => a.timestamp - b.timestamp);
+    return { source: "OKX 1m candles", fromTime, toTime, requests,
+      windowEnd: new Date(windowEnd).toISOString(),
+      candles: data.length, data,
+      high: data.length ? Math.max(...data.map(candle => candle.high)) : null,
+      low: data.length ? Math.min(...data.map(candle => candle.low)) : null };
   } catch {
     return null;
   }
+}
+
+function isValidLifecycleCandle(candle) {
+  return [candle?.timestamp, candle?.open, candle?.high, candle?.low, candle?.close]
+    .every(value => typeof value === "number" && Number.isFinite(value)) &&
+    candle.timestamp % LIFECYCLE_MINUTE_MS === 0 && candle.low > 0 &&
+    candle.low <= Math.min(candle.open, candle.close) &&
+    candle.high >= Math.max(candle.open, candle.close);
+}
+
+function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, capturedAt, priceRange }) {
+  if (["TP1Hit", "Stopped", "Expired"].includes(previousOutcome.status)) return previousOutcome;
+  const plannedAt = initialPlan.plannedAt;
+  const expiresAt = initialPlan.expiresAt;
+  const now = Date.parse(capturedAt);
+  const expiry = Date.parse(expiresAt);
+  const expiryBoundary = Math.ceil(expiry / LIFECYCLE_MINUTE_MS) * LIFECYCLE_MINUTE_MS;
+  let cursor = getLifecycleCursor(previousOutcome, plannedAt);
+  const fromTime = Number.isFinite(cursor) ? new Date(cursor).toISOString() : null;
+  const end = Math.floor(now / LIFECYCLE_MINUTE_MS) * LIFECYCLE_MINUTE_MS;
+  const boundaryTimestamp = Math.max(Date.parse(plannedAt),
+    Date.parse(previousOutcome.verificationBoundaryAt || previousOutcome.lastPriceCheckedAt || plannedAt),
+    Date.parse(previousOutcome.status === "Active" ? previousOutcome.activatedAt || plannedAt : plannedAt));
+  const outcome = { ...previousOutcome, plannedAt, expiresAt,
+    verificationBoundaryAt: Number.isFinite(boundaryTimestamp)
+      ? new Date(boundaryTimestamp).toISOString() : null,
+    lifecycleVersion: "closed-candles-v2",
+    status: previousOutcome.status === "Active" ? "Active" : "WaitingEntry",
+    activatedAt: previousOutcome.activatedAt ?? null,
+    entryPrice: previousOutcome.entryPrice ?? null,
+    checkedAt: null, exitPrice: null, resultR: null };
+  const frozenEntryLow = Math.min(initialPlan.entryZone?.from, initialPlan.entryZone?.to);
+  const frozenEntryHigh = Math.max(initialPlan.entryZone?.from, initialPlan.entryZone?.to);
+  const stopLoss = initialPlan.stopLoss;
+  const takeProfit1 = initialPlan.takeProfit1;
+  const rawLevels = [initialPlan.entryZone?.from, initialPlan.entryZone?.to, stopLoss, takeProfit1];
+  const validPlan = rawLevels.every(value => typeof value === "number" && Number.isFinite(value) && value > 0) &&
+    (direction === "Long" ? stopLoss < frozenEntryLow && takeProfit1 > frozenEntryHigh
+      : direction === "Short" && stopLoss > frozenEntryHigh && takeProfit1 < frozenEntryLow) &&
+    Number.isFinite(cursor) && Number.isFinite(now) && Number.isFinite(expiry) &&
+    (outcome.status !== "Active" ||
+      (typeof outcome.entryPrice === "number" && Number.isFinite(outcome.entryPrice) &&
+       (direction === "Long" ? outcome.entryPrice > stopLoss && outcome.entryPrice < takeProfit1
+         : outcome.entryPrice < stopLoss && outcome.entryPrice > takeProfit1)));
+  let verification = validPlan ? "awaiting_closed_candle" : "invalid_plan";
+  const inspected = [];
+  const candles = new Map((Array.isArray(priceRange?.data) ? priceRange.data : [])
+    .filter(candle => isValidLifecycleCandle(candle) && candle.confirmed === true &&
+      candle.timestamp >= cursor && candle.timestamp + LIFECYCLE_MINUTE_MS <= end)
+    .map(candle => [candle.timestamp, candle]));
+  if (validPlan) {
+    while (cursor < end) {
+      if (outcome.status !== "Active" && cursor >= expiryBoundary) break;
+      const candle = candles.get(cursor);
+      if (!candle) {
+        verification = priceRange ? "incomplete_candles" : "unavailable";
+        break;
+      }
+      inspected.push(candle);
+      verification = "verified";
+      const touchesEntry = candle.low <= frozenEntryHigh && candle.high >= frozenEntryLow;
+      const touchesExit = direction === "Long"
+        ? candle.low <= stopLoss || candle.high >= takeProfit1
+        : candle.high >= stopLoss || candle.low <= takeProfit1;
+      if (candle.timestamp < boundaryTimestamp &&
+          (outcome.status === "Active" ? touchesExit : touchesEntry)) {
+        verification = outcome.status === "Active"
+          ? "ambiguous_checkpoint_candle" : "ambiguous_start_candle";
+        break;
+      }
+      if (outcome.status !== "Active" &&
+          candle.timestamp + LIFECYCLE_MINUTE_MS > expiry) {
+        if (touchesEntry) {
+          verification = "ambiguous_expiry_candle";
+          break;
+        }
+        cursor += LIFECYCLE_MINUTE_MS;
+        break;
+      }
+      if (outcome.status !== "Active" &&
+          candle.low <= frozenEntryHigh && candle.high >= frozenEntryLow) {
+        outcome.status = "Active";
+        outcome.activatedAt = new Date(candle.timestamp).toISOString();
+        outcome.entryPrice = Math.max(frozenEntryLow, Math.min(frozenEntryHigh, candle.open));
+        outcome.entryCheck = { source: "OKX 1m candles", candle,
+          rule: "first-complete-candle-touch", timestampPrecision: "1m" };
+      }
+      if (outcome.status === "Active") {
+        const stopHit = direction === "Long" ? candle.low <= stopLoss : candle.high >= stopLoss;
+        const tp1Hit = direction === "Long" ? candle.high >= takeProfit1 : candle.low <= takeProfit1;
+        const isEntryCandle = outcome.entryCheck && Date.parse(outcome.activatedAt) === candle.timestamp;
+        if (isEntryCandle && stopHit !== tp1Hit) {
+          const openInside = candle.open >= frozenEntryLow && candle.open <= frozenEntryHigh;
+          const openOnStopSide = direction === "Long" ? candle.open < frozenEntryLow : candle.open > frozenEntryHigh;
+          const closeBeyondLevel = stopHit
+            ? (direction === "Long" ? candle.close <= stopLoss : candle.close >= stopLoss)
+            : (direction === "Long" ? candle.close >= takeProfit1 : candle.close <= takeProfit1);
+          // An extreme on the opening side of the zone may precede the entry.
+          // Preserve the candle for re-verification rather than fabricate a result.
+          if (!openInside && !closeBeyondLevel && (stopHit ? openOnStopSide : !openOnStopSide)) {
+            verification = "ambiguous_entry_candle";
+            break;
+          }
+        }
+        if (stopHit || tp1Hit) {
+          outcome.status = stopHit ? "Stopped" : "TP1Hit";
+          outcome.exitPrice = stopHit ? stopLoss : takeProfit1;
+          outcome.resultR = stopHit ? -1 : Math.round(
+            Math.abs(takeProfit1 - outcome.entryPrice) / Math.abs(outcome.entryPrice - stopLoss) * 100) / 100;
+          outcome.checkedAt = new Date(candle.timestamp + LIFECYCLE_MINUTE_MS).toISOString();
+          outcome.exitCheck = { source: "OKX 1m candles", candle,
+            rule: stopHit && tp1Hit ? "same-candle-sl-first" : "first-level-in-candle-order",
+            timestampPrecision: "1m" };
+          cursor += LIFECYCLE_MINUTE_MS;
+          break;
+        }
+      }
+      cursor += LIFECYCLE_MINUTE_MS;
+    }
+    if (outcome.status === "WaitingEntry" && now >= expiry && cursor >= expiryBoundary) {
+      outcome.status = "Expired";
+      verification = "verified";
+    }
+  } else if (outcome.status !== "Active") {
+    outcome.status = "Pending";
+  }
+  outcome.lastPriceCheckedAt = Number.isFinite(cursor) ? new Date(cursor).toISOString()
+    : previousOutcome.lastPriceCheckedAt ?? null;
+  outcome.priceCheck = { source: priceRange?.source || null, fromTime,
+    toTime: outcome.lastPriceCheckedAt, verifiedAt: capturedAt,
+    status: verification, candles: inspected.length,
+    high: inspected.length ? Math.max(...inspected.map(candle => candle.high)) : null,
+    low: inspected.length ? Math.min(...inspected.map(candle => candle.low)) : null,
+    bothLevelsTouched: outcome.exitCheck?.rule === "same-candle-sl-first" };
+  return outcome;
 }
 
 async function fetchOKXKlines(
@@ -5804,9 +5917,11 @@ async function createRankingHistoryEntry(
       batch.map(signal =>
         fetchOKXRecentPriceRange(
           signal.symbol,
-          signal.outcome?.lastPriceCheckedAt ||
-            previousEntry?.generatedAt ||
-            signal.capturedAt,
+          Number.isFinite(getLifecycleCursor(signal.outcome,
+            signal.initialPlan?.plannedAt || signal.outcome?.plannedAt || signal.capturedAt))
+            ? new Date(getLifecycleCursor(signal.outcome,
+                signal.initialPlan?.plannedAt || signal.outcome?.plannedAt || signal.capturedAt)).toISOString()
+            : null,
           capturedAt
         )
       )
@@ -5917,10 +6032,13 @@ async function createRankingHistoryEntry(
             : null;
         const previousWasActivated =
           previousIsActive || previousIsClosed;
+        // New plans start on a minute boundary, so no candle contains both
+        // pre-plan and eligible entry prices. Legacy plans retain their times.
         const plannedAt =
           previousSignal?.initialPlan?.plannedAt ||
           previousOutcome.plannedAt ||
-          capturedAt;
+          new Date(Math.ceil(Date.parse(capturedAt) / LIFECYCLE_MINUTE_MS) *
+            LIFECYCLE_MINUTE_MS).toISOString();
         const expiresAt =
           previousSignal?.initialPlan?.expiresAt ||
           previousOutcome.expiresAt ||
@@ -5953,6 +6071,7 @@ async function createRankingHistoryEntry(
                 expiresAt
               }
             : {
+                createdAt: capturedAt,
                 entryPrice: plannedEntryPrice,
                 stopLoss:
                   item.stopLoss ?? null,
@@ -5979,151 +6098,15 @@ async function createRankingHistoryEntry(
           expiresAt:
             initialPlan?.expiresAt || expiresAt
         };
-        const frozenEntryFrom = Number(
-          initialPlan?.entryZone?.from
-        );
-        const frozenEntryTo = Number(
-          initialPlan?.entryZone?.to
-        );
-        const frozenEntryLow = Math.min(
-          frozenEntryFrom,
-          frozenEntryTo
-        );
-        const frozenEntryHigh = Math.max(
-          frozenEntryFrom,
-          frozenEntryTo
-        );
-        const expiryTimestamp = Date.parse(expiresAt);
-        const capturedTimestamp = Date.parse(capturedAt);
-        const currentPriceInsideFrozenZone =
-          currentPrice !== null &&
-          Number.isFinite(frozenEntryLow) &&
-          Number.isFinite(frozenEntryHigh) &&
-          currentPrice >= frozenEntryLow &&
-          currentPrice <= frozenEntryHigh &&
-          (!Number.isFinite(expiryTimestamp) ||
-            capturedTimestamp <= expiryTimestamp);
-        const entryCandle = Array.isArray(recentPriceRange?.data)
-          ? recentPriceRange.data.find(candle =>
-              candle.low <= frozenEntryHigh &&
-              candle.high >= frozenEntryLow &&
-              (!Number.isFinite(expiryTimestamp) ||
-                candle.timestamp <= expiryTimestamp)
-            ) || null
-          : null;
-        const entryActive =
-          currentPriceInsideFrozenZone || Boolean(entryCandle);
-        const detectedEntryPrice = entryCandle
-            ? direction === "Long"
-              ? frozenEntryHigh
-              : direction === "Short"
-                ? frozenEntryLow
-                : initialPlan?.entryPrice ?? null
-            : currentPriceInsideFrozenZone
-              ? currentPrice
-              : null;
-        const activatedAt = previousWasActivated
-          ? previousOutcome.activatedAt ||
-            previousSignal.capturedAt ||
-            null
-          : entryActive
-            ? entryCandle
-              ? new Date(entryCandle.timestamp).toISOString()
-              : capturedAt
-            : null;
-        const entryPrice = previousWasActivated
-          ? previousOutcome.entryPrice ??
-            previousSignal.price ??
-            null
-          : detectedEntryPrice;
-        const planExpired =
-          !previousWasActivated &&
-          !entryActive &&
-          Date.parse(capturedAt) >= Date.parse(expiresAt);
-        const initialStopLoss =
-          Number(initialPlan?.stopLoss);
-        const initialTakeProfit1 =
-          Number(initialPlan?.takeProfit1);
-        const initialEntryPrice =
-          Number(entryPrice ?? initialPlan?.entryPrice);
-        const checkedHigh =
-          recentPriceRange?.high !== null &&
-          recentPriceRange?.high !== undefined &&
-          Number.isFinite(Number(recentPriceRange.high))
-          ? Number(recentPriceRange.high)
-          : currentPrice;
-        const checkedLow =
-          recentPriceRange?.low !== null &&
-          recentPriceRange?.low !== undefined &&
-          Number.isFinite(Number(recentPriceRange.low))
-          ? Number(recentPriceRange.low)
-          : currentPrice;
-        const canCheckOutcome =
-          previousIsActive &&
-          checkedHigh !== null &&
-          checkedLow !== null &&
-          Number.isFinite(initialStopLoss) &&
-          Number.isFinite(initialTakeProfit1) &&
-          Number.isFinite(initialEntryPrice);
-        const stopHit = canCheckOutcome &&
-          (direction === "Long"
-            ? checkedLow <= initialStopLoss
-            : direction === "Short"
-              ? checkedHigh >= initialStopLoss
-              : false);
-        const tp1Hit = canCheckOutcome &&
-          !stopHit &&
-          (direction === "Long"
-            ? checkedHigh >= initialTakeProfit1
-            : direction === "Short"
-              ? checkedLow <= initialTakeProfit1
-              : false);
-        const bothLevelsTouched = canCheckOutcome &&
-          (direction === "Long"
-            ? checkedLow <= initialStopLoss &&
-              checkedHigh >= initialTakeProfit1
-            : direction === "Short"
-              ? checkedHigh >= initialStopLoss &&
-                checkedLow <= initialTakeProfit1
-              : false);
-        const riskDistance =
-          Math.abs(
-            initialEntryPrice - initialStopLoss
-          );
-        const tp1ResultR =
-          riskDistance > 0
-            ? Math.round(
-                Math.abs(
-                  initialTakeProfit1 -
-                  initialEntryPrice
-                ) / riskDistance * 100
-              ) / 100
-            : null;
-        const outcomeStatus = previousIsClosed
-          ? previousOutcome.status
-          : stopHit
-            ? "Stopped"
-            : tp1Hit
-              ? "TP1Hit"
-              : previousIsActive
-                ? "Active"
-                : planExpired
-                  ? "Expired"
-                : hasEntryZone
-                  ? entryActive
-                    ? "Active"
-                    : "WaitingEntry"
-                  : "Pending";
-        const outcomeClosedNow =
-          !previousIsClosed &&
-          (stopHit || tp1Hit);
+        const outcome = evaluateTradeLifecycle({ initialPlan, direction,
+          previousOutcome, capturedAt, priceRange: recentPriceRange });
 
         return {
           tradeId:
             previousSignal?.tradeId ||
             [setupKey, capturedAt].join(":"),
           setupKey,
-          setupId: [
+          setupId: previousSignal?.setupId || [
             item.symbol,
             direction,
             entryFrom,
@@ -6140,15 +6123,15 @@ async function createRankingHistoryEntry(
           symbol: item.symbol,
           price: currentPrice,
           direction,
-          action: previousWasActivated
+          action: Boolean(previousSignal)
             ? previousSignal?.action || "Wait"
             : item.action || "Wait",
           opportunityScore:
-            previousWasActivated
+            Boolean(previousSignal)
               ? previousSignal?.opportunityScore || 0
               : item.opportunityScore || 0,
           opportunityGrade:
-            previousWasActivated
+            Boolean(previousSignal)
               ? previousSignal?.opportunityGrade ||
                 (Number(previousSignal?.opportunityScore) >= 85
                   ? "A+"
@@ -6156,11 +6139,11 @@ async function createRankingHistoryEntry(
               : item.opportunityGrade ||
                 item.grade ||
                 "D",
-          confidence: previousWasActivated
+          confidence: Boolean(previousSignal)
             ? previousSignal?.confidence || 0
             : item.confidence || 0,
           grade:
-            previousWasActivated
+            Boolean(previousSignal)
               ? previousSignal?.grade ||
                 previousSignal?.opportunityGrade ||
                 "D"
@@ -6168,7 +6151,7 @@ async function createRankingHistoryEntry(
                 item.opportunityGrade ||
                 "D",
           riskReward:
-            previousWasActivated
+            Boolean(previousSignal)
               ? previousSignal?.riskReward ?? null
               : typeof item.riskReward === "number"
                 ? item.riskReward
@@ -6184,65 +6167,7 @@ async function createRankingHistoryEntry(
           takeProfit3:
             initialPlan?.takeProfit3 ?? item.takeProfit3 ?? null,
           initialPlan,
-          outcome: {
-            status: outcomeStatus,
-            plannedAt,
-            expiresAt,
-            activatedAt,
-            entryPrice,
-            lastPriceCheckedAt:
-              outcomeStatus === "Active"
-                ? previousIsActive
-                  ? capturedAt
-                  : activatedAt || capturedAt
-                : outcomeStatus === "WaitingEntry" ||
-                    outcomeStatus === "Pending"
-                  ? capturedAt
-                : previousIsClosed
-                  ? previousOutcome.lastPriceCheckedAt ||
-                    previousOutcome.checkedAt ||
-                    null
-                  : null,
-            priceCheck: previousIsClosed
-              ? previousOutcome.priceCheck || null
-              : previousIsActive
-                ? {
-                    source:
-                      recentPriceRange?.source ||
-                      "snapshot price",
-                    fromTime:
-                      recentPriceRange?.fromTime ||
-                      previousOutcome.lastPriceCheckedAt ||
-                      previousEntry?.generatedAt ||
-                      null,
-                    toTime: capturedAt,
-                    candles:
-                      recentPriceRange?.candles || 0,
-                    high: checkedHigh,
-                    low: checkedLow,
-                    bothLevelsTouched
-                  }
-                : null,
-            checkedAt: previousIsClosed
-              ? previousOutcome.checkedAt || null
-              : outcomeClosedNow
-                ? capturedAt
-                : null,
-            exitPrice: previousIsClosed
-              ? previousOutcome.exitPrice ?? null
-              : outcomeClosedNow
-                ? stopHit
-                  ? initialStopLoss
-                  : initialTakeProfit1
-                : null,
-            resultR: previousIsClosed
-              ? previousOutcome.resultR ?? null
-              : stopHit
-                ? -1
-                : tp1Hit
-                  ? tp1ResultR
-                  : null
-          }
+          outcome
         };
       });
   const readyTrades = readyItems.length;
