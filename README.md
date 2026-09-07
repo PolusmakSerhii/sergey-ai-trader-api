@@ -203,13 +203,18 @@ OKX reference: https://app.okx.com/docs-v5/en/#order-book-trading-market-data-ge
 ### Source resilience and caching
 
 CoinGlass responses use a 60-second cache; Fear & Greed uses 300 seconds.
-Only successful responses are stored in the bounded process cache and optional Redis
-keys `sergey-ai:source-cache:v1:*` (with `EX`). Identical concurrent requests on the
-same instance share one request. Warm instances return independent copies of cached
-values. Expired values are never used as a fallback. Redis failure falls through to
-the original source, and source errors remain uncached. These disposable keys are
-intentionally excluded from trade-ledger backups. Concurrent cold instances can still
-make duplicate upstream requests; this is not a distributed refresh lock.
+Only successful responses are stored in memory on the running Vercel instance.
+Source caching performs no Redis GET/SET commands and uses no shared persistent cache.
+Identical concurrent requests on the same instance share one request; returned values
+are independent copies. Expired values and source errors are never used as a fallback.
+A cold start or another instance fetches independently, so savings apply only to repeated
+requests during the TTL on the same warm instance. The cache is not on the user's laptop
+unless the backend itself is running locally. Previous `sergey-ai:source-cache:v1:*` keys,
+if any were deployed, are no longer accessed and expire via their existing TTLs.
+
+Redis remains responsible for ranking snapshots/history, trades/statistics and refresh
+coordination. Removing source-cache commands does not guarantee the entire project fits
+Upstash's free allowance; existing Redis usage and refresh traffic still count.
 
 External market requests have an 8-second timeout per request, Redis requests 5 seconds,
 scanner analysis calls 45 seconds, and ranking batch calls 60 seconds. Lifecycle candle
@@ -220,8 +225,32 @@ technical analysis. Indicator formulas, grading and Trade Plan rules are unchang
 A ranking refresh containing failed symbols, malformed batches or no results returns
 502 before writing ranking cache or history, preserving the previous successful snapshot.
 Trade checks resume at the next successful refresh; this change does not provide a
-separate trade-monitor job. Public cache-miss scans and distributed refresh coordination
-are still existing behavior and remain follow-up work. OKX candle caching is also deferred.
+separate trade-monitor job.
+
+OKX SWAP instruments use a 300-second cache, all SWAP tickers 15 seconds, and daily
+candles 60 seconds. Daily cache keys include symbol, instrument type, interval and
+requested limit. Intraday chart candles and lifecycle minute candles bypass this cache.
+The shared process cache is capped at 128 entries to bound retained candle histories.
+Source freshness is limited by these TTLs; scoring formulas themselves are unchanged.
+
+Public Global Ranking reads only the last stored snapshot. A missing/unavailable cache
+returns 503 and never starts a full scan. Initial population and subsequent refreshes
+require the existing authenticated QStash `refresh=true` request. Existing frontend error
+handling retains already displayed ranking data on failure; a first load without a cached
+snapshot cannot show ranking until an authorized refresh succeeds.
+
+Refreshes acquire `sergey-ai:ranking-refresh-lock:v1` with SET NX EX and a unique token.
+The 15-minute lease is renewed before batches and persistence, subject to a 10-minute
+scan budget checked at those boundaries (an in-flight batch may finish after that budget).
+Redis checks ownership atomically with each snapshot, ledger and checkpoint command.
+Ledger Lua scripts include the same guard directly because Redis cannot nest EVAL.
+A stale owner cannot write or delete another owner's lease. Normal completion/failure
+releases the owned lease; process termination or an uncertain acquisition response relies
+on expiry. Busy/unavailable locks, lost ownership and persistence failure return 503 so
+scheduler retries remain possible. Cache/history/ledger remain separate writes, not one
+transaction; a failure can occur after a snapshot was stored. Existing ledger deduplication
+makes completed-trade retries safe. Refresh lock keys are not included in backups.
 
 `tests/source-resilience.test.mjs` covers coalescing, cache expiry and isolation,
-shared-cache reuse, source/Redis failures and ranking persistence guards without live API calls.
+zero Redis access for source caches, cold starts, bounded retention, source failures and
+ranking persistence guards without live API calls.

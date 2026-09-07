@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Receiver } from "@upstash/qstash";
 
 const DEBUG_LOGS =
@@ -7,30 +8,16 @@ const DEBUG_LOGS =
 // This process cache also coalesces concurrent requests on a warm instance.
 const sourceResponses = new Map();
 const sourceRequests = new Map();
-const SOURCE_CACHE_LIMIT = 512;
+const SOURCE_CACHE_LIMIT = 128;
 
 async function cachedSource(key, ttlSeconds, load, valid) {
   const local = sourceResponses.get(key);
   if (local && local.expiresAt > Date.now()) return structuredClone(local.value);
   if (sourceRequests.has(key)) return structuredClone(await sourceRequests.get(key));
   const request = (async () => {
-    const redisKey = `sergey-ai:source-cache:v1:${key}`;
-    let value;
-    try {
-      const raw = await runRedisCommand(["GET", redisKey]);
-      const cached = raw ? JSON.parse(raw) : null;
-      if (cached && cached.expiresAt > Date.now() && valid(cached.value)) {
-        sourceResponses.set(key, cached);
-        return cached.value;
-      }
-    } catch { /* An optional cache cannot disable its source. */ }
-    value = await load();
+    const value = await load();
     if (valid(value)) {
-      const entry = { value, expiresAt: Date.now() + ttlSeconds * 1000 };
-      sourceResponses.set(key, entry);
-      try {
-        await runRedisCommand(["SET", redisKey, JSON.stringify(entry), "EX", ttlSeconds]);
-      } catch { /* Keep the successful source response when Redis is unavailable. */ }
+      sourceResponses.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
     }
     return value;
   })();
@@ -3191,6 +3178,11 @@ if (tradePlan.validTrade) {
 }
 
 async function fetchOKXSwapSymbols() {
+  return cachedSource("okx:symbols", 300, () => requestOKXSwapSymbols(),
+    value => value?.ok === true && Array.isArray(value.symbols) && value.symbols.length > 0);
+}
+
+async function requestOKXSwapSymbols() {
   try {
     const response = await fetch(
       "https://www.okx.com/api/v5/public/instruments?instType=SWAP",
@@ -3276,6 +3268,11 @@ async function fetchOKXSwapSymbols() {
   }
 }
     async function fetchOKXSwapTickers() {
+  return cachedSource("okx:tickers", 15, () => requestOKXSwapTickers(),
+    value => value?.ok === true && Array.isArray(value.tickers) && value.tickers.length > 0);
+}
+
+async function requestOKXSwapTickers() {
   const url =
     "https://www.okx.com/api/v5/market/tickers?instType=SWAP";
 
@@ -4035,7 +4032,14 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
   return outcome;
 }
 
-async function fetchOKXKlines(
+async function fetchOKXKlines(symbol, interval = "1D", limit = 1200, instrumentType = "SPOT") {
+  if (interval !== "1D") return requestOKXKlines(symbol, interval, limit, instrumentType);
+  return cachedSource(`okx:daily:${symbol}:${instrumentType}:${interval}:${limit}`, 60,
+    () => requestOKXKlines(symbol, interval, limit, instrumentType),
+    value => value?.ok === true && Array.isArray(value.data) && value.data.length > 0);
+}
+
+async function requestOKXKlines(
   symbol,
   interval = "1D",
   limit = 1200,
@@ -5891,6 +5895,40 @@ async function runRedisCommand(command) {
   return payload?.result ?? null;
 }
 
+const RANKING_REFRESH_LOCK_KEY = "sergey-ai:ranking-refresh-lock:v1";
+const RANKING_REFRESH_LOCK_SECONDS = 15 * 60;
+const RANKING_REFRESH_BUDGET_MS = 10 * 60 * 1000;
+const RANKING_OWNER_COMMAND_SCRIPT = `
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+  return redis.error_reply('Ranking refresh lease lost')
+end
+return redis.call(unpack(ARGV, 2))
+`;
+const RELEASE_RANKING_LOCK_SCRIPT = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+`;
+
+function rankingOwnerCommand(token, command) {
+  // Redis forbids nested EVAL. Prepend the ownership check to ledger scripts,
+  // then remove the extra key/argument so their original contracts stay intact.
+  if (command[0] === "EVAL") {
+    const keyCount = Number(command[2]);
+    const guard = `local owner = table.remove(ARGV)
+if redis.call('GET', table.remove(KEYS)) ~= owner then
+  return redis.error_reply('Ranking refresh lease lost')
+end
+`;
+    return runRedisCommand(["EVAL", guard + command[1], keyCount + 1,
+      ...command.slice(3, 3 + keyCount), RANKING_REFRESH_LOCK_KEY,
+      ...command.slice(3 + keyCount), token]);
+  }
+  return runRedisCommand(["EVAL", RANKING_OWNER_COMMAND_SCRIPT, 1,
+    RANKING_REFRESH_LOCK_KEY, token, ...command]);
+}
+
 async function readGlobalRankingCache() {
   try {
     const cached = await runRedisCommand([
@@ -5910,13 +5948,13 @@ async function readGlobalRankingCache() {
   }
 }
 
-async function writeGlobalRankingCache(snapshot) {
+async function writeGlobalRankingCache(snapshot, execute = runRedisCommand) {
   if (!getRedisConfig()) {
     return false;
   }
 
   try {
-    await runRedisCommand([
+    await execute([
       "SET",
       GLOBAL_RANKING_CACHE_KEY,
       JSON.stringify(snapshot)
@@ -6295,13 +6333,13 @@ async function createRankingHistoryEntry(
   };
 }
 
-async function writeRankingHistory(snapshot) {
+async function writeRankingHistory(snapshot, execute = runRedisCommand) {
   if (!getRedisConfig()) {
     return false;
   }
 
   try {
-    const previousRaw = await runRedisCommand([
+    const previousRaw = await execute([
       "LINDEX",
       GLOBAL_RANKING_HISTORY_KEY,
       "0"
@@ -6316,7 +6354,7 @@ async function writeRankingHistory(snapshot) {
       }
     }
 
-    const openTradesRaw = await runRedisCommand([
+    const openTradesRaw = await execute([
       "GET",
       OPEN_TRADES_KEY
     ]);
@@ -6361,15 +6399,15 @@ async function writeRankingHistory(snapshot) {
         previousEntry
       );
 
-    await recordCompletedTradeSignals(historyEntry.readySignals || []);
+    await recordCompletedTradeSignals(historyEntry.readySignals || [], execute);
 
-    await runRedisCommand([
+    await execute([
       "LPUSH",
       GLOBAL_RANKING_HISTORY_KEY,
       JSON.stringify(historyEntry)
     ]);
 
-    await runRedisCommand([
+    await execute([
       "LTRIM",
       GLOBAL_RANKING_HISTORY_KEY,
       "0",
@@ -6385,7 +6423,7 @@ async function writeRankingHistory(snapshot) {
         signal?.outcome?.status === "Active"
       );
 
-    await runRedisCommand([
+    await execute([
       "SET",
       OPEN_TRADES_KEY,
       JSON.stringify(openTrades)
@@ -6572,7 +6610,7 @@ function parsePersistentTradeStats(raw) {
   return { ...createEmptyPersistentTradeStats(), ...stats };
 }
 
-async function recordCompletedTradeSignals(signals) {
+async function recordCompletedTradeSignals(signals, execute = runRedisCommand) {
   if (!getRedisConfig()) return null;
   const completedSignals = [...new Map(signals
     .filter(signal => isCompletedTradeSignal(signal) &&
@@ -6584,7 +6622,7 @@ async function recordCompletedTradeSignals(signals) {
   const keys = [COMPLETED_TRADE_STATS_KEY, COMPLETED_TRADE_IDS_KEY,
     COMPLETED_TRADES_KEY];
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const [raw, idCount, membership] = await runRedisCommand([
+    const [raw, idCount, membership] = await execute([
       "EVAL", READ_TRADE_LEDGER_SCRIPT, "2", ...keys.slice(0, 2),
       ...completedSignals.map(signal => signal.tradeId)
     ]);
@@ -6610,7 +6648,7 @@ async function recordCompletedTradeSignals(signals) {
       return { id: signal.tradeId, member, json: JSON.stringify(signal) };
     });
     if (!added) return stats;
-    const committed = await runRedisCommand([
+    const committed = await execute([
       "EVAL", WRITE_TRADE_LEDGER_SCRIPT, "3", ...keys,
       raw, JSON.stringify(stats), JSON.stringify(entries),
       String(COMPLETED_TRADES_DISPLAY_LIMIT)
@@ -7270,12 +7308,35 @@ if (!forceGlobalRefresh) {
       }
     });
   }
+  return res.status(503).json({
+    ok: false,
+    error: "Global ranking cache is unavailable; awaiting scheduled refresh",
+    cache: { status: "unavailable", key: GLOBAL_RANKING_CACHE_KEY }
+  });
 }
 
+const refreshToken = randomUUID();
+let refreshLockAcquired = false;
+try {
+  refreshLockAcquired = await runRedisCommand([
+    "SET", RANKING_REFRESH_LOCK_KEY, refreshToken, "NX", "EX", RANKING_REFRESH_LOCK_SECONDS
+  ]) === "OK";
+  if (!refreshLockAcquired) {
+    res.setHeader("Retry-After", "60");
+    return res.status(503).json({ ok: false, error: "Ranking refresh busy or Redis unavailable" });
+  }
 const globalRankingStartedAt = Date.now();
+const ownedCommand = command => rankingOwnerCommand(refreshToken, command);
+const renewRefreshLease = async () => {
+  if (Date.now() - globalRankingStartedAt >= RANKING_REFRESH_BUDGET_MS) {
+    throw new Error("Ranking refresh time budget exceeded");
+  }
+  await ownedCommand(["EXPIRE", RANKING_REFRESH_LOCK_KEY, RANKING_REFRESH_LOCK_SECONDS]);
+};
 const globalConcurrency = 2;
 
 const loadGlobalBatch = async page => {
+  await renewRefreshLease();
   const batchUrl =
     new URL(
       baseUrl + "/api/market"
@@ -7467,16 +7528,20 @@ candidatePoolSize:
     });
   }
 
+  await renewRefreshLease();
   const cacheSaved =
     await writeGlobalRankingCache(
-      globalRankingSnapshot
+      globalRankingSnapshot, ownedCommand
     );
 
   const historySaved =
     await writeRankingHistory(
-      globalRankingSnapshot
+      globalRankingSnapshot, ownedCommand
     );
 
+  if (!cacheSaved || !historySaved) {
+    return res.status(503).json({ ok: false, error: "Ranking refresh persistence incomplete" });
+  }
   return res.status(200).json({
     ...globalRankingSnapshot,
     cache: {
@@ -7490,6 +7555,19 @@ candidatePoolSize:
         GLOBAL_RANKING_HISTORY_LIMIT
     }
   });
+} catch (error) {
+  console.error("Global ranking refresh failed:", error);
+  return res.status(503).json({ ok: false, error: "Global ranking refresh failed; retry later" });
+} finally {
+  if (refreshLockAcquired) {
+    try {
+      await runRedisCommand(["EVAL", RELEASE_RANKING_LOCK_SCRIPT, 1,
+        RANKING_REFRESH_LOCK_KEY, refreshToken]);
+    } catch (error) {
+      console.error("Ranking refresh lock release failed:", error);
+    }
+  }
+}
 }
   
   const readyOnly =

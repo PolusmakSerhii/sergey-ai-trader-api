@@ -57,6 +57,26 @@ test("trade ledger and backups against isolated Redis (no TCP or production)", a
     const stats = async () => JSON.parse(await redis(["GET", keys.completedTradeStats]));
     const reset = () => redis(["FLUSHDB"]); // Only the private Unix socket above.
 
+    await t.test("ranking lease excludes competitors and fences stale snapshot, ledger and checkpoint writes", async () => {
+      await reset();
+      const lock = "sergey-ai:ranking-refresh-lock:v1";
+      assert.equal(await redis(["SET", lock, "owner-a", "NX", "EX", "900"]), "OK");
+      assert.equal(await redis(["SET", lock, "owner-b", "NX", "EX", "900"]), null);
+      const ownedA = command => context.rankingOwnerCommand("owner-a", command);
+      await context.recordCompletedTradeSignals([signal("lease-trade")], ownedA);
+      assert.equal((await stats()).completed, 1);
+      await redis(["SET", lock, "owner-b", "EX", "900"]);
+      await assert.rejects(() => ownedA(["SET", keys.openTrades, "[]"]), /lease lost/);
+      await assert.rejects(() => context.recordCompletedTradeSignals([signal("stale-trade")], ownedA), /lease lost/);
+      assert.equal(await context.writeGlobalRankingCache({ok:true}, ownedA), false);
+      assert.equal(await context.writeRankingHistory({ok:true}, ownedA), false);
+      assert.equal((await stats()).completed, 1);
+      const releaseScript = vm.runInContext("RELEASE_RANKING_LOCK_SCRIPT", context);
+      assert.equal(await redis(["EVAL", releaseScript, "1", lock, "owner-a"]), 0);
+      assert.equal(await redis(["GET", lock]), "owner-b");
+      assert.equal(await redis(["EVAL", releaseScript, "1", lock, "owner-b"]), 1);
+    });
+
     await t.test("deduplicates retries and keeps totals beyond the 20 detail rows", async () => {
       await reset();
       const signals = Array.from({ length: 35 }, (_, i) => signal(`trade-${i}`));
