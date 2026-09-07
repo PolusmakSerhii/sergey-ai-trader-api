@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
+const OPEN_TRADES_KEY = "sergey-ai:open-trades:v1";
+
 const RANKING_KEY = "sergey-ai:global-ranking:v1";
 const HISTORY_KEY = "sergey-ai:global-ranking-history:v1";
 const COMPLETED_TRADES_KEY = "sergey-ai:completed-trades:v1";
@@ -41,7 +43,7 @@ async function redis(command) {
 }
 
 function parseJson(value, label) {
-  if (typeof value !== "string") return null;
+  if (typeof value !== "string" || value === "") return null;
 
   try {
     return JSON.parse(value);
@@ -63,15 +65,19 @@ const [
   historyRaw,
   completedTradesRaw,
   completedTradeIds,
-  completedTradeStatsRaw
-] = await Promise.all([
-  redis(["GET", RANKING_KEY]),
-  redis(["LRANGE", HISTORY_KEY, "0", "-1"]),
-  redis(["LRANGE", COMPLETED_TRADES_KEY, "0", "-1"]),
-  redis(["SMEMBERS", COMPLETED_TRADE_IDS_KEY]),
-  redis(["GET", COMPLETED_TRADE_STATS_KEY])
+  completedTradeStatsRaw,
+  openTradesRaw
+] = await redis([
+  "EVAL", `return {
+    redis.call("GET", KEYS[1]) or "",
+    redis.call("LRANGE", KEYS[2], 0, -1),
+    redis.call("LRANGE", KEYS[3], 0, -1),
+    redis.call("SMEMBERS", KEYS[4]),
+    redis.call("GET", KEYS[5]) or "",
+    redis.call("GET", KEYS[6]) or ""
+  }`, "6", RANKING_KEY, HISTORY_KEY, COMPLETED_TRADES_KEY,
+  COMPLETED_TRADE_IDS_KEY, COMPLETED_TRADE_STATS_KEY, OPEN_TRADES_KEY
 ]);
-
 const history = Array.isArray(historyRaw)
   ? historyRaw.map((item, index) =>
       parseJson(item, `History item ${index}`)
@@ -80,15 +86,20 @@ const history = Array.isArray(historyRaw)
 
 const backup = {
   format: "sergey-ai-redis-backup",
-  version: 2,
+  version: 3,
   exportedAt: new Date().toISOString(),
   keys: {
     ranking: RANKING_KEY,
     history: HISTORY_KEY,
     completedTrades: COMPLETED_TRADES_KEY,
     completedTradeIds: COMPLETED_TRADE_IDS_KEY,
-    completedTradeStats: COMPLETED_TRADE_STATS_KEY
+    completedTradeStats: COMPLETED_TRADE_STATS_KEY,
+    openTrades: OPEN_TRADES_KEY
   },
+  openTrades: parseJson(openTradesRaw, "Open trades") ??
+    (history[0]?.readySignals || []).filter(signal =>
+      ["Pending", "WaitingEntry", "Active"].includes(signal?.outcome?.status)
+    ),
   ranking: parseJson(rankingRaw, "Ranking"),
   history,
   completedTrades: Array.isArray(completedTradesRaw)
@@ -105,11 +116,13 @@ const backup = {
   )
 };
 
+if (!Array.isArray(backup.openTrades)) throw new Error("Invalid open trades");
+
 await mkdir(dirname(outputPath), { recursive: true });
 await writeFile(
   outputPath,
   `${JSON.stringify(backup, null, 2)}\n`,
-  { mode: 0o600 }
+  { mode: 0o600, flag: "wx" }
 );
 
 console.log(`Backup written: ${outputPath}`);

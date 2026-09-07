@@ -5693,6 +5693,9 @@ async function runRedisCommand(command) {
   }
 
   const payload = await response.json();
+  if (payload?.error) {
+    throw new Error(`Redis command failed: ${payload.error}`);
+  }
   return payload?.result ?? null;
 }
 
@@ -6354,6 +6357,8 @@ async function writeRankingHistory(snapshot) {
         previousEntry
       );
 
+    await recordCompletedTradeSignals(historyEntry.readySignals || []);
+
     await runRedisCommand([
       "LPUSH",
       GLOBAL_RANKING_HISTORY_KEY,
@@ -6381,10 +6386,6 @@ async function writeRankingHistory(snapshot) {
       OPEN_TRADES_KEY,
       JSON.stringify(openTrades)
     ]);
-
-    await recordCompletedTradeSignals(
-      historyEntry.readySignals || []
-    );
 
     return true;
   } catch (error) {
@@ -6514,207 +6515,125 @@ function addTradeToPersistentStats(stats, signal) {
   return next;
 }
 
-async function recordCompletedTradeSignals(signals) {
-  if (!getRedisConfig()) {
-    return null;
+// Compare-and-set keeps the existing keys and JS statistics calculation. Both
+// the aggregate and ID membership are checked before any write takes place.
+const READ_TRADE_LEDGER_SCRIPT = `
+local stats = redis.call('GET', KEYS[1]) or ''
+local count = redis.call('SCARD', KEYS[2])
+local members = {}
+for i, id in ipairs(ARGV) do
+  members[i] = redis.call('SISMEMBER', KEYS[2], id)
+end
+return {stats, count, members}
+`;
+const WRITE_TRADE_LEDGER_SCRIPT = `
+local current = redis.call('GET', KEYS[1]) or ''
+if current ~= ARGV[1] then return 0 end
+local entries = cjson.decode(ARGV[3])
+for _, entry in ipairs(entries) do
+  if redis.call('SISMEMBER', KEYS[2], entry.id) ~= entry.member then
+    return 0
+  end
+end
+-- Check the remaining key type before mutations: Lua errors do not roll back.
+local listType = redis.call('TYPE', KEYS[3]).ok
+if listType ~= 'none' and listType ~= 'list' then
+  return redis.error_reply('Completed trades key must be a list')
+end
+for _, entry in ipairs(entries) do
+  if entry.member == 0 then
+    redis.call('SADD', KEYS[2], entry.id)
+    redis.call('LPUSH', KEYS[3], entry.json)
+  end
+end
+redis.call('LTRIM', KEYS[3], 0, tonumber(ARGV[4]) - 1)
+redis.call('SET', KEYS[1], ARGV[2])
+return 1
+`;
+
+function parsePersistentTradeStats(raw) {
+  const stats = JSON.parse(raw);
+  if (!stats || typeof stats !== "object" || Array.isArray(stats)) {
+    throw new Error("Invalid persistent trade statistics");
   }
-
-  const completedSignals = signals
-    .filter(signal =>
-      isCompletedTradeSignal(signal) &&
-      isConfirmedAPlusTradeSignal(signal)
-    )
-    .sort((a, b) =>
-      new Date(a.outcome?.checkedAt || 0) -
-      new Date(b.outcome?.checkedAt || 0)
-    );
-
-  if (!completedSignals.length) {
-    return null;
+  for (const field of ["completed", "wins", "losses", "grossProfitR",
+    "grossLossR", "netR", "equityR", "peakR", "maxDrawdownR",
+    "maxConsecutiveLosses"]) {
+    if (stats[field] !== undefined &&
+        (typeof stats[field] !== "number" || !Number.isFinite(stats[field]))) {
+      throw new Error(`Invalid persistent trade statistic: ${field}`);
+    }
   }
-
-  try {
-    const storedStats = await runRedisCommand([
-      "GET",
-      COMPLETED_TRADE_STATS_KEY
-    ]);
-    let stats = createEmptyPersistentTradeStats();
-
-    if (typeof storedStats === "string") {
-      try {
-        stats = {
-          ...stats,
-          ...JSON.parse(storedStats)
-        };
-      } catch {
-        stats = createEmptyPersistentTradeStats();
-      }
-    }
-
-    let added = 0;
-
-    for (const signal of completedSignals) {
-      const wasAdded = Number(
-        await runRedisCommand([
-          "SADD",
-          COMPLETED_TRADE_IDS_KEY,
-          signal.tradeId
-        ])
-      );
-
-      if (wasAdded !== 1) {
-        continue;
-      }
-
-      stats = addTradeToPersistentStats(
-        stats,
-        signal
-      );
-      await runRedisCommand([
-        "LPUSH",
-        COMPLETED_TRADES_KEY,
-        JSON.stringify(signal)
-      ]);
-      added += 1;
-    }
-
-    if (added > 0) {
-      await runRedisCommand([
-        "LTRIM",
-        COMPLETED_TRADES_KEY,
-        "0",
-        String(COMPLETED_TRADES_DISPLAY_LIMIT - 1)
-      ]);
-      await runRedisCommand([
-        "SET",
-        COMPLETED_TRADE_STATS_KEY,
-        JSON.stringify(stats)
-      ]);
-    }
-
-    return stats;
-  } catch (error) {
-    console.error(
-      "Completed trade ledger write failed:",
-      error
-    );
-    return null;
-  }
+  // Never infer an A+ scope or rebuild an old aggregate from the last 20 rows.
+  return { ...createEmptyPersistentTradeStats(), ...stats };
 }
 
-async function readPersistentTradeData(history) {
-  if (!getRedisConfig()) {
-    return null;
-  }
+async function recordCompletedTradeSignals(signals) {
+  if (!getRedisConfig()) return null;
+  const completedSignals = [...new Map(signals
+    .filter(signal => isCompletedTradeSignal(signal) &&
+      isConfirmedAPlusTradeSignal(signal))
+    .map(signal => [signal.tradeId, signal])).values()]
+    .sort((a, b) => Date.parse(a.outcome.checkedAt) - Date.parse(b.outcome.checkedAt));
+  if (!completedSignals.length) return null;
 
-  try {
-    let storedStats = await runRedisCommand([
-      "GET",
-      COMPLETED_TRADE_STATS_KEY
+  const keys = [COMPLETED_TRADE_STATS_KEY, COMPLETED_TRADE_IDS_KEY,
+    COMPLETED_TRADES_KEY];
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const [raw, idCount, membership] = await runRedisCommand([
+      "EVAL", READ_TRADE_LEDGER_SCRIPT, "2", ...keys.slice(0, 2),
+      ...completedSignals.map(signal => signal.tradeId)
     ]);
-
-    if (typeof storedStats !== "string") {
-      const lockAcquired = await runRedisCommand([
-        "SET",
-        COMPLETED_TRADE_INIT_LOCK_KEY,
-        String(Date.now()),
-        "NX",
-        "EX",
-        "30"
-      ]);
-
-      if (lockAcquired === "OK") {
-        const historicalSignals = [];
-
-        for (const snapshot of history) {
-          if (Array.isArray(snapshot?.readySignals)) {
-            historicalSignals.push(
-              ...snapshot.readySignals
-                .filter(isCompletedTradeSignal)
-            );
-          }
+    if (!raw && Number(idCount) > 0) {
+      throw new Error("Trade IDs exist without statistics; explicit recovery is required");
+    }
+    let stats = raw ? parsePersistentTradeStats(raw) : {
+      ...createEmptyPersistentTradeStats(), scope: "confirmed-a-plus-v1"
+    };
+    let added = 0;
+    const entries = completedSignals.map((signal, index) => {
+      const member = Number(membership[index]);
+      if (member !== 0 && member !== 1) throw new Error("Invalid ledger membership");
+      if (member === 0) {
+        if (typeof signal.outcome.resultR !== "number" ||
+            !Number.isFinite(signal.outcome.resultR) ||
+            !Number.isFinite(Date.parse(signal.outcome.checkedAt))) {
+          throw new Error("Completed trade requires a finite resultR and closing time");
         }
-
-        await recordCompletedTradeSignals(
-          historicalSignals
-        );
-        await runRedisCommand([
-          "DEL",
-          COMPLETED_TRADE_INIT_LOCK_KEY
-        ]);
-      } else {
-        await new Promise(resolve =>
-          setTimeout(resolve, 500)
-        );
+        stats = addTradeToPersistentStats(stats, signal);
+        added += 1;
       }
-
-      storedStats = await runRedisCommand([
-        "GET",
-        COMPLETED_TRADE_STATS_KEY
-      ]);
-    }
-
-    const recentRaw = await runRedisCommand([
-      "LRANGE",
-      COMPLETED_TRADES_KEY,
-      "0",
-      String(COMPLETED_TRADES_DISPLAY_LIMIT - 1)
+      return { id: signal.tradeId, member, json: JSON.stringify(signal) };
+    });
+    if (!added) return stats;
+    const committed = await runRedisCommand([
+      "EVAL", WRITE_TRADE_LEDGER_SCRIPT, "3", ...keys,
+      raw, JSON.stringify(stats), JSON.stringify(entries),
+      String(COMPLETED_TRADES_DISPLAY_LIMIT)
     ]);
-    const recentTrades = Array.isArray(recentRaw)
-      ? recentRaw
-          .map(value => {
-            try {
-              return JSON.parse(value);
-            } catch {
-              return null;
-            }
-          })
-          .filter(Boolean)
-      : [];
+    if (Number(committed) === 1) return stats;
+  }
+  throw new Error("Trade ledger changed repeatedly; retry the ranking update");
+}
 
-    let parsedStats = typeof storedStats === "string"
-      ? JSON.parse(storedStats)
-      : createEmptyPersistentTradeStats();
-
-    const statisticsScope = "confirmed-a-plus-v1";
-
-    if (parsedStats.scope !== statisticsScope) {
-      parsedStats = recentTrades
-        .filter(signal =>
-          isCompletedTradeSignal(signal) &&
-          isConfirmedAPlusTradeSignal(signal)
-        )
-        .sort((a, b) =>
-          new Date(a.outcome?.checkedAt || 0) -
-          new Date(b.outcome?.checkedAt || 0)
-        )
-        .reduce(
-          (stats, signal) =>
-            addTradeToPersistentStats(stats, signal),
-          createEmptyPersistentTradeStats()
-        );
-      parsedStats.scope = statisticsScope;
-      await runRedisCommand([
-        "SET",
-        COMPLETED_TRADE_STATS_KEY,
-        JSON.stringify(parsedStats)
-      ]);
-    }
-
+async function readPersistentTradeData() {
+  if (!getRedisConfig()) return null;
+  try {
+    const storedStats = await runRedisCommand(["GET", COMPLETED_TRADE_STATS_KEY]);
+    const recentRaw = await runRedisCommand([
+      "LRANGE", COMPLETED_TRADES_KEY, "0", String(COMPLETED_TRADES_DISPLAY_LIMIT - 1)
+    ]);
+    const recentTrades = (Array.isArray(recentRaw) ? recentRaw : [])
+      .map(value => { try { return JSON.parse(value); } catch { return null; } })
+      .filter(signal => isCompletedTradeSignal(signal) && isConfirmedAPlusTradeSignal(signal));
     return {
-      stats: {
-        ...createEmptyPersistentTradeStats(),
-        ...parsedStats
-      },
-      recentTrades: recentTrades.filter(
-        isConfirmedAPlusTradeSignal
-      )
+      stats: typeof storedStats === "string"
+        ? parsePersistentTradeStats(storedStats)
+        : null,
+      recentTrades
     };
   } catch (error) {
-    console.error(
-      "Completed trade ledger read failed:",
-      error
-    );
+    console.error("Completed trade ledger read failed:", error);
     return null;
   }
 }
@@ -7075,7 +6994,9 @@ if (mode === "statistics") {
           ) || 0,
         startedAt: persistentStats.startedAt || null,
         updatedAt: persistentStats.updatedAt || null,
-        scope: "Confirmed A+"
+        scope: persistentStats.scope === "confirmed-a-plus-v1"
+          ? "Confirmed A+"
+          : "Legacy (unverified)"
       }
     : {
         ...rollingOutcomes,

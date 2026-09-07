@@ -1,7 +1,7 @@
 {
   "type": "module",
   "scripts": {
-    "test": "node scripts/validate-project.mjs",
+    "test": "node scripts/validate-project.mjs && node --test tests/*.test.mjs",
     "backup:redis": "node scripts/backup-redis.mjs",
     "restore:redis": "node scripts/restore-redis.mjs"
   },

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { BACKUP_KEYS, createRestoreCommands, RESTORE_SCRIPT } from "./redis-backup-format.mjs";
 
 const confirmation = "--confirm=RESTORE";
 const backupArgument = process.argv.slice(2).find(
@@ -29,24 +30,7 @@ const backup = JSON.parse(
   await readFile(resolve(backupArgument), "utf8")
 );
 
-if (
-  backup?.format !== "sergey-ai-redis-backup" ||
-  ![1, 2].includes(backup?.version) ||
-  typeof backup?.keys?.ranking !== "string" ||
-  typeof backup?.keys?.history !== "string" ||
-  !backup?.ranking ||
-  !Array.isArray(backup?.history)
-) {
-  throw new Error("Backup file has an unsupported or invalid format");
-}
-
-const hasCompletedTradeData =
-  backup.version >= 2 &&
-  typeof backup?.keys?.completedTrades === "string" &&
-  typeof backup?.keys?.completedTradeIds === "string" &&
-  typeof backup?.keys?.completedTradeStats === "string" &&
-  Array.isArray(backup?.completedTrades) &&
-  Array.isArray(backup?.completedTradeIds);
+const commands = createRestoreCommands(backup);
 
 async function redis(command) {
   const response = await fetch(redisUrl, {
@@ -68,58 +52,13 @@ async function redis(command) {
   return payload?.result ?? null;
 }
 
-await redis([
-  "SET",
-  backup.keys.ranking,
-  JSON.stringify(backup.ranking)
-]);
-await redis(["DEL", backup.keys.history]);
-
-for (let start = 0; start < backup.history.length; start += 50) {
-  const chunk = backup.history.slice(start, start + 50);
-
-  if (chunk.length) {
-    await redis([
-      "RPUSH",
-      backup.keys.history,
-      ...chunk.map((entry) => JSON.stringify(entry))
-    ]);
-  }
-}
-
-if (hasCompletedTradeData) {
-  await redis(["DEL", backup.keys.completedTrades]);
-  await redis(["DEL", backup.keys.completedTradeIds]);
-
-  if (backup.completedTrades.length) {
-    await redis([
-      "RPUSH",
-      backup.keys.completedTrades,
-      ...backup.completedTrades.map(entry => JSON.stringify(entry))
-    ]);
-  }
-
-  if (backup.completedTradeIds.length) {
-    await redis([
-      "SADD",
-      backup.keys.completedTradeIds,
-      ...backup.completedTradeIds
-    ]);
-  }
-
-  if (backup.completedTradeStats) {
-    await redis([
-      "SET",
-      backup.keys.completedTradeStats,
-      JSON.stringify(backup.completedTradeStats)
-    ]);
-  } else {
-    await redis(["DEL", backup.keys.completedTradeStats]);
-  }
-}
-
+await redis(["EVAL", RESTORE_SCRIPT, String(Object.keys(BACKUP_KEYS).length),
+  ...Object.values(BACKUP_KEYS), JSON.stringify(commands)]);
 console.log("Redis restore completed.");
 console.log(`History entries: ${backup.history.length}`);
-if (hasCompletedTradeData) {
-  console.log(`Completed trades: ${backup.completedTradeIds.length}`);
+if (backup.version < 3) {
+  console.log("Legacy backup: open trades reconstructed from the latest history snapshot.");
+}
+if (backup.version === 1) {
+  console.log("Version 1 does not contain a completed ledger; existing completed data was preserved.");
 }
