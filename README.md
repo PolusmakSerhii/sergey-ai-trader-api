@@ -254,3 +254,20 @@ makes completed-trade retries safe. Refresh lock keys are not included in backup
 `tests/source-resilience.test.mjs` covers coalescing, cache expiry and isolation,
 zero Redis access for source caches, cold starts, bounded retention, source failures and
 ranking persistence guards without live API calls.
+
+### Observational liquidation flow
+
+`derivativesHistory.liquidations.flow` adds diagnostics to the existing CoinGlass
+`All` exchange aggregate for 24 hours, with no additional source or Redis requests.
+It exposes LONG/SHORT USD amounts, each side's percentage of their sum, and signed
+imbalance: `(longUsd - shortUsd) / (longUsd + shortUsd) * 100`. Positive imbalance
+means larger LONG liquidations; it is not a price forecast. The original reported
+total is retained separately, with its difference from the side sum exposed.
+
+Only finite nonnegative numeric source amounts are accepted. Missing amounts remain
+null rather than zero. With two valid zeros, activity is zero and shares/imbalance
+are null; dominantSide is N/A. Spikes and price confirmation explicitly remain
+unavailable because aligned historical liquidation data is not collected.
+`affectsTradingScore` is false: existing scoring, grades, Trade Plan generation and
+all earlier derivatives fields retain their behavior. This stage exposes the API
+fields only; a frontend display and historical flow collection are separate steps.

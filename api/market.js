@@ -5272,6 +5272,46 @@ function calculateDerivativesProbabilitySignal(
   };
 }
 
+// Describes the existing 24h aggregate only; never consumed by scoring.
+function calculateLiquidationFlow(aggregate) {
+  const amount = value => typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value : null;
+  const longUsd = amount(aggregate?.longLiquidation_usd);
+  const shortUsd = amount(aggregate?.shortLiquidation_usd);
+  const reportedTotalUsd = amount(aggregate?.liquidation_usd);
+  const complete = longUsd !== null && shortUsd !== null;
+  const sum = complete ? longUsd + shortUsd : null;
+  const available = complete && Number.isFinite(sum);
+  const sideTotalUsd = available ? sum : null;
+  const hasActivity = available && sideTotalUsd > 0;
+  const percent = value => Math.round(value * 10000) / 100;
+  return {
+    version: "1.0",
+    source: "CoinGlass",
+    exchange: "All",
+    timeframe: "24H",
+    affectsTradingScore: false,
+    available,
+    reason: !available ? "Missing or invalid liquidation amounts"
+      : !hasActivity ? "No liquidations in the reported window" : null,
+    longUsd,
+    shortUsd,
+    reportedTotalUsd,
+    sideTotalUsd,
+    longSharePct: hasActivity ? percent(longUsd / sideTotalUsd) : null,
+    shortSharePct: hasActivity ? percent(shortUsd / sideTotalUsd) : null,
+    // Positive means larger LONG liquidations, not a forecast of price direction.
+    imbalancePct: hasActivity ? percent((longUsd - shortUsd) / sideTotalUsd) : null,
+    dominantSide: !hasActivity ? "N/A" : longUsd > shortUsd ? "LONG"
+      : shortUsd > longUsd ? "SHORT" : "Balanced",
+    totalDifferenceUsd: available && reportedTotalUsd !== null
+      ? reportedTotalUsd - sideTotalUsd : null,
+    spikes: { available: false, value: null, reason: "Liquidation history is unavailable" },
+    priceConfirmation: { available: false, value: null,
+      reason: "Aligned price and liquidation history is unavailable" }
+  };
+}
+
 function calculateDerivativesHistory(coinGlass) {
   const source = coinGlass || {};
   
@@ -5538,6 +5578,8 @@ const derivativesProbabilitySignal =
       historyAvailable: false,
 
       analysis: liquidationAssessment,
+
+      flow: calculateLiquidationFlow(aggregatedLiquidations),
 
       source: "CoinGlass",
       timeframe: "24H",
