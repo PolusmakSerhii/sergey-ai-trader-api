@@ -5312,7 +5312,67 @@ function calculateLiquidationFlow(aggregate) {
   };
 }
 
-function calculateDerivativesHistory(coinGlass) {
+function calculateOpenInterestPriceContext(response, dailyCandles, now = Date.now()) {
+  const day = 24 * 60 * 60 * 1000;
+  const interval = 4 * 60 * 60 * 1000;
+  const base = {
+    version: "1.0", available: false, affectsTradingScore: false,
+    timeframe: "24H", priceSource: "OKX SPOT", openInterestSource: "CoinGlass aggregated",
+    openInterestUnit: "USD", windowStart: null, windowEnd: null,
+    priceChangePct: null, openInterestChangePct: null,
+    state: "N/A", observations: 0,
+    limitation: "USD open interest includes price valuation effects. Cross-exchange OI and OKX spot price do not identify which side opened or closed positions."
+  };
+  const unavailable = reason => ({ ...base, reason });
+  const numeric = value => typeof value === "number" && Number.isFinite(value);
+  const positive = value => numeric(value) && value > 0;
+  if (!numeric(now)) return unavailable("Invalid observation time");
+  const candles = (Array.isArray(dailyCandles) ? dailyCandles : [])
+    .filter(c => c?.confirmed === true && numeric(c.openTime) && c.openTime > 0 &&
+      c.openTime + day <= now)
+    .sort((a, b) => b.openTime - a.openTime);
+  const candle = candles[0];
+  if (!candle || !positive(candle.open) || !positive(candle.close)) {
+    return unavailable("A valid closed daily price candle is unavailable");
+  }
+  const start = candle.openTime, end = start + day;
+  base.windowStart = new Date(start).toISOString();
+  base.windowEnd = new Date(end).toISOString();
+  if (now - end >= day) return unavailable("Latest closed price window is stale");
+  if (candles.filter(c => c.openTime === start).length !== 1) {
+    return unavailable("Duplicate daily price window");
+  }
+  if (response?.ok !== true || !Array.isArray(response.data)) {
+    return unavailable("Open interest history is unavailable");
+  }
+  // CoinGlass uses numeric strings for OHLC. Reject null/empty values before conversion.
+  const parse = value => (typeof value === "number" ||
+    (typeof value === "string" && value.trim() !== "")) && Number.isFinite(Number(value))
+    ? Number(value) : null;
+  const rows = response.data.map(row => ({
+    time: parse(row?.time), open: parse(row?.open), close: parse(row?.close)
+  })).filter(row => row.time !== null && row.time >= start && row.time < end)
+    .sort((a, b) => a.time - b.time);
+  if (rows.length !== 6 || rows.some((row, i) => row.time !== start + i * interval ||
+      !positive(row.open) || !positive(row.close))) {
+    return unavailable("Six valid aligned 4H open interest intervals are required");
+  }
+  const priceChangePct = (candle.close / candle.open - 1) * 100;
+  const openInterestChangePct = (rows[5].close / rows[0].open - 1) * 100;
+  if (!numeric(priceChangePct) || !numeric(openInterestChangePct)) {
+    return unavailable("Invalid percentage calculation");
+  }
+  const direction = value => value > 0 ? "UP" : value < 0 ? "DOWN" : "FLAT";
+  return {
+    ...base, available: true, reason: null, observations: 6,
+    priceStart: candle.open, priceEnd: candle.close,
+    openInterestStart: rows[0].open, openInterestEnd: rows[5].close,
+    priceChangePct, openInterestChangePct,
+    state: `PRICE_${direction(priceChangePct)}_OI_${direction(openInterestChangePct)}`
+  };
+}
+
+function calculateDerivativesHistory(coinGlass, dailyCandles = []) {
   const source = coinGlass || {};
   
   const lastUpdated =
@@ -5502,6 +5562,8 @@ const derivativesProbabilitySignal =
      analysis: openInterestTrend,
 
      openInterestAssessment,
+
+     priceContext: calculateOpenInterestPriceContext(source.openInterestHistoryResponse, dailyCandles),
       
      source: "CoinGlass",
 
@@ -8812,7 +8874,7 @@ if (ema20 && ema50 && ema100 && ema200) {
 }  
 const derivativesHistory =
   calculateDerivativesHistory(
-    coinGlass
+    coinGlass, okxDailyCandles
   );
 
 const derivativesProbabilitySignal =

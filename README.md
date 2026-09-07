@@ -271,3 +271,24 @@ unavailable because aligned historical liquidation data is not collected.
 `affectsTradingScore` is false: existing scoring, grades, Trade Plan generation and
 all earlier derivatives fields retain their behavior. This stage exposes the API
 fields only; a frontend display and historical flow collection are separate steps.
+
+### Aligned Open Interest and price context
+
+`derivativesHistory.openInterest.priceContext` compares the latest closed OKX SPOT
+1D candle with six CoinGlass aggregated 4H OI intervals covering exactly its opening
+time through opening time + 24 hours. It reuses existing responses; no new source or
+Redis calls are added. The API returns the actual window boundaries, start/end values,
+percentage changes and price/OI directions. This is a closed daily window, not a rolling
+24h ticker change and not an intraday signal. Incomplete, duplicate, invalid or misaligned
+history returns N/A. A window ending at least 24 hours ago is considered stale.
+
+OI is denominated in USD by the existing CoinGlass endpoint and includes valuation
+effects from price changes. Aggregate OI across exchanges combined with OKX spot price
+cannot prove that new longs/shorts were opened or identify the cause of position closures.
+The context exposes this limitation and `affectsTradingScore: false`. Existing OI
+assessment/scoring behavior is unchanged; the previously identified scoring input issue
+requires a separately validated scoring change. Frontend rendering remains a later step.
+
+Source contracts:
+- https://docs.coinglass.com/reference/oi-ohlc-aggregated-history
+- https://app.okx.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks-history
