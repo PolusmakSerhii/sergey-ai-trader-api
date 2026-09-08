@@ -5808,6 +5808,104 @@ async function fetchCoinGlass(path, params = {}) {
     value => value?.ok === true && value.data != null);
 }
 
+function calculateOrderFlow(response, now = Date.now()) {
+  const step = 4 * 60 * 60 * 1000;
+  const base = { available: false, source: "CoinGlass", exchange: "OKX", market: "futures", interval: "4h", unit: "USD", reset: "window-start", points: [] };
+  if (!response?.ok || !Array.isArray(response.data) || !response.data.length) return {...base, reason: "unavailable"};
+  const rows = [...response.data].sort((a,b) => a.time - b.time);
+  const closed = rows.filter(r => Number.isSafeInteger(r.time) && r.time + step <= now);
+  if (!closed.length) return {...base, reason: "no-closed-intervals"};
+  if (rows.some(r => !Number.isSafeInteger(r.time) || r.time <= 0 || r.time % step !== 0)) return {...base, reason: "invalid-time"};
+  let cvd = 0;
+  const points = [];
+  for (const r of closed) {
+    const buy = r.aggregated_buy_volume_usd, sell = r.aggregated_sell_volume_usd;
+    if (![buy,sell].every(v => typeof v === "number" && Number.isFinite(v) && v >= 0)) return {...base, reason: "invalid-volume"};
+    if (points.length && r.time !== points[points.length-1].time + step) return {...base, reason: "history-gap"};
+    const delta = buy - sell;
+    cvd += delta;
+    if (!Number.isFinite(cvd) || !Number.isFinite(buy + sell)) return {...base, reason: "invalid-volume"};
+    points.push({time:r.time,buyUsd:buy,sellUsd:sell,deltaUsd:delta,cvdUsd:cvd});
+  }
+  const latest = points[points.length-1];
+  if (now - (latest.time + step) >= step) return {...base, reason: "stale"};
+  return {...base, available:true, reason:null, startTime:points[0].time, endTime:latest.time + step,
+    deltaUsd:latest.deltaUsd, cvdUsd:cvd, points};
+}
+
+function closedContextRows(response, now) {
+  const step = 14400000;
+  if (!Number.isFinite(now) || !response?.ok || !Array.isArray(response.data)) return null;
+  if (response.data.some(r => !r || !Number.isSafeInteger(r.time) || r.time <= 0 || r.time % step)) return null;
+  const rows = response.data.filter(r => r.time + step <= now).sort((a,b) => a.time-b.time);
+  if (!rows.length || now - rows[rows.length-1].time - step >= step ||
+      rows.some((r,i) => i && r.time !== rows[i-1].time + step)) return null;
+  return rows;
+}
+
+function contextNumber(value) {
+  return (typeof value === "number" || (typeof value === "string" && value.trim() !== "")) &&
+    Number.isFinite(Number(value)) ? Number(value) : null;
+}
+
+function calculateLiquidationHistoryContext(response, now = Date.now()) {
+  const base = {available:false,timeframe:"4h",source:"CoinGlass",exchange:"OKX",unit:"USD",
+    affectsTradingScore:false,reason:"Incomplete or stale liquidation history"};
+  const rows = closedContextRows(response, now);
+  if (!rows || rows.length < 7) return base;
+  const window = rows.slice(-7).map(r => ({time:r.time,
+    long:contextNumber(r.aggregated_long_liquidation_usd),short:contextNumber(r.aggregated_short_liquidation_usd)}));
+  if (window.some(r => r.long === null || r.short === null || r.long < 0 || r.short < 0 || !Number.isFinite(r.long+r.short))) return base;
+  const latest = window[6], total = latest.long + latest.short;
+  const baseline = window.slice(0,6).reduce((sum,r) => sum+(r.long+r.short)/6,0);
+  const ratio = baseline > 0 ? total/baseline : null;
+  if (!Number.isFinite(baseline) || (ratio !== null && !Number.isFinite(ratio))) return base;
+  return {...base,available:true,reason:null,startTime:latest.time,endTime:latest.time+14400000,
+    longUsd:latest.long,shortUsd:latest.short,totalUsd:total,baselineMeanUsd:baseline,
+    baselineStartTime:window[0].time,baselineIntervals:6,relativeToBaseline:ratio,
+    dominantSide:total === 0 ? "NONE" : latest.long > latest.short ? "LONG" : latest.short > latest.long ? "SHORT" : "BALANCED"};
+}
+
+function calculateOIPrice4h(oiResponse, priceResponse, now = Date.now()) {
+  const base = {available:false,timeframe:"4h",priceSource:"CoinGlass · Binance futures",
+    openInterestSource:"CoinGlass · aggregated futures",openInterestUnit:"USD",affectsTradingScore:false,
+    reason:"Matching closed OI and price intervals unavailable"};
+  const oi = closedContextRows(oiResponse,now), prices = closedContextRows(priceResponse,now);
+  if (!oi || !prices) return base;
+  const o=oi[oi.length-1], p=prices[prices.length-1];
+  if (o.time !== p.time) return base;
+  const values=[o.open,o.close,p.open,p.close].map(contextNumber);
+  if (values.some(v=>v===null || v<=0)) return base;
+  const oiPct=(values[1]/values[0]-1)*100, pricePct=(values[3]/values[2]-1)*100;
+  if (![oiPct,pricePct].every(Number.isFinite)) return base;
+  const direction=v=>v>0?"UP":v<0?"DOWN":"FLAT";
+  return {...base,available:true,reason:null,startTime:o.time,endTime:o.time+14400000,
+    priceChangePct:pricePct,openInterestChangePct:oiPct,state:`PRICE_${direction(pricePct)}_OI_${direction(oiPct)}`,
+    limitation:"Aggregated OI and Binance price have different market coverage. USD OI includes price valuation effects; no inference of new longs or shorts."};
+}
+
+async function fetchHistoricalContext4h(symbol) {
+  const asset=symbol.replace(/USDT$/, "");
+  const history=(path,params)=>cachedSource(`context4h:${path}:${symbol}`,300,
+    ()=>requestCoinGlass(path,params),r=>r?.ok===true && Array.isArray(r.data) && r.data.length>0);
+  const [liquidations,price,oi]=await Promise.all([
+    history("/api/futures/liquidation/aggregated-history",{exchange_list:"OKX",symbol:asset,interval:"4h",limit:8}),
+    history("/api/futures/price/history",{exchange:"Binance",symbol,interval:"4h",limit:8}),
+    fetchCoinGlass("/api/futures/open-interest/aggregated-history",{symbol:asset,interval:"4h",limit:1000})
+  ]);
+  const oiPrice=calculateOIPrice4h(oi,price);
+  oiPrice.priceSource=`CoinGlass · Binance ${symbol} futures`;
+  return {liquidations:calculateLiquidationHistoryContext(liquidations),oiPrice};
+}
+
+async function fetchOrderFlow(symbol) {
+  const response = await cachedSource(`order-flow:OKX:${symbol}`, 300,
+    () => requestCoinGlass("/api/futures/aggregated-taker-buy-sell-volume/history", {
+      exchange_list:"OKX", symbol:symbol.replace(/USDT$/, ""), interval:"4h", limit:43, unit:"usd"
+    }), r => r?.ok === true && Array.isArray(r.data) && r.data.length > 0);
+  return calculateOrderFlow(response);
+}
+
 async function requestCoinGlass(path, params = {}) {
   const apiKey = process.env.COINGLASS_API_KEY;
 
@@ -6689,6 +6787,28 @@ async function writeRankingHistory(snapshot, execute = runRedisCommand) {
   }
 }
 
+function updateTradeAnalytics(previous, signal) {
+  const result = classifyTradeResult(signal);
+  if (!result) return previous || null;
+  const a = previous ? JSON.parse(JSON.stringify(previous)) : {
+    since: signal.outcome.checkedAt, completed: 0,
+    directions: { Long: {count:0,wins:0,netR:0}, Short: {count:0,wins:0,netR:0} },
+    partialCompleted: 0, hits: {TP1:0,TP2:0,TP3:0}
+  };
+  a.since = [a.since, signal.outcome.checkedAt].sort()[0];
+  a.completed++;
+  const side = a.directions[signal.direction];
+  if (side) { side.count++; side.wins += result === "Win" ? 1 : 0; side.netR += signal.outcome.resultR; }
+  // Only frozen partial policies provide comparable evidence for all three targets.
+  if (signal.initialPlan?.exitStrategy?.version === "partial-25-25-50-be-v1" &&
+      signal.outcome.lifecycleVersion === "partial-candles-v1" && Array.isArray(signal.outcome.exits)) {
+    a.partialCompleted++;
+    const hits = new Set(signal.outcome.exits.filter(e => e.initialFraction > 0).map(e => e.target));
+    for (const target of ["TP1", "TP2", "TP3"]) a.hits[target] += hits.has(target) ? 1 : 0;
+  }
+  return a;
+}
+
 function createEmptyPersistentTradeStats() {
   return {
     completed: 0,
@@ -6696,6 +6816,7 @@ function createEmptyPersistentTradeStats() {
     losses: 0,
     breakEvens: 0,
     resultClassificationSince: null,
+    tradeAnalytics: null,
     grossProfitR: 0,
     grossLossR: 0,
     netR: 0,
@@ -6773,6 +6894,7 @@ function addTradeToPersistentStats(stats, signal) {
   const previousStreak = next.currentStreak;
   const streakType = classification;
 
+  next.tradeAnalytics = updateTradeAnalytics(next.tradeAnalytics, signal);
   next.completed += 1;
   next.wins += classification === "Win" ? 1 : 0;
   next.losses += classification === "Loss" ? 1 : 0;
@@ -7104,6 +7226,7 @@ function createOutcomeSummary(history) {
   const completed = wins + losses + breakEvens;
 
   return {
+    tradeAnalytics: completedSignals.reduce((a, signal) => updateTradeAnalytics(a, signal), null),
     active,
     activated: active + completed,
     completed,
@@ -7222,6 +7345,13 @@ export default async function handler(req, res) {
     });
   }
 
+  if (mode === "order-flow") {
+    const symbol = String(req.query.symbol || "").toUpperCase();
+    if (!/^[A-Z0-9]{1,20}USDT$/.test(symbol)) return res.status(400).json({ok:false,error:"Invalid USDT symbol"});
+    const [orderFlow, context4h] = await Promise.all([fetchOrderFlow(symbol), fetchHistoricalContext4h(symbol)]);
+    return res.status(200).json({ok:true,symbol,orderFlow,context4h});
+  }
+
   if (mode === "symbols") {
    const result =
      await fetchOKXSwapSymbols();
@@ -7260,6 +7390,7 @@ if (mode === "statistics") {
   const outcomes = persistentCompleted > 0
     ? {
         ...rollingOutcomes,
+        tradeAnalytics: persistentStats.tradeAnalytics || null,
         activated:
           rollingOutcomes.active + persistentCompleted,
         completed: persistentCompleted,
@@ -9166,6 +9297,7 @@ const marketSummary =
     res.status(200).json({
       ok: true,
       source: "CoinGecko + OKX + CoinGlass V4",
+      capabilities: { orderFlow: true },
       
      dataErrors: {
         coinGlass: coinGlass.errors,
