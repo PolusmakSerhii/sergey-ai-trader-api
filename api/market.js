@@ -6260,10 +6260,15 @@ function rankingOwnerCommand(token, command) {
   // then remove the extra key/argument so their original contracts stay intact.
   if (command[0] === "EVAL") {
     const keyCount = Number(command[2]);
-    const guard = `local owner = table.remove(ARGV)
-if redis.call('GET', table.remove(KEYS)) ~= owner then
+    const guard = `local owner = ARGV[#ARGV]
+if redis.call('GET', KEYS[#KEYS]) ~= owner then
   return redis.error_reply('Ranking refresh lease lost')
 end
+-- Upstash exposes readonly KEYS/ARGV. Shadow them with local copies.
+local originalKeys, originalArgs = KEYS, ARGV
+local KEYS, ARGV = {}, {}
+for i = 1, #originalKeys - 1 do KEYS[i] = originalKeys[i] end
+for i = 1, #originalArgs - 1 do ARGV[i] = originalArgs[i] end
 `;
     return runRedisCommand(["EVAL", guard + command[1], keyCount + 1,
       ...command.slice(3, 3 + keyCount), RANKING_REFRESH_LOCK_KEY,
