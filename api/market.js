@@ -8357,6 +8357,7 @@ const results =
         opportunityGrade:
           opportunity.grade,
 
+        confirmedAPlus: opportunity.confirmedAPlus === true,
         opportunity
       };
     });
@@ -8459,6 +8460,7 @@ const ranked =
   globalScanner
     ? ranked.map(item => ({
         symbol: item.symbol,
+        confirmedAPlus: item.confirmedAPlus === true,
 
         price:
           typeof item.price === "number"
@@ -8725,10 +8727,7 @@ if (
 }
 const bestSetup =
   filteredSuccessful
-    .filter(item =>
-      item.tradeAllowed === true &&
-      item.tradeReadiness?.ready === true
-    )
+    .filter(item => item.confirmedAPlus === true)
     .sort((a, b) => {
       const opportunityDifference =
         (b.opportunityScore || 0) -
@@ -8836,6 +8835,7 @@ const marketSummary = {
   bestSetup:
     bestSetup
       ? {
+          confirmedAPlus: bestSetup.confirmedAPlus === true,
           symbol:
             bestSetup.symbol,
 
