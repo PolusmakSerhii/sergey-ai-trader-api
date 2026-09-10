@@ -6843,26 +6843,43 @@ function isCompletedTradeSignal(signal) {
 }
 
 function isConfirmedAPlusTrade(signal) {
-  const entryFrom = Number(signal?.entryZone?.from);
-  const entryTo = Number(signal?.entryZone?.to);
-  const stopLoss = Number(signal?.stopLoss);
-  const takeProfit1 = Number(signal?.takeProfit1);
-  const action = String(signal?.action || "");
+  // Live candidates use backend recommendation.action from the same analysis.
+  // Grade is a downstream label, not an input to eligibility.
+  const numeric = value => typeof value === "number" ||
+    (typeof value === "string" && value.trim() !== "")
+      ? Number(value) : NaN;
+  const opportunityScore = numeric(signal?.opportunityScore);
+  const confidence = numeric(signal?.confidence);
+  const riskReward = numeric(signal?.riskReward);
+  const entryFrom = numeric(signal?.entryZone?.from);
+  const entryTo = numeric(signal?.entryZone?.to);
+  const stopLoss = numeric(signal?.stopLoss);
+  // calculateTradePlan supplies all three targets for valid live candidates.
+  const takeProfit1 = numeric(signal?.takeProfit1);
+  const takeProfit2 = numeric(signal?.takeProfit2);
+  const takeProfit3 = numeric(signal?.takeProfit3);
 
-  return signal?.tradeAllowed === true &&
-    signal?.tradeReadiness?.ready === true &&
-    (signal?.opportunityGrade || signal?.grade) === "A+" &&
-    Number(signal?.opportunityScore) >= 85 &&
-    Number(signal?.confidence) >= 85 &&
-    Number(signal?.riskReward) >= 2 &&
-    (action === "Strong Buy" || action === "Strong Sell") &&
-    Number.isFinite(entryFrom) &&
-    entryFrom > 0 &&
-    Number.isFinite(entryTo) &&
-    entryTo > 0 &&
-    Number.isFinite(stopLoss) &&
-    stopLoss > 0 &&
-    Number.isFinite(takeProfit1);
+  if (signal?.tradeAllowed !== true || signal?.tradeReadiness?.ready !== true ||
+      !Number.isFinite(opportunityScore) || opportunityScore < 85 ||
+      !Number.isFinite(confidence) || confidence < 85 ||
+      !Number.isFinite(riskReward) || riskReward < 2 ||
+      ![entryFrom, entryTo, stopLoss, takeProfit1, takeProfit2, takeProfit3]
+        .every(value => Number.isFinite(value) && value > 0) ||
+      entryFrom > entryTo) return false;
+
+  // Use the planned-entry midpoint convention from createRankingHistoryEntry.
+  const entryReference = Math.round((entryFrom + entryTo) / 2 * 1e12) / 1e12;
+  if (!Number.isFinite(entryReference) || entryReference <= 0) return false;
+
+  if (signal?.direction === "Long" && signal?.action === "Strong Buy") {
+    return stopLoss < entryFrom && entryReference < takeProfit1 &&
+      takeProfit1 < takeProfit2 && takeProfit2 < takeProfit3;
+  }
+  if (signal?.direction === "Short" && signal?.action === "Strong Sell") {
+    return stopLoss > entryTo && entryReference > takeProfit1 &&
+      takeProfit1 > takeProfit2 && takeProfit2 > takeProfit3;
+  }
+  return false;
 }
 
 function isConfirmedAPlusTradeSignal(signal) {
