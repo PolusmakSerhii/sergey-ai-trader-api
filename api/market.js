@@ -3616,7 +3616,13 @@ function calculateScannerOpportunity(data) {
 
   let opportunityGrade = "D";
 
-  if (opportunityScore >= 85) {
+  // Use this analysis and its freshly calculated score, never a cached Grade.
+  const confirmedAPlus = isConfirmedAPlusTrade({
+    ...data,
+    opportunityScore
+  });
+
+  if (opportunityScore >= 85 && confirmedAPlus) {
     opportunityGrade = "A+";
   } else if (opportunityScore >= 75) {
     opportunityGrade = "A";
