@@ -3636,6 +3636,7 @@ function calculateScannerOpportunity(data) {
     version: "1.0",
     score: opportunityScore,
     grade: opportunityGrade,
+    confirmedAPlus,
 
     components: {
       probability: probabilityScore,
@@ -3650,33 +3651,8 @@ function calculateScannerOpportunity(data) {
   };
 }
 
-async function fetchScannerSymbol(
-  baseUrl,
-  symbol
-) {
-  try {
-    const url =
-      `${baseUrl}/api/market?symbol=${encodeURIComponent(symbol)}`;
-
-    const response = await fetch(url, { signal: AbortSignal.timeout(45000) });
-
-    const payload = await response
-      .json()
-      .catch(() => null);
-
-    if (
-      !response.ok ||
-      payload?.ok !== true
-    ) {
-      return {
-        symbol,
-        ok: false,
-        error:
-          payload?.error ||
-          `Market analysis failed: ${response.status}`
-      };
-    }
-
+// Shared projection keeps live Execution eligibility and Scanner on the same contract.
+function createScannerAnalysis(payload, symbol) {
     const technical =
       payload.technical || {};
 
@@ -3830,6 +3806,36 @@ action:
   recommendation.action || "Wait"
       
     };
+}
+
+async function fetchScannerSymbol(
+  baseUrl,
+  symbol
+) {
+  try {
+    const url =
+      `${baseUrl}/api/market?symbol=${encodeURIComponent(symbol)}`;
+
+    const response = await fetch(url, { signal: AbortSignal.timeout(45000) });
+
+    const payload = await response
+      .json()
+      .catch(() => null);
+
+    if (
+      !response.ok ||
+      payload?.ok !== true
+    ) {
+      return {
+        symbol,
+        ok: false,
+        error:
+          payload?.error ||
+          `Market analysis failed: ${response.status}`
+      };
+    }
+
+    return createScannerAnalysis(payload, symbol);
   } catch (error) {
     return {
       symbol,
@@ -9322,6 +9328,14 @@ const marketSummary =
     recommendation
   });
    
+    const executionAnalysis = createScannerAnalysis({
+      technical: { probability, recommendation, marketBias, tradeReadiness,
+        smartMoney, marketEnvironment, tradePlan },
+      price: coin.current_price,
+      change24h: coin.price_change_percentage_24h
+    }, symbol);
+    const confirmedAPlus = calculateScannerOpportunity(executionAnalysis).confirmedAPlus;
+
     res.status(200).json({
       ok: true,
       source: "CoinGecko + OKX + CoinGlass V4",
@@ -9393,6 +9407,7 @@ technical: {
     marketBias,
     marketEnvironment,
     tradeReadiness,
+    confirmedAPlus,
     marketSummary  
    },
       
