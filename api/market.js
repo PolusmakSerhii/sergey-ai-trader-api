@@ -9026,7 +9026,7 @@ totalBatches:
     const okxDailyResponse =
      await fetchOKXKlines(
         symbol,
-          "1D", 1200, instrumentType
+          "1D", 300, instrumentType
          );  
 
     if (instrumentType === "SWAP") {

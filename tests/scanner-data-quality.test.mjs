@@ -35,7 +35,7 @@ test('Scanner requests SWAP and returns short history without calculating a grad
   const c = runtime();
   c.getCoinGlassMarketData = async () => ({});
   c.fetchOKXKlines = async (...args) => {
-    assert.deepEqual(args, ['ASMLUSDT', '1D', 1200, 'SWAP']);
+    assert.deepEqual(args, ['ASMLUSDT', '1D', 300, 'SWAP']);
     return { ok: true, data: candles(199) };
   };
   c.fetch = async url => {
