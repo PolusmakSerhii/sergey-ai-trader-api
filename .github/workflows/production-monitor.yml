@@ -34,8 +34,11 @@ jobs:
             .ok == true and
             .status == "ready" and
             .resultsFailed == 0 and
-            .resultsCollected == .totalAvailableSymbols and
-            .resultsCollected >= 400 and
+            (.resultsCollected + (.resultsInsufficientData // 0)) == .totalAvailableSymbols and
+            .totalAvailableSymbols >= 400 and
+            .resultsCollected > 0 and
+            ((.insufficientData // []) | length) == (.resultsInsufficientData // 0) and
+            (all((.insufficientData // [])[]; .status == "Insufficient Data")) and
             (.globalRanking | length) == .resultsCollected and
             (all(.globalRanking[]; (.recommendationConfidence | type) == "number")) and
             .performance.durationMs < 300000 and
@@ -47,6 +50,7 @@ jobs:
             generatedAt,
             results: ((.resultsCollected | tostring) + "/" + (.totalAvailableSymbols | tostring)),
             errors: .resultsFailed,
+            insufficientData: (.resultsInsufficientData // 0),
             durationMs: .performance.durationMs,
             concurrency: .performance.concurrency,
             cache: .cache.status

@@ -3808,13 +3808,29 @@ action:
     };
 }
 
+function assessScannerCandles(response) {
+  // EMA200 is the longest required lookback in the current Scanner analysis.
+  const requiredCandles = 200;
+  const confirmedCandles = (Array.isArray(response?.data) ? response.data : [])
+    .filter(candle => candle.confirmed === true).length;
+  if (response?.ok !== true) {
+    return { status: "Data Unavailable", requiredCandles, confirmedCandles,
+      reason: response?.error || "Daily candles are unavailable" };
+  }
+  if (confirmedCandles < requiredCandles) {
+    return { status: "Insufficient Data", requiredCandles, confirmedCandles,
+      reason: `At least ${requiredCandles} confirmed daily candles are required` };
+  }
+  return { status: "Available", requiredCandles, confirmedCandles };
+}
+
 async function fetchScannerSymbol(
   baseUrl,
   symbol
 ) {
   try {
     const url =
-      `${baseUrl}/api/market?symbol=${encodeURIComponent(symbol)}`;
+      `${baseUrl}/api/market?symbol=${encodeURIComponent(symbol)}&instrumentType=SWAP`;
 
     const response = await fetch(url, { signal: AbortSignal.timeout(45000) });
 
@@ -3829,6 +3845,8 @@ async function fetchScannerSymbol(
       return {
         symbol,
         ok: false,
+        status: payload?.status,
+        dataQuality: payload?.dataQuality,
         error:
           payload?.error ||
           `Market analysis failed: ${response.status}`
@@ -7862,6 +7880,9 @@ const resultsFailed =
     0
   );
 
+const insufficientData = batchResponses.flatMap(batch =>
+  Array.isArray(batch.insufficientData) ? batch.insufficientData : []);
+
 const averageBatchDurationMs =
   batchDurationsMs.length > 0
     ? Math.round(
@@ -7918,6 +7939,9 @@ candidatePoolSize:
       combinedResults.length,
 
     resultsFailed,
+
+    resultsInsufficientData: insufficientData.length,
+    insufficientData,
 
     performance: {
       durationMs:
@@ -8389,9 +8413,12 @@ const results =
     );
   });
   
+  const insufficientData = results.filter(
+    item => item.ok !== true && item.status === "Insufficient Data"
+  );
   const failed =
     results.filter(
-      item => item.ok !== true
+      item => item.ok !== true && item.status !== "Insufficient Data"
     );
   
   function getScannerSortValue(item) {
@@ -8924,6 +8951,9 @@ filters: {
     failed:
       failed.length,
 
+    insufficientData,
+    resultsInsufficientData: insufficientData.length,
+
     global: globalScanner,
 
     candidatePoolSize:
@@ -8984,6 +9014,11 @@ totalBatches:
   const coinGeckoId =
     COINGECKO_SYMBOL_MAP[symbol] || null;
 
+  const instrumentType = String(req.query.instrumentType || "SPOT").toUpperCase();
+  if (instrumentType !== "SPOT" && instrumentType !== "SWAP") {
+    return res.status(400).json({ ok: false, error: "Invalid instrument type" });
+  }
+
   try {
     const coinGlass = 
       await getCoinGlassMarketData(symbol);
@@ -8991,8 +9026,22 @@ totalBatches:
     const okxDailyResponse =
      await fetchOKXKlines(
         symbol,
-          "1D"
+          "1D", 1200, instrumentType
          );  
+
+    if (instrumentType === "SWAP") {
+      const dataQuality = assessScannerCandles(okxDailyResponse);
+      if (dataQuality.status !== "Available") {
+        return res.status(dataQuality.status === "Data Unavailable" ? 503 : 200).json({
+          ok: false,
+          symbol,
+          status: dataQuality.status,
+          dataQuality,
+          error: dataQuality.reason,
+          time: new Date().toISOString()
+        });
+      }
+    }
    
 const okxDailyCandles =
   okxDailyResponse.ok
@@ -9356,6 +9405,7 @@ const marketSummary =
       derivativesHistory,
         
       okxKlines: {
+        instrumentType,
         available: okxDailyResponse.ok,
         source: "OKX",
         interval: "1D",
