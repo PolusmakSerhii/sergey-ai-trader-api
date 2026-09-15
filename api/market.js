@@ -4249,11 +4249,25 @@ async function requestOKXKlines(
         url.searchParams.set("after", String(after));
       }
 
-      const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      let response;
+      let payload;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        payload = await response.json().catch(() => null);
+        if (response.status !== 429 || attempt === 2) break;
 
-      const payload = await response
-        .json()
-        .catch(() => null);
+        const retryAfter = response.headers?.get("retry-after")?.trim();
+        let retryAfterMs = NaN;
+        if (retryAfter) {
+          retryAfterMs = /^\d+(?:\.\d+)?$/.test(retryAfter)
+            ? Number(retryAfter) * 1000
+            : Date.parse(retryAfter) - Date.now();
+        }
+        const delayMs = Number.isFinite(retryAfterMs) && retryAfterMs > 0
+          ? Math.min(retryAfterMs, 2000)
+          : 500 * (attempt + 1);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
 
       if (
         !response.ok ||
