@@ -31,7 +31,7 @@ test('score 85 / confidence 85 / valid LONG produces A+', () => {
   assert.equal(result.score, 85); assert.equal(result.grade, 'A+');
 });
 test('equivalent valid SHORT produces A+', () => {
-  const result = calculate({ ...candidate(), direction: 'Short', action: 'Strong Sell',
+  const result = calculate({ ...candidate(), direction: 'Short', action: 'Strong Sell', smartMoneyScore: 15,
     stopLoss: 110, takeProfit1: 90, takeProfit2: 80, takeProfit3: 70 });
   assert.equal(result.score, 85); assert.equal(result.grade, 'A+');
 });

@@ -3556,6 +3556,13 @@ function calculateScannerOpportunity(data) {
       ? data.smartMoneyScore
       : 50;
 
+  const validSmartMoneyScore = Number.isFinite(smartMoneyScore) &&
+    smartMoneyScore >= 0 && smartMoneyScore <= 100;
+  const smartMoneyQuality = !validSmartMoneyScore ? 50
+    : data?.direction === "Long" ? smartMoneyScore
+    : data?.direction === "Short" ? 100 - smartMoneyScore
+    : 50;
+
   const riskReward =
     typeof data?.riskReward === "number"
       ? data.riskReward
@@ -3578,7 +3585,7 @@ function calculateScannerOpportunity(data) {
     confidence * 0.25 +
     readinessScore * 0.25 +
     environmentScore * 0.10 +
-    smartMoneyScore * 0.10 +
+    smartMoneyQuality * 0.10 +
     riskRewardScore * 0.10
   );
 
@@ -3644,6 +3651,7 @@ function calculateScannerOpportunity(data) {
       readiness: readinessScore,
       environment: environmentScore,
       smartMoney: smartMoneyScore,
+      smartMoneyQuality,
       riskReward: riskRewardScore
     },
 
