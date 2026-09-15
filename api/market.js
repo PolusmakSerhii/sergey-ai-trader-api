@@ -8077,8 +8077,16 @@ candidatePoolSize:
 } finally {
   if (refreshLockAcquired) {
     try {
-      await runRedisCommand(["EVAL", RELEASE_RANKING_LOCK_SCRIPT, 1,
-        RANKING_REFRESH_LOCK_KEY, refreshToken]);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await runRedisCommand(["EVAL", RELEASE_RANKING_LOCK_SCRIPT, 1,
+            RANKING_REFRESH_LOCK_KEY, refreshToken]);
+          break;
+        } catch (error) {
+          if (error.name !== "TimeoutError" || attempt === 2) throw error;
+          await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+        }
+      }
     } catch (error) {
       logRefresh("release", "release_error", error);
       console.error("Ranking refresh lock release failed:", error);
