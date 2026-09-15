@@ -6261,10 +6261,11 @@ function getRedisConfig() {
     : null;
 }
 
-async function runRedisCommand(command) {
+async function runRedisCommand(command, diagnostics) {
   const config = getRedisConfig();
 
   if (!config) {
+    if (diagnostics) diagnostics.result = "missing_config";
     return null;
   }
 
@@ -6287,6 +6288,11 @@ async function runRedisCommand(command) {
   const payload = await response.json();
   if (payload?.error) {
     throw new Error(`Redis command failed: ${payload.error}`);
+  }
+  if (diagnostics) {
+    diagnostics.result = payload && Object.hasOwn(payload, "result")
+      ? payload.result === "OK" ? "acquired" : payload.result === null ? "busy" : "redis_error"
+      : "redis_error";
   }
   return payload?.result ?? null;
 }
@@ -7778,23 +7784,54 @@ if (!forceGlobalRefresh) {
   });
 }
 
+const refreshDiagnosticId = randomUUID();
+const refreshDiagnosticStartedAt = Date.now();
+let refreshDiagnosticStage = "acquire";
+const logRefresh = (stage, result, error) => {
+  const errorType = error ? (error.name === "TimeoutError" ? "timeout"
+    : String(error.message || "").includes("Ranking refresh lease lost") ? "lease_lost"
+    : "operation_error") : undefined;
+  console.log("[ranking-refresh]", JSON.stringify({
+    requestId: refreshDiagnosticId, stage, result,
+    elapsedMs: Date.now() - refreshDiagnosticStartedAt,
+    ...(errorType ? { errorType } : {})
+  }));
+};
 const refreshToken = randomUUID();
 let refreshLockAcquired = false;
 try {
+  const acquireDiagnostic = {};
   refreshLockAcquired = await runRedisCommand([
     "SET", RANKING_REFRESH_LOCK_KEY, refreshToken, "NX", "EX", RANKING_REFRESH_LOCK_SECONDS
-  ]) === "OK";
+  ], acquireDiagnostic) === "OK";
+  logRefresh("acquire", acquireDiagnostic.result || (refreshLockAcquired ? "acquired" : "busy"));
   if (!refreshLockAcquired) {
     res.setHeader("Retry-After", "60");
     return res.status(503).json({ ok: false, error: "Ranking refresh busy or Redis unavailable" });
   }
+refreshDiagnosticStage = "refresh";
 const globalRankingStartedAt = Date.now();
-const ownedCommand = command => rankingOwnerCommand(refreshToken, command);
+const ownedCommand = async command => {
+  try { return await rankingOwnerCommand(refreshToken, command); }
+  catch (error) {
+    if (refreshDiagnosticStage === "persist") {
+      logRefresh("persist", String(error.message || "").includes("Ranking refresh lease lost")
+        ? "lease_lost" : "persist_error", error);
+    }
+    throw error;
+  }
+};
 const renewRefreshLease = async () => {
   if (Date.now() - globalRankingStartedAt >= RANKING_REFRESH_BUDGET_MS) {
     throw new Error("Ranking refresh time budget exceeded");
   }
-  await ownedCommand(["EXPIRE", RANKING_REFRESH_LOCK_KEY, RANKING_REFRESH_LOCK_SECONDS]);
+  try {
+    await ownedCommand(["EXPIRE", RANKING_REFRESH_LOCK_KEY, RANKING_REFRESH_LOCK_SECONDS]);
+  } catch (error) {
+    logRefresh("renew", String(error.message || "").includes("Ranking refresh lease lost")
+      ? "lease_lost" : "redis_error", error);
+    throw error;
+  }
 };
 const globalConcurrency = 2;
 
@@ -7825,6 +7862,7 @@ const loadGlobalBatch = async page => {
     String(page)
   );
 
+  try {
   const response =
     await fetch(
       batchUrl.toString(),
@@ -7837,7 +7875,11 @@ const loadGlobalBatch = async page => {
     );
   }
 
-  return response.json();
+  return await response.json();
+  } catch (error) {
+    logRefresh("batch", "batch_error", error);
+    throw error;
+  }
 };
 
 const firstBatch =
@@ -7989,6 +8031,7 @@ candidatePoolSize:
   // A partial refresh must not replace the last complete ranking or advance trades.
   if (resultsFailed > 0 || combinedResults.length === 0 ||
       batchResponses.some(batch => batch.ok !== true || !Array.isArray(batch.globalBatchResults))) {
+    logRefresh("batch", "batch_error");
     return res.status(502).json({
       ok: false,
       error: "Incomplete global ranking refresh; previous snapshot preserved",
@@ -7998,6 +8041,7 @@ candidatePoolSize:
   }
 
   await renewRefreshLease();
+  refreshDiagnosticStage = "persist";
   const cacheSaved =
     await writeGlobalRankingCache(
       globalRankingSnapshot, ownedCommand
@@ -8009,6 +8053,7 @@ candidatePoolSize:
     );
 
   if (!cacheSaved || !historySaved) {
+    logRefresh("persist", "persist_error");
     return res.status(503).json({ ok: false, error: "Ranking refresh persistence incomplete" });
   }
   return res.status(200).json({
@@ -8025,6 +8070,8 @@ candidatePoolSize:
     }
   });
 } catch (error) {
+  logRefresh(refreshDiagnosticStage, refreshDiagnosticStage === "acquire" ? "redis_error"
+    : refreshDiagnosticStage === "persist" ? "persist_error" : "refresh_error", error);
   console.error("Global ranking refresh failed:", error);
   return res.status(503).json({ ok: false, error: "Global ranking refresh failed; retry later" });
 } finally {
@@ -8033,6 +8080,7 @@ candidatePoolSize:
       await runRedisCommand(["EVAL", RELEASE_RANKING_LOCK_SCRIPT, 1,
         RANKING_REFRESH_LOCK_KEY, refreshToken]);
     } catch (error) {
+      logRefresh("release", "release_error", error);
       console.error("Ranking refresh lock release failed:", error);
     }
   }
