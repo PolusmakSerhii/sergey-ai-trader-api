@@ -17,7 +17,9 @@ const source = (await readFile(new URL("../api/market.js", import.meta.url), "ut
 const signal = (id, resultR = 1) => ({
   tradeId: id, symbol: "TESTUSDT", direction: "Long", opportunityGrade: "A+",
   opportunityScore: 90, confidence: 90, riskReward: 2, action: "Strong Buy",
-  initialPlan: { entryPrice: 100, stopLoss: 90, takeProfit1: 110 },
+  tradeAllowed: true, tradeReadiness: { ready: true },
+  initialPlan: { entryPrice: 100, entryZone: { from: 99, to: 101 }, stopLoss: 90,
+    takeProfit1: 110, takeProfit2: 120, takeProfit3: 130 },
   outcome: { status: resultR > 0 ? "TP1Hit" : "Stopped", resultR,
     checkedAt: "2026-09-07T12:00:00.000Z" }
 });

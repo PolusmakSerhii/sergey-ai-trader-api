@@ -6676,12 +6676,21 @@ async function createRankingHistoryEntry(
           opportunityGrade:
             Boolean(previousSignal)
               ? previousSignal?.opportunityGrade ||
-                (Number(previousSignal?.opportunityScore) >= 85
+                (isConfirmedAPlusTradeSignal(previousSignal)
                   ? "A+"
-                  : previousSignal?.grade || "D")
+                  : previousSignal?.grade === "A+" ? "D" : previousSignal?.grade || "D")
               : item.opportunityGrade ||
                 item.grade ||
                 "D",
+          // Preserve original eligibility evidence; never borrow it from a later live analysis.
+          tradeAllowed: previousSignal
+            ? previousSignal.tradeAllowed === true
+            : item.tradeAllowed === true,
+          tradeReadiness: {
+            ready: previousSignal
+              ? previousSignal.tradeReadiness?.ready === true
+              : item.tradeReadiness?.ready === true
+          },
           confidence: Boolean(previousSignal)
             ? previousSignal?.confidence || 0
             : item.confidence || 0,
@@ -6956,17 +6965,23 @@ function isConfirmedAPlusTrade(signal) {
 }
 
 function isConfirmedAPlusTradeSignal(signal) {
-  const action = String(signal?.action || "");
-  const initialPlan = signal?.initialPlan || {};
+  const plan = signal?.initialPlan;
+  if (!plan || !Number.isFinite(Number(plan.entryPrice)) || Number(plan.entryPrice) <= 0) return false;
+  return isConfirmedAPlusTrade({
+    ...signal,
+    entryZone: plan.entryZone,
+    stopLoss: plan.stopLoss,
+    takeProfit1: plan.takeProfit1,
+    takeProfit2: plan.takeProfit2,
+    takeProfit3: plan.takeProfit3
+  });
+}
 
-  return signal?.opportunityGrade === "A+" &&
-    Number(signal?.opportunityScore) >= 85 &&
-    Number(signal?.confidence) >= 85 &&
-    Number(signal?.riskReward) >= 2 &&
-    (action === "Strong Buy" || action === "Strong Sell") &&
-    Number(initialPlan.entryPrice) > 0 &&
-    Number(initialPlan.stopLoss) > 0 &&
-    Number(initialPlan.takeProfit1) > 0;
+// Display stored history and keep open trades visible without granting new eligibility.
+function isVisibleTrackedTradeSignal(signal) {
+  return isCompletedTradeSignal(signal) ||
+    ["Active", "WaitingEntry", "Pending"].includes(signal?.outcome?.status) ||
+    isConfirmedAPlusTradeSignal(signal);
 }
 
 function classifyTradeResult(signal) {
@@ -7087,7 +7102,7 @@ async function recordCompletedTradeSignals(signals, execute = runRedisCommand) {
   if (!getRedisConfig()) return null;
   const completedSignals = [...new Map(signals
     .filter(signal => isCompletedTradeSignal(signal) &&
-      isConfirmedAPlusTradeSignal(signal))
+      signal.opportunityGrade === "A+" && isConfirmedAPlusTradeSignal(signal))
     .map(signal => [signal.tradeId, signal])).values()]
     .sort((a, b) => Date.parse(a.outcome.checkedAt) - Date.parse(b.outcome.checkedAt));
   if (!completedSignals.length) return null;
@@ -7140,7 +7155,7 @@ async function readPersistentTradeData() {
     ]);
     const recentTrades = (Array.isArray(recentRaw) ? recentRaw : [])
       .map(value => { try { return JSON.parse(value); } catch { return null; } })
-      .filter(signal => isCompletedTradeSignal(signal) && isConfirmedAPlusTradeSignal(signal));
+      .filter(isCompletedTradeSignal);
     return {
       stats: typeof storedStats === "string"
         ? parsePersistentTradeStats(storedStats)
@@ -7539,11 +7554,11 @@ if (mode === "statistics") {
       ...snapshot,
       readySignals: index === 0
         ? (snapshot.readySignals || []).filter(
-            isConfirmedAPlusTradeSignal
+            isVisibleTrackedTradeSignal
           )
         : Array.isArray(snapshot.readySignals)
           ? snapshot.readySignals.filter(signal =>
-              isConfirmedAPlusTradeSignal(signal) &&
+              isVisibleTrackedTradeSignal(signal) &&
               (signal?.outcome?.status === "TP1Hit" || signal?.outcome?.status === "TP3Hit" ||
                 signal?.outcome?.status === "Stopped")
             )
