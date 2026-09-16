@@ -4028,8 +4028,15 @@ function processPartialCandle(plan, outcome, candle, direction) {
       outcome.exitCheck = evidence;
     }
   };
-  // Ambiguous intraminute management must not turn into a fabricated stop on retry.
-  if (outcome.managementPending) return "ambiguous_management_candle";
+  // Never replay the ambiguous candle. Resume only at its next chronological minute.
+  if (outcome.managementPending) {
+    const pendingCandle = outcome.managementPending.candle;
+    if (!isValidLifecycleCandle(pendingCandle) || pendingCandle.confirmed !== true ||
+        candle.timestamp !== pendingCandle.timestamp + LIFECYCLE_MINUTE_MS) {
+      return "ambiguous_management_candle";
+    }
+    delete outcome.managementPending;
+  }
   const entryInThisCandle = outcome.entryCheck && Date.parse(outcome.activatedAt) === candle.timestamp;
   // For a position already active before this candle, the opening price provides
   // known ordering: targets reached at the open precede a later intraminute stop.
@@ -4081,6 +4088,12 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
   const expiry = Date.parse(expiresAt);
   const expiryBoundary = Math.ceil(expiry / LIFECYCLE_MINUTE_MS) * LIFECYCLE_MINUTE_MS;
   let cursor = getLifecycleCursor(previousOutcome, plannedAt);
+  // Older persisted pending states still point at the already inspected candle.
+  const pendingCandle = previousOutcome.managementPending?.candle;
+  if (initialPlan.exitStrategy && isValidLifecycleCandle(pendingCandle || {}) &&
+      pendingCandle.confirmed === true && cursor === pendingCandle.timestamp) {
+    cursor += LIFECYCLE_MINUTE_MS;
+  }
   const fromTime = Number.isFinite(cursor) ? new Date(cursor).toISOString() : null;
   const end = Math.floor(now / LIFECYCLE_MINUTE_MS) * LIFECYCLE_MINUTE_MS;
   const boundaryTimestamp = Math.max(Date.parse(plannedAt),
@@ -4174,7 +4187,10 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
         }
         if (partial) {
           verification = processPartialCandle(initialPlan, outcome, candle, direction);
-          if (verification === "ambiguous_management_candle") break;
+          if (verification === "ambiguous_management_candle") {
+            if (outcome.managementPending?.candle?.timestamp === cursor) cursor += LIFECYCLE_MINUTE_MS;
+            break;
+          }
           outcome.markPrice = candle.close;
           outcome.markPriceAt = new Date(candle.timestamp + LIFECYCLE_MINUTE_MS).toISOString();
           if (outcome.remainingPosition === 0) {

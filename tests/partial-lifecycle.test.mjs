@@ -51,9 +51,58 @@ for(const d of ['Long','Short']){
     const c=runtime(),p=plan(c,d),bar=candle(0,105,121,99,115,d);
     const out=evaluate(c,p,active(),[bar],1,d);
     assert.equal(out.status,'Active');assert.equal(out.realizedR,.25);assert.equal(out.remainingPosition,.75);
-    assert.equal(out.priceCheck.status,'ambiguous_management_candle');assert.equal(out.resultR,null);assert.equal(out.totalR,null);assert.equal(out.lastPriceCheckedAt,time(0));
-    const retry=evaluate(c,p,JSON.parse(JSON.stringify(out)),[bar,candle(1,110,131,109,130,d)],2,d);
+    assert.equal(out.priceCheck.status,'ambiguous_management_candle');assert.equal(out.resultR,null);assert.equal(out.totalR,null);assert.equal(out.lastPriceCheckedAt,time(1));
+    const retry=evaluate(c,p,JSON.parse(JSON.stringify(out)),[bar],1,d);
     assert.equal(retry.exits.length,1);assert.equal(retry.realizedR,.25);assert.equal(retry.priceCheck.status,'ambiguous_management_candle');
+  });
+  for (const destination of ['BE', 'TP2', 'TP3']) {
+    test(`${d}: ambiguous TP1 resumes at next minute through ${destination}`,()=>{
+      const c=runtime(),p=plan(c,d),frozen=JSON.stringify(p);
+      const bar=candle(0,105,121,99,115,d);
+      const pending=evaluate(c,p,active(),[bar],1,d);
+      const saved=JSON.stringify(pending);
+      const next=destination==='BE' ? candle(1,105,106,99,100,d) : candle(1,111,121,110,120,d);
+      const resumed=evaluate(c,p,JSON.parse(saved),[bar,next],2,d);
+      assert.equal(resumed.managementPending,undefined);
+      assert.equal(resumed.exits.filter(e=>e.target==='TP1').length,1);
+      assert.equal(resumed.entryPrice,100);assert.equal(resumed.currentStopLoss,100);
+      assert.equal(resumed.initialStopLoss,mirror(90,d));
+      if(destination==='BE') {
+        assert.equal(resumed.status,'Stopped');assert.equal(resumed.resultR,.25);
+        assert.equal(resumed.exits[1].initialFraction,.75);
+      } else {
+        assert.equal(resumed.status,'Active');assert.equal(resumed.remainingPosition,.5);
+        assert.equal(resumed.realizedR,.75);
+        if(destination==='TP3') {
+          const closed=evaluate(c,p,resumed,[candle(2,121,131,120,130,d)],3,d);
+          assert.equal(closed.status,'TP3Hit');assert.equal(closed.resultR,2.25);
+          assert.deepEqual(Array.from(closed.exits,e=>e.initialFraction),[.25,.25,.5]);
+        }
+      }
+      assert.equal(JSON.stringify(p),frozen);assert.equal(JSON.stringify(pending),saved);
+      // Legacy persisted cursor must skip the original candle as well.
+      const legacy=JSON.parse(saved);legacy.lastPriceCheckedAt=time(0);
+      assert.equal(evaluate(c,p,legacy,[bar,next],2,d).realizedR,resumed.realizedR);
+    });
+  }
+  test(`${d}: later BE/target overlap after recovery retains conservative stop-first behavior`,()=>{
+    const c=runtime(),p=plan(c,d);
+    const pending=evaluate(c,p,active(),[candle(0,105,121,99,115,d)],1,d);
+    const resumed=evaluate(c,p,pending,[candle(1,105,109,104,108,d)],2,d);
+    const closed=evaluate(c,p,resumed,[candle(2,110,131,99,125,d)],3,d);
+    assert.equal(closed.status,'Stopped');assert.equal(closed.resultR,.25);
+    assert.equal(closed.exits.length,2);assert.equal(closed.exitCheck.rule,'same-candle-sl-first');
+  });
+  test(`${d}: pending recovery waits for the immediate confirmed minute without skipping gaps`,()=>{
+    const c=runtime(),p=plan(c,d);
+    const pending=evaluate(c,p,active(),[candle(0,105,121,99,115,d)],1,d);
+    for(const data of [null,[candle(2,121,131,120,130,d)],[{...candle(1,111,121,110,120,d),confirmed:false}]]) {
+      const wait=evaluate(c,p,pending,data,3,d);
+      assert.equal(wait.exits.length,1);assert.equal(wait.realizedR,.25);
+      assert.equal(wait.lastPriceCheckedAt,time(1));assert.ok(wait.managementPending);
+      const resumed=evaluate(c,p,wait,[candle(1,111,121,110,120,d)],2,d);
+      assert.equal(resumed.realizedR,.75);assert.equal(resumed.managementPending,undefined);
+    }
   });
   test(`${d}: close beyond new stop confirms TP1 then BE when no later target is touched`,()=>{
     const c=runtime(),p=plan(c,d);
