@@ -88,6 +88,21 @@ test("trade ledger and backups against isolated Redis (no TCP or production)", a
       assert.equal(await redis(["SCARD", keys.completedTradeIds]), 35);
       assert.equal(await redis(["LLEN", keys.completedTrades]), 20);
     });
+    await t.test("chronological journal reconciles delayed trades atomically and survives display trimming", async () => {
+      await reset();
+      const a = signal("chrono-a", -1), b = signal("chrono-b", 2);
+      a.outcome.checkedAt = "2026-09-07T10:00:00Z";
+      b.outcome.checkedAt = "2026-09-07T11:00:00Z";
+      await record([b]); await record([a]); await record([a]);
+      const delayed = await stats();
+      assert.equal(delayed.completed, 2);
+      assert.equal(delayed.chronology.postMigration.maxDrawdownR, 1);
+      assert.deepEqual(delayed.chronology.records.map(row => row.tradeId), ["chrono-a", "chrono-b"]);
+      await record(Array.from({ length: 25 }, (_, i) => signal(`extra-${i}`)));
+      assert.equal((await stats()).chronology.records.length, 27);
+      assert.equal(await redis(["LLEN", keys.completedTrades]), 20);
+      assert.equal(await redis(["SCARD", keys.completedTradeIds]), 27);
+    });
     await t.test("concurrent overlapping batches do not lose or duplicate results", async () => {
       await reset();
       await Promise.all([record([signal("a"), signal("shared")]),

@@ -7114,6 +7114,71 @@ function parsePersistentTradeStats(raw) {
   return { ...createEmptyPersistentTradeStats(), ...stats };
 }
 
+// The untrimmed journal shares the aggregate's CAS value and backup key. Legacy
+// chronology is unknowable: keep its exact baseline and expose the new sequence separately.
+function reconcileTradeChronology(stats, newSignals, legacyBaseline, idCount) {
+  const previous = stats.chronology;
+  if (previous !== undefined && (previous?.version !== 1 ||
+      !previous.legacyBaseline || !Array.isArray(previous.records) ||
+      !Number.isInteger(previous.legacyTradeIdCount) || previous.legacyTradeIdCount < 0)) {
+    throw new Error("Invalid chronological trade journal; explicit recovery is required");
+  }
+  const baseline = previous ? previous.legacyBaseline : legacyBaseline;
+  const legacyTradeIdCount = previous ? previous.legacyTradeIdCount : Number(idCount);
+  const records = previous ? [...previous.records] : [];
+  if (!Number.isInteger(legacyTradeIdCount) || legacyTradeIdCount < 0 ||
+      legacyTradeIdCount + records.length !== Number(idCount)) {
+    throw new Error("Chronological journal and trade IDs disagree; explicit recovery is required");
+  }
+  const seen = new Set();
+  const validateRecord = record => {
+    if (typeof record?.tradeId !== "string" || !record.tradeId || seen.has(record.tradeId) ||
+        !Number.isFinite(Date.parse(record.checkedAt)) ||
+        typeof record.resultR !== "number" || !Number.isFinite(record.resultR) ||
+        !["Long", "Short"].includes(record.direction) ||
+        !(record.partialTargets === null || (Array.isArray(record.partialTargets) &&
+          record.partialTargets.every(target => ["TP1", "TP2", "TP3"].includes(target)) &&
+          new Set(record.partialTargets).size === record.partialTargets.length))) {
+      throw new Error("Invalid chronological trade record; explicit recovery is required");
+    }
+    seen.add(record.tradeId);
+  };
+  records.forEach(validateRecord);
+  for (const signal of newSignals) {
+    const partial = signal.initialPlan?.exitStrategy?.version === "partial-25-25-50-be-v1" &&
+      signal.outcome.lifecycleVersion === "partial-candles-v1" && Array.isArray(signal.outcome.exits);
+    const record = { tradeId: signal.tradeId, checkedAt: signal.outcome.checkedAt,
+      resultR: signal.outcome.resultR, direction: signal.direction,
+      partialTargets: partial ? [...new Set(signal.outcome.exits
+        .filter(event => event.initialFraction > 0 && ["TP1", "TP2", "TP3"].includes(event.target))
+        .map(event => event.target))].sort() : null };
+    validateRecord(record);
+    records.push(record);
+  }
+  records.sort((a, b) => Date.parse(a.checkedAt) - Date.parse(b.checkedAt) ||
+    (a.tradeId < b.tradeId ? -1 : a.tradeId > b.tradeId ? 1 : 0));
+  let postMigration = createEmptyPersistentTradeStats();
+  let aggregate = { ...createEmptyPersistentTradeStats(), ...baseline };
+  for (const record of records) {
+    const signal = { tradeId: record.tradeId, direction: record.direction,
+      initialPlan: record.partialTargets === null ? {} : {
+        exitStrategy: { version: "partial-25-25-50-be-v1" } },
+      outcome: { status: "Stopped", checkedAt: record.checkedAt, resultR: record.resultR,
+        lifecycleVersion: record.partialTargets === null ? undefined : "partial-candles-v1",
+        exits: record.partialTargets?.map(target => ({ target, initialFraction: 1 })) } };
+    postMigration = addTradeToPersistentStats(postMigration, signal);
+    aggregate = addTradeToPersistentStats(aggregate, signal);
+  }
+  return { ...aggregate, chronology: {
+    version: 1,
+    initializedAt: previous ? previous.initializedAt : new Date().toISOString(),
+    membershipBoundary: "first-recorded-after-initialization",
+    aggregateSequenceScope: "legacy-baseline-followed-by-post-migration-journal",
+    legacyOrderKnown: false,
+    legacyBaseline: baseline, legacyTradeIdCount, records, postMigration
+  } };
+}
+
 async function recordCompletedTradeSignals(signals, execute = runRedisCommand) {
   if (!getRedisConfig()) return null;
   const completedSignals = [...new Map(signals
@@ -7136,7 +7201,7 @@ async function recordCompletedTradeSignals(signals, execute = runRedisCommand) {
     let stats = raw ? parsePersistentTradeStats(raw) : {
       ...createEmptyPersistentTradeStats(), scope: "confirmed-a-plus-v1"
     };
-    let added = 0;
+    const newSignals = [];
     const entries = completedSignals.map((signal, index) => {
       const member = Number(membership[index]);
       if (member !== 0 && member !== 1) throw new Error("Invalid ledger membership");
@@ -7146,12 +7211,13 @@ async function recordCompletedTradeSignals(signals, execute = runRedisCommand) {
             !Number.isFinite(Date.parse(signal.outcome.checkedAt))) {
           throw new Error("Completed trade requires a finite resultR and closing time");
         }
-        stats = addTradeToPersistentStats(stats, signal);
-        added += 1;
+        newSignals.push(signal);
       }
       return { id: signal.tradeId, member, json: JSON.stringify(signal) };
     });
-    if (!added) return stats;
+    if (!newSignals.length) return stats;
+    stats = reconcileTradeChronology(stats, newSignals,
+      raw ? JSON.parse(raw) : { ...stats }, idCount);
     const committed = await execute([
       "EVAL", WRITE_TRADE_LEDGER_SCRIPT, "3", ...keys,
       raw, JSON.stringify(stats), JSON.stringify(entries),
