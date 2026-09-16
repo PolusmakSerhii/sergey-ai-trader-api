@@ -2946,6 +2946,13 @@ function calculateRecommendation(data) {
       ? smartMoney.score
       : 50;
 
+  const validSmartMoneyScore = Number.isFinite(smartMoneyScore) &&
+    smartMoneyScore >= 0 && smartMoneyScore <= 100;
+  const directionalSmartMoney = !validSmartMoneyScore ? 50
+    : tradePlan.direction === "Long" ? smartMoneyScore
+    : tradePlan.direction === "Short" ? 100 - smartMoneyScore
+    : 50;
+
   const setupScore =
     typeof tradePlan.setupScore === "number"
       ? tradePlan.setupScore
@@ -2962,7 +2969,7 @@ function calculateRecommendation(data) {
 
   const confidence = Math.round(
     probabilityScore * 0.3 +
-    smartMoneyScore * 0.2 +
+    directionalSmartMoney * 0.2 +
     setupScore * 0.4 +
     trendScore * 0.1
   );
