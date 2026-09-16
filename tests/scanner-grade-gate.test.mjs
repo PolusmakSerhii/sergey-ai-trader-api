@@ -77,3 +77,50 @@ test('candidate data and attached frozen/history fields are not mutated', () => 
   calculate(data);
   assert.deepEqual(data, before);
 });
+
+for (const [name, blockers, penalty] of [
+  ['sole environment', ['Market environment is not tradable'], false],
+  ['other blocker', ['Signal confidence is too low: 50'], true],
+  ['environment plus other', ['Market environment is not tradable', 'Signal confidence is too low: 50'], true],
+  ['duplicate blockers', ['Market environment is not tradable', 'Market environment is not tradable'], true],
+  ['missing blockers', undefined, true],
+  ['empty blockers', [], true]
+]) test(`Blocked penalty: ${name}`, () => {
+  const data = { ...high(), tradeReadiness: { score: 100, ready: false, status: 'Blocked', blockers } };
+  const before = structuredClone(data);
+  const result = calculate(data);
+  assert.equal(result.score, penalty ? 90 : 100);
+  assert.equal(result.penalties.includes('Trade readiness is blocked'), penalty);
+  assert.equal(result.confirmedAPlus, false);
+  assert.equal(result.grade, 'A');
+  assert.deepEqual(data, before);
+});
+
+test('Scanner projection preserves sole environment blocker and RAVE remains unconfirmed A', () => {
+  const payload = { technical: {
+    probability: { score: 86, confidence: { score: 99 },
+      aiAssessment: { direction: 'Short', tradeAllowed: true }, probabilities: { neutral: 0 } },
+    recommendation: { action: 'Strong Sell' }, smartMoney: { score: 30 },
+    marketEnvironment: { score: 71, tradable: false },
+    tradeReadiness: { score: 88, ready: false, status: 'Blocked', blockers: ['Market environment is not tradable'] },
+    tradePlan: { riskReward: 2, entryZone: { from: 99, to: 101 },
+      stopLoss: 110, takeProfit1: 90, takeProfit2: 80, takeProfit3: 70 }
+  } };
+  const data = context.createScannerAnalysis(payload, 'RAVEUSDT');
+  assert.equal(data.tradeReadiness.blockers[0], 'Market environment is not tradable');
+  assert.notEqual(data.tradeReadiness.blockers, payload.technical.tradeReadiness.blockers);
+  const result = calculate(data);
+  assert.equal(result.score, 87);
+  assert.equal(result.grade, 'A');
+  assert.equal(result.confirmedAPlus, false);
+  assert.equal(data.tradeReadiness.ready, false);
+  assert.equal(data.tradeReadiness.status, 'Blocked');
+});
+
+test('environment exception does not remove other Opportunity penalties', () => {
+  const result = calculate({ ...high(), tradeAllowed: false, probabilities: { neutral: 60 },
+    tradeReadiness: { score: 100, ready: false, status: 'Blocked', blockers: ['Market environment is not tradable'] } });
+  assert.equal(result.score, 80);
+  assert.deepEqual(Array.from(result.penalties), ['Trade is not currently allowed', 'Neutral probability is too high']);
+  assert.equal(result.confirmedAPlus, false);
+});

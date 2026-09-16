@@ -3614,8 +3614,12 @@ function calculateScannerOpportunity(data) {
     );
   }
 
+  const blockers = data?.tradeReadiness?.blockers;
+  const soleEnvironmentBlocker = Array.isArray(blockers) &&
+    blockers.length === 1 && blockers[0] === "Market environment is not tradable";
   if (
-    data?.tradeReadiness?.status === "Blocked"
+    data?.tradeReadiness?.status === "Blocked" &&
+    !soleEnvironmentBlocker
   ) {
     opportunityScore -= 10;
     penalties.push(
@@ -3775,7 +3779,11 @@ tradeReadiness: {
     tradeReadiness.ready === true,
 
   status:
-    tradeReadiness.status || "Unknown"
+    tradeReadiness.status || "Unknown",
+
+  blockers: Array.isArray(tradeReadiness.blockers)
+    ? [...tradeReadiness.blockers]
+    : []
 },
 
 smartMoneyScore:
