@@ -9573,7 +9573,8 @@ const marketSummary =
       price: coin.current_price,
       change24h: coin.price_change_percentage_24h
     }, symbol);
-    const confirmedAPlus = calculateScannerOpportunity(executionAnalysis).confirmedAPlus;
+    const liveOpportunity = calculateScannerOpportunity(executionAnalysis);
+    const confirmedAPlus = liveOpportunity.confirmedAPlus;
 
     res.status(200).json({
       ok: true,
@@ -9647,6 +9648,8 @@ technical: {
     marketBias,
     marketEnvironment,
     tradeReadiness,
+    opportunityScore: liveOpportunity.score,
+    opportunityGrade: liveOpportunity.grade,
     confirmedAPlus,
     marketSummary  
    },
