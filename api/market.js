@@ -6407,6 +6407,213 @@ async function writeGlobalRankingCache(snapshot, execute = runRedisCommand) {
   }
 }
 
+// Shared creation/update projection; only the existing lifecycle advances state.
+function createFrozenTradeCandidate(item, capturedAt) {
+  if (!item?.symbol || !Number.isFinite(Date.parse(capturedAt)) ||
+      !isConfirmedAPlusTrade(item)) throw new Error("Canonical A+ candidate required");
+  return buildTrackedTradeSignal({ ...item, grade: "A+", opportunityGrade: "A+" }, capturedAt);
+}
+
+function buildTrackedTradeSignal(item, capturedAt, previousSignal = null, recentPriceRange = null) {
+  const direction =
+    item.direction || "Neutral";
+  const entryFrom =
+    item.entryZone?.from ?? "NA";
+  const entryTo =
+    item.entryZone?.to ?? "NA";
+  const stopLoss =
+    item.stopLoss ?? "NA";
+  const takeProfit2 =
+    item.takeProfit2 ?? "NA";
+  const currentPrice =
+    typeof item.price === "number"
+      ? item.price
+      : null;
+  const numericEntryFrom =
+    Number(item.entryZone?.from);
+  const numericEntryTo =
+    Number(item.entryZone?.to);
+  const hasEntryZone =
+    currentPrice !== null &&
+    Number.isFinite(numericEntryFrom) &&
+    Number.isFinite(numericEntryTo);
+  const entryLow = hasEntryZone
+    ? Math.min(
+        numericEntryFrom,
+        numericEntryTo
+      )
+    : null;
+  const entryHigh = hasEntryZone
+    ? Math.max(
+        numericEntryFrom,
+        numericEntryTo
+      )
+    : null;
+  const setupKey = [
+    item.symbol,
+    direction
+  ].join(":");
+  const previousOutcome =
+    previousSignal?.outcome || {};
+  const previousIsClosed =
+    previousOutcome.status === "TP1Hit" || previousOutcome.status === "TP3Hit" ||
+    previousOutcome.status === "Stopped";
+  const previousIsActive =
+    previousOutcome.status === "Active";
+  const previousWasActivated =
+    previousIsActive || previousIsClosed;
+  // New plans start on a minute boundary, so no candle contains both
+  // pre-plan and eligible entry prices. Legacy plans retain their times.
+  const plannedAt =
+    previousSignal?.initialPlan?.plannedAt ||
+    previousOutcome.plannedAt ||
+    new Date(Math.ceil(Date.parse(capturedAt) / LIFECYCLE_MINUTE_MS) *
+      LIFECYCLE_MINUTE_MS).toISOString();
+  const expiresAt =
+    previousSignal?.initialPlan?.expiresAt ||
+    previousOutcome.expiresAt ||
+    new Date(
+      Date.parse(plannedAt) +
+      CONFIRMED_TRADE_PLAN_TTL_MINUTES * 60000
+    ).toISOString();
+  const plannedEntryPrice = hasEntryZone
+    ? Math.round((entryLow + entryHigh) / 2 * 1e12) / 1e12
+    : null;
+  let initialPlan =
+    previousSignal?.initialPlan ||
+    (previousWasActivated
+      ? {
+          entryPrice:
+            previousOutcome.entryPrice ??
+            previousSignal.price ??
+            null,
+          stopLoss:
+            previousSignal.stopLoss ?? null,
+          takeProfit1:
+            previousSignal.takeProfit1 ?? null,
+          takeProfit2:
+            previousSignal.takeProfit2 ?? null,
+          takeProfit3:
+            previousSignal.takeProfit3 ?? null,
+          entryZone:
+            previousSignal.entryZone ?? null,
+          plannedAt,
+          expiresAt
+        }
+      : {
+          createdAt: capturedAt,
+          entryPrice: plannedEntryPrice,
+          stopLoss:
+            item.stopLoss ?? null,
+          takeProfit1:
+            item.takeProfit1 ?? null,
+          takeProfit2:
+            item.takeProfit2 ?? null,
+          takeProfit3:
+            item.takeProfit3 ?? null,
+          entryZone:
+            item.entryZone ? { ...item.entryZone } : null,
+          plannedAt,
+          expiresAt
+        });
+  if (!previousSignal) {
+    initialPlan = { ...initialPlan, initialStopLoss: initialPlan.stopLoss,
+      exitStrategy: createPartialExitStrategy() };
+  }
+  initialPlan = {
+    ...initialPlan,
+    entryZone:
+      initialPlan?.entryZone ||
+      previousSignal?.entryZone ||
+      item.entryZone ||
+      null,
+    plannedAt:
+      initialPlan?.plannedAt || plannedAt,
+    expiresAt:
+      initialPlan?.expiresAt || expiresAt
+  };
+  const outcome = evaluateTradeLifecycle({ initialPlan, direction,
+    previousOutcome, capturedAt, priceRange: recentPriceRange });
+
+  return {
+    tradeId:
+      previousSignal?.tradeId ||
+      [setupKey, capturedAt].join(":"),
+    setupKey,
+    setupId: previousSignal?.setupId || [
+      item.symbol,
+      direction,
+      entryFrom,
+      entryTo,
+      stopLoss,
+      takeProfit2
+    ].join(":"),
+    signalId: [
+      item.symbol,
+      direction,
+      capturedAt
+    ].join(":"),
+    capturedAt,
+    symbol: item.symbol,
+    price: currentPrice,
+    direction,
+    action: Boolean(previousSignal)
+      ? previousSignal?.action || "Wait"
+      : item.action || "Wait",
+    opportunityScore:
+      Boolean(previousSignal)
+        ? previousSignal?.opportunityScore || 0
+        : item.opportunityScore || 0,
+    opportunityGrade:
+      Boolean(previousSignal)
+        ? previousSignal?.opportunityGrade ||
+          (isConfirmedAPlusTradeSignal(previousSignal)
+            ? "A+"
+            : previousSignal?.grade === "A+" ? "D" : previousSignal?.grade || "D")
+        : item.opportunityGrade ||
+          item.grade ||
+          "D",
+    // Preserve original eligibility evidence; never borrow it from a later live analysis.
+    tradeAllowed: previousSignal
+      ? previousSignal.tradeAllowed === true
+      : item.tradeAllowed === true,
+    tradeReadiness: {
+      ready: previousSignal
+        ? previousSignal.tradeReadiness?.ready === true
+        : item.tradeReadiness?.ready === true
+    },
+    confidence: Boolean(previousSignal)
+      ? previousSignal?.confidence || 0
+      : item.confidence || 0,
+    grade:
+      Boolean(previousSignal)
+        ? previousSignal?.grade ||
+          previousSignal?.opportunityGrade ||
+          "D"
+        : item.grade ||
+          item.opportunityGrade ||
+          "D",
+    riskReward:
+      Boolean(previousSignal)
+        ? previousSignal?.riskReward ?? null
+        : typeof item.riskReward === "number"
+          ? item.riskReward
+        : null,
+    entryZone:
+      initialPlan?.entryZone || item.entryZone || null,
+    stopLoss:
+      initialPlan?.stopLoss ?? item.stopLoss ?? null,
+    takeProfit1:
+      initialPlan?.takeProfit1 ?? item.takeProfit1 ?? null,
+    takeProfit2:
+      initialPlan?.takeProfit2 ?? item.takeProfit2 ?? null,
+    takeProfit3:
+      initialPlan?.takeProfit3 ?? item.takeProfit3 ?? null,
+    initialPlan,
+    outcome
+  };
+}
+
 async function createRankingHistoryEntry(
   snapshot,
   previousEntry = null
@@ -6525,219 +6732,14 @@ async function createRankingHistoryEntry(
     }
   }
 
-  const readySignals =
-    trackedItems
-      .map(item => {
-        const direction =
-          item.direction || "Neutral";
-        const entryFrom =
-          item.entryZone?.from ?? "NA";
-        const entryTo =
-          item.entryZone?.to ?? "NA";
-        const stopLoss =
-          item.stopLoss ?? "NA";
-        const takeProfit2 =
-          item.takeProfit2 ?? "NA";
-        const currentPrice =
-          typeof item.price === "number"
-            ? item.price
-            : null;
-        const numericEntryFrom =
-          Number(item.entryZone?.from);
-        const numericEntryTo =
-          Number(item.entryZone?.to);
-        const hasEntryZone =
-          currentPrice !== null &&
-          Number.isFinite(numericEntryFrom) &&
-          Number.isFinite(numericEntryTo);
-        const entryLow = hasEntryZone
-          ? Math.min(
-              numericEntryFrom,
-              numericEntryTo
-            )
-          : null;
-        const entryHigh = hasEntryZone
-          ? Math.max(
-              numericEntryFrom,
-              numericEntryTo
-            )
-          : null;
-        const setupKey = [
-          item.symbol,
-          direction
-        ].join(":");
-        const previousSignal =
-          previousOpenSignals.find(
-            signal =>
-              signal.setupKey === setupKey
-          ) || null;
-        const previousOutcome =
-          previousSignal?.outcome || {};
-        const previousIsClosed =
-          previousOutcome.status === "TP1Hit" || previousOutcome.status === "TP3Hit" ||
-          previousOutcome.status === "Stopped";
-        const previousIsActive =
-          previousOutcome.status === "Active";
-        const previousIsWaiting =
-          previousOutcome.status === "WaitingEntry" ||
-          previousOutcome.status === "Pending";
-        const recentPriceRange =
-          previousIsActive || previousIsWaiting
-            ? openPriceRanges.get(previousSignal?.tradeId) || null
-            : null;
-        const previousWasActivated =
-          previousIsActive || previousIsClosed;
-        // New plans start on a minute boundary, so no candle contains both
-        // pre-plan and eligible entry prices. Legacy plans retain their times.
-        const plannedAt =
-          previousSignal?.initialPlan?.plannedAt ||
-          previousOutcome.plannedAt ||
-          new Date(Math.ceil(Date.parse(capturedAt) / LIFECYCLE_MINUTE_MS) *
-            LIFECYCLE_MINUTE_MS).toISOString();
-        const expiresAt =
-          previousSignal?.initialPlan?.expiresAt ||
-          previousOutcome.expiresAt ||
-          new Date(
-            Date.parse(plannedAt) +
-            CONFIRMED_TRADE_PLAN_TTL_MINUTES * 60000
-          ).toISOString();
-        const plannedEntryPrice = hasEntryZone
-          ? Math.round((entryLow + entryHigh) / 2 * 1e12) / 1e12
-          : null;
-        let initialPlan =
-          previousSignal?.initialPlan ||
-          (previousWasActivated
-            ? {
-                entryPrice:
-                  previousOutcome.entryPrice ??
-                  previousSignal.price ??
-                  null,
-                stopLoss:
-                  previousSignal.stopLoss ?? null,
-                takeProfit1:
-                  previousSignal.takeProfit1 ?? null,
-                takeProfit2:
-                  previousSignal.takeProfit2 ?? null,
-                takeProfit3:
-                  previousSignal.takeProfit3 ?? null,
-                entryZone:
-                  previousSignal.entryZone ?? null,
-                plannedAt,
-                expiresAt
-              }
-            : {
-                createdAt: capturedAt,
-                entryPrice: plannedEntryPrice,
-                stopLoss:
-                  item.stopLoss ?? null,
-                takeProfit1:
-                  item.takeProfit1 ?? null,
-                takeProfit2:
-                  item.takeProfit2 ?? null,
-                takeProfit3:
-                  item.takeProfit3 ?? null,
-                entryZone:
-                  item.entryZone ?? null,
-                plannedAt,
-                expiresAt
-              });
-        if (!previousSignal) {
-          initialPlan = { ...initialPlan, initialStopLoss: initialPlan.stopLoss,
-            exitStrategy: createPartialExitStrategy() };
-        }
-        initialPlan = {
-          ...initialPlan,
-          entryZone:
-            initialPlan?.entryZone ||
-            previousSignal?.entryZone ||
-            item.entryZone ||
-            null,
-          plannedAt:
-            initialPlan?.plannedAt || plannedAt,
-          expiresAt:
-            initialPlan?.expiresAt || expiresAt
-        };
-        const outcome = evaluateTradeLifecycle({ initialPlan, direction,
-          previousOutcome, capturedAt, priceRange: recentPriceRange });
-
-        return {
-          tradeId:
-            previousSignal?.tradeId ||
-            [setupKey, capturedAt].join(":"),
-          setupKey,
-          setupId: previousSignal?.setupId || [
-            item.symbol,
-            direction,
-            entryFrom,
-            entryTo,
-            stopLoss,
-            takeProfit2
-          ].join(":"),
-          signalId: [
-            item.symbol,
-            direction,
-            capturedAt
-          ].join(":"),
-          capturedAt,
-          symbol: item.symbol,
-          price: currentPrice,
-          direction,
-          action: Boolean(previousSignal)
-            ? previousSignal?.action || "Wait"
-            : item.action || "Wait",
-          opportunityScore:
-            Boolean(previousSignal)
-              ? previousSignal?.opportunityScore || 0
-              : item.opportunityScore || 0,
-          opportunityGrade:
-            Boolean(previousSignal)
-              ? previousSignal?.opportunityGrade ||
-                (isConfirmedAPlusTradeSignal(previousSignal)
-                  ? "A+"
-                  : previousSignal?.grade === "A+" ? "D" : previousSignal?.grade || "D")
-              : item.opportunityGrade ||
-                item.grade ||
-                "D",
-          // Preserve original eligibility evidence; never borrow it from a later live analysis.
-          tradeAllowed: previousSignal
-            ? previousSignal.tradeAllowed === true
-            : item.tradeAllowed === true,
-          tradeReadiness: {
-            ready: previousSignal
-              ? previousSignal.tradeReadiness?.ready === true
-              : item.tradeReadiness?.ready === true
-          },
-          confidence: Boolean(previousSignal)
-            ? previousSignal?.confidence || 0
-            : item.confidence || 0,
-          grade:
-            Boolean(previousSignal)
-              ? previousSignal?.grade ||
-                previousSignal?.opportunityGrade ||
-                "D"
-              : item.grade ||
-                item.opportunityGrade ||
-                "D",
-          riskReward:
-            Boolean(previousSignal)
-              ? previousSignal?.riskReward ?? null
-              : typeof item.riskReward === "number"
-                ? item.riskReward
-              : null,
-          entryZone:
-            initialPlan?.entryZone || item.entryZone || null,
-          stopLoss:
-            initialPlan?.stopLoss ?? item.stopLoss ?? null,
-          takeProfit1:
-            initialPlan?.takeProfit1 ?? item.takeProfit1 ?? null,
-          takeProfit2:
-            initialPlan?.takeProfit2 ?? item.takeProfit2 ?? null,
-          takeProfit3:
-            initialPlan?.takeProfit3 ?? item.takeProfit3 ?? null,
-          initialPlan,
-          outcome
-        };
-      });
+  const readySignals = trackedItems.map(item => {
+    const previousSignal = previousOpenSignals.find(signal =>
+      signal.setupKey === [item.symbol, item.direction || "Neutral"].join(":")) || null;
+    return previousSignal
+      ? buildTrackedTradeSignal(item, capturedAt, previousSignal,
+          openPriceRanges.get(previousSignal.tradeId) || null)
+      : createFrozenTradeCandidate(item, capturedAt);
+  });
   const readyTrades = readyItems.length;
   const bestOpportunity = ranking[0] || null;
 
@@ -6784,103 +6786,140 @@ async function createRankingHistoryEntry(
   };
 }
 
+const WRITE_OPEN_TRADES_SCRIPT = `
+local current = redis.call('GET', KEYS[1]) or ''
+if current ~= ARGV[1] then return 0 end
+if ARGV[3] ~= '' and redis.call('SISMEMBER', KEYS[3], ARGV[3]) == 1 then
+  return -1
+end
+if ARGV[4] ~= '' then
+  local kind = redis.call('TYPE', KEYS[2]).ok
+  if kind ~= 'none' and kind ~= 'list' then
+    return redis.error_reply('Ranking history must be a list')
+  end
+end
+redis.call('SET', KEYS[1], ARGV[2])
+if ARGV[4] ~= '' then
+  redis.call('LPUSH', KEYS[2], ARGV[4])
+  redis.call('LTRIM', KEYS[2], 0, tonumber(ARGV[5]) - 1)
+end
+return 1
+`;
+
+function parseOpenTrades(raw) {
+  if (raw === null) return [];
+  const trades = JSON.parse(raw);
+  if (!Array.isArray(trades)) throw new Error("Invalid open trades state");
+  const ids = new Set(), setups = new Set();
+  for (const trade of trades) {
+    if (!trade?.tradeId || !trade.setupKey || !trade.initialPlan ||
+        !["WaitingEntry", "Pending", "Active"].includes(trade.outcome?.status) ||
+        ids.has(trade.tradeId) || setups.has(trade.setupKey)) {
+      throw new Error("Invalid or duplicate open trade");
+    }
+    ids.add(trade.tradeId); setups.add(trade.setupKey);
+  }
+  return trades;
+}
+
+function writeOpenTradesCAS(raw, trades, execute, { registrationId = "", history = null } = {}) {
+  return execute(["EVAL", WRITE_OPEN_TRADES_SCRIPT, "3",
+    OPEN_TRADES_KEY, GLOBAL_RANKING_HISTORY_KEY, COMPLETED_TRADE_IDS_KEY,
+    raw ?? "", JSON.stringify(trades), registrationId,
+    history ? JSON.stringify(history) : "", String(GLOBAL_RANKING_HISTORY_LIMIT)]);
+}
+
+// Internal API only: single-market GET does not call this. Reuse capturedAt on retry.
+async function registerOpenTrade(item, capturedAt, execute = runRedisCommand) {
+  if (!getRedisConfig()) throw new Error("Redis unavailable for trade registration");
+  const candidate = createFrozenTradeCandidate(item, capturedAt);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const raw = await execute(["GET", OPEN_TRADES_KEY]);
+    const trades = parseOpenTrades(raw);
+    const existing = trades.find(trade => trade.setupKey === candidate.setupKey);
+    if (existing) return existing;
+    // A delayed retry must not resurrect an already expired registration.
+    if (Date.parse(candidate.initialPlan.expiresAt) <= Date.now()) {
+      throw new Error("Registration window expired");
+    }
+    const committed = Number(await writeOpenTradesCAS(raw, [...trades, candidate], execute,
+      { registrationId: candidate.tradeId }));
+    if (committed === 1) return candidate;
+    if (committed === -1) throw new Error("Registration already completed");
+  }
+  throw new Error("Open trades changed repeatedly; retry registration");
+}
+
 async function writeRankingHistory(snapshot, execute = runRedisCommand) {
   if (!getRedisConfig()) {
     return false;
   }
 
   try {
-    const previousRaw = await execute([
-      "LINDEX",
-      GLOBAL_RANKING_HISTORY_KEY,
-      "0"
-    ]);
-    let previousEntry = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const previousRaw = await execute([
+        "LINDEX",
+        GLOBAL_RANKING_HISTORY_KEY,
+        "0"
+      ]);
+      let previousEntry = null;
 
-    if (typeof previousRaw === "string") {
-      try {
-        previousEntry = JSON.parse(previousRaw);
-      } catch {
-        previousEntry = null;
-      }
-    }
-
-    const openTradesRaw = await execute([
-      "GET",
-      OPEN_TRADES_KEY
-    ]);
-    let persistedOpenTrades = [];
-
-    if (typeof openTradesRaw === "string") {
-      try {
-        const parsedOpenTrades = JSON.parse(openTradesRaw);
-        persistedOpenTrades = Array.isArray(parsedOpenTrades)
-          ? parsedOpenTrades
-          : [];
-      } catch {
-        persistedOpenTrades = [];
-      }
-    }
-
-    if (persistedOpenTrades.length) {
-      const previousSignals = Array.isArray(previousEntry?.readySignals)
-        ? previousEntry.readySignals
-        : [];
-      const mergedSignals = new Map(
-        previousSignals
-          .filter(signal => signal?.tradeId)
-          .map(signal => [signal.tradeId, signal])
-      );
-
-      persistedOpenTrades.forEach(signal => {
-        if (signal?.tradeId) {
-          mergedSignals.set(signal.tradeId, signal);
+      if (typeof previousRaw === "string") {
+        try {
+          previousEntry = JSON.parse(previousRaw);
+        } catch {
+          previousEntry = null;
         }
-      });
+      }
 
-      previousEntry = {
-        ...(previousEntry || {}),
-        readySignals: [...mergedSignals.values()]
-      };
+      const openTradesRaw = await execute([
+        "GET",
+        OPEN_TRADES_KEY
+      ]);
+      const persistedOpenTrades = parseOpenTrades(openTradesRaw);
+
+      if (persistedOpenTrades.length) {
+        const previousSignals = Array.isArray(previousEntry?.readySignals)
+          ? previousEntry.readySignals
+          : [];
+        const mergedSignals = new Map(
+          previousSignals
+            .filter(signal => signal?.tradeId)
+            .map(signal => [signal.tradeId, signal])
+        );
+
+        persistedOpenTrades.forEach(signal => {
+          if (signal?.tradeId) {
+            mergedSignals.set(signal.tradeId, signal);
+          }
+        });
+
+        previousEntry = {
+          ...(previousEntry || {}),
+          readySignals: [...mergedSignals.values()]
+        };
+      }
+
+      const historyEntry =
+        await createRankingHistoryEntry(
+          snapshot,
+          previousEntry
+        );
+
+      await recordCompletedTradeSignals(historyEntry.readySignals || [], execute);
+
+      const openTrades = (historyEntry.readySignals || [])
+        .filter(signal =>
+          signal?.outcome?.status === "WaitingEntry" ||
+          signal?.outcome?.status === "Pending" ||
+          signal?.outcome?.status === "Active"
+        );
+
+      if (Number(await writeOpenTradesCAS(openTradesRaw, openTrades, execute,
+        { history: historyEntry })) === 1) return true;
+    // A registration won the race. Re-read and evaluate its frozen plan too.
     }
-
-    const historyEntry =
-      await createRankingHistoryEntry(
-        snapshot,
-        previousEntry
-      );
-
-    await recordCompletedTradeSignals(historyEntry.readySignals || [], execute);
-
-    await execute([
-      "LPUSH",
-      GLOBAL_RANKING_HISTORY_KEY,
-      JSON.stringify(historyEntry)
-    ]);
-
-    await execute([
-      "LTRIM",
-      GLOBAL_RANKING_HISTORY_KEY,
-      "0",
-      String(
-        GLOBAL_RANKING_HISTORY_LIMIT - 1
-      )
-    ]);
-
-    const openTrades = (historyEntry.readySignals || [])
-      .filter(signal =>
-        signal?.outcome?.status === "WaitingEntry" ||
-        signal?.outcome?.status === "Pending" ||
-        signal?.outcome?.status === "Active"
-      );
-
-    await execute([
-      "SET",
-      OPEN_TRADES_KEY,
-      JSON.stringify(openTrades)
-    ]);
-
-    return true;
+    throw new Error("Open trades changed repeatedly; retry ranking update");
   } catch (error) {
     console.error(
       "Ranking history write failed:",

@@ -79,6 +79,157 @@ test("trade ledger and backups against isolated Redis (no TCP or production)", a
       assert.equal(await redis(["EVAL", releaseScript, "1", lock, "owner-b"]), 1);
     });
 
+    const registrationTime = new Date(Math.floor(Date.now() / 60000) * 60000 + 1000).toISOString();
+    const candidate = (direction = "Long") => ({ symbol: "REGISTERUSDT", price: 100,
+      direction, grade: "A+", opportunityGrade: "A+", opportunityScore: 90,
+      confidence: 90, riskReward: 2, tradeAllowed: true, tradeReadiness: { ready: true },
+      action: direction === "Long" ? "Strong Buy" : "Strong Sell",
+      entryZone: { from: 99, to: 101 }, stopLoss: direction === "Long" ? 90 : 110,
+      takeProfit1: direction === "Long" ? 110 : 90,
+      takeProfit2: direction === "Long" ? 120 : 80,
+      takeProfit3: direction === "Long" ? 130 : 70 });
+    const open = async () => JSON.parse(await redis(["GET", keys.openTrades]) || "[]");
+    const register = (item = candidate(), time = registrationTime, execute = redis) =>
+      context.registerOpenTrade(item, time, execute);
+
+    await t.test("canonical registration creates only WaitingEntry even with current price inside zone", async () => {
+      await reset();
+      const item = candidate(), saved = await register(item);
+      assert.equal((await open()).length, 1);
+      assert.equal(saved.outcome.status, "WaitingEntry");
+      assert.equal(saved.outcome.entryPrice, null);
+      assert.equal(saved.outcome.activatedAt, null);
+      assert.equal(saved.initialPlan.createdAt, registrationTime);
+      assert.equal(Date.parse(saved.initialPlan.plannedAt) % 60000, 0);
+      assert.ok(Date.parse(saved.initialPlan.plannedAt) > Date.parse(registrationTime));
+      assert.equal(Date.parse(saved.initialPlan.expiresAt) - Date.parse(saved.initialPlan.plannedAt), 3600000);
+      item.entryZone.from = 1;
+      assert.equal(saved.initialPlan.entryZone.from, 99);
+      assert.equal(await redis(["GET", keys.completedTradeStats]), null);
+    });
+    await t.test("frozen candidate stores canonical grade instead of an unrelated analytical grade", async () => {
+      await reset();
+      const saved = await register({ ...candidate(), grade: "A", opportunityGrade: undefined });
+      assert.equal(saved.opportunityGrade, "A+"); assert.equal(saved.grade, "A+");
+      assert.equal(context.isConfirmedAPlusTradeSignal(saved), true);
+    });
+    await t.test("repeat registration preserves tradeId and every frozen level", async () => {
+      await reset();
+      const first = await register();
+      const second = await register({ ...candidate(), stopLoss: 80, takeProfit3: 150 },
+        new Date(Date.parse(registrationTime) + 1000).toISOString());
+      assert.equal(second.tradeId, first.tradeId);
+      assert.equal(JSON.stringify(second.initialPlan), JSON.stringify(first.initialPlan));
+      assert.equal((await open()).length, 1);
+    });
+    await t.test("live/live concurrent registration chooses a single frozen winner", async () => {
+      await reset();
+      const results = await Promise.all(Array.from({ length: 8 }, (_, i) => register(
+        { ...candidate(), stopLoss: 90 - i }, new Date(Date.parse(registrationTime) + i).toISOString())));
+      assert.equal(new Set(results.map(row => row.tradeId)).size, 1);
+      assert.equal(new Set(results.map(row => JSON.stringify(row.initialPlan))).size, 1);
+      assert.equal((await open()).length, 1);
+    });
+    await t.test("registration timeout after Redis commit is idempotent on retry", async () => {
+      await reset();
+      let lost = false;
+      await assert.rejects(register(candidate(), registrationTime, async command => {
+        const result = await redis(command);
+        if (!lost && command[0] === "EVAL") { lost = true; throw new Error("response timeout"); }
+        return result;
+      }), /response timeout/);
+      const stored = (await open())[0], retry = await register();
+      assert.equal(retry.tradeId, stored.tradeId);
+      assert.equal((await open()).length, 1);
+    });
+    await t.test("existing Active is returned without rewriting plan or management state", async () => {
+      await reset();
+      const saved = await register();
+      saved.outcome.status = "Active"; saved.outcome.entryPrice = 100;
+      saved.outcome.currentStopLoss = 100; saved.outcome.realizedR = .25;
+      await redis(["SET", keys.openTrades, JSON.stringify([saved])]);
+      const before = await redis(["GET", keys.openTrades]);
+      const found = await register({ ...candidate(), stopLoss: 80 });
+      assert.equal(found.tradeId, saved.tradeId);
+      assert.equal(await redis(["GET", keys.openTrades]), before);
+    });
+    await t.test("completed identity cannot resurrect, but later setup of same symbol can register", async () => {
+      await reset();
+      const old = await register();
+      await record([{ ...old, outcome: { status: "Stopped", resultR: -1, checkedAt: registrationTime } }]);
+      await redis(["SET", keys.openTrades, "[]"]);
+      await assert.rejects(register(), /already completed/);
+      const next = await register(candidate(), new Date(Date.parse(registrationTime) + 60000).toISOString());
+      assert.notEqual(next.tradeId, old.tradeId);
+      assert.equal((await stats()).completed, 1);
+      assert.equal((await open()).length, 1);
+    });
+    for (const sameSetup of [false, true]) await t.test(`Ranking CAS retains concurrent live registration (same setup=${sameSetup})`, async () => {
+      await reset();
+      const lock = "sergey-ai:ranking-refresh-lock:v1";
+      await redis(["SET", lock, "ranking-owner", "NX", "EX", "900"]);
+      let inserted = null, casAttempts = 0;
+      const commandForRanking = async command => {
+        if (command[0] === "EVAL" && command[1] === vm.runInContext("WRITE_OPEN_TRADES_SCRIPT", context)) {
+          casAttempts++;
+          if (!inserted) inserted = await register({ ...candidate(), stopLoss: 80 });
+        }
+        return context.rankingOwnerCommand("ranking-owner", command);
+      };
+      const originalFetch = context.fetchOKXRecentPriceRange;
+      context.fetchOKXRecentPriceRange = async () => null;
+      try {
+        assert.equal(await context.writeRankingHistory({ generatedAt: registrationTime,
+          globalRanking: sameSetup ? [candidate()] : [] }, commandForRanking), true);
+        assert.equal(casAttempts, 2);
+        const rows = await open();
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].tradeId, inserted.tradeId);
+        assert.equal(JSON.stringify(rows[0].initialPlan), JSON.stringify(inserted.initialPlan));
+        assert.equal(rows[0].outcome.status, "WaitingEntry");
+        assert.equal(await redis(["LLEN", keys.history]), 1);
+        const history = JSON.parse(await redis(["LINDEX", keys.history, "0"]));
+        assert.equal(history.readySignals[0].tradeId, inserted.tradeId);
+      } finally { context.fetchOKXRecentPriceRange = originalFetch; }
+    });
+    await t.test("live CAS retries when Ranking registers the setup first", async () => {
+      await reset(); let interrupted = false;
+      const result = await register(candidate(), registrationTime, async command => {
+        if (!interrupted && command[0] === "EVAL") {
+          interrupted = true;
+          assert.equal(await context.writeRankingHistory({ generatedAt: registrationTime,
+            globalRanking: [{ ...candidate(), stopLoss: 85 }] }), true);
+        }
+        return redis(command);
+      });
+      assert.equal(result.initialPlan.stopLoss, 85);
+      assert.equal((await open()).length, 1);
+    });
+    for (const direction of ["Long", "Short"]) await t.test(`${direction} registration activates only on eligible closed 1m entry touch`, async () => {
+      await reset(); const saved = await register(candidate(direction));
+      const start = Date.parse(saved.initialPlan.plannedAt);
+      const bar = timestamp => ({ timestamp, open: 100, high: 102, low: 98, close: 100, confirmed: true });
+      const evaluate = (data, now) => context.evaluateTradeLifecycle({ initialPlan: saved.initialPlan,
+        direction, previousOutcome: saved.outcome, capturedAt: new Date(now).toISOString(),
+        priceRange: { source: "OKX 1m candles", data } });
+      assert.equal(evaluate([bar(start - 60000)], start + 60000).status, "WaitingEntry");
+      assert.equal(evaluate([{ ...bar(start), confirmed: false }], start + 60000).status, "WaitingEntry");
+      assert.equal(evaluate([bar(start)], start + 30000).status, "WaitingEntry");
+      const active = evaluate([bar(start)], start + 60000);
+      assert.equal(active.status, "Active"); assert.equal(active.entryPrice, 100);
+      assert.equal(active.activatedAt, new Date(start).toISOString());
+    });
+    await t.test("registration fails closed on invalid canonical candidate and corrupted open state", async () => {
+      await reset();
+      await assert.rejects(register({ ...candidate(), action: "Buy" }), /Canonical A\+/);
+      assert.equal(await redis(["GET", keys.openTrades]), null);
+      await redis(["SET", keys.openTrades, "broken-json"]);
+      await assert.rejects(register());
+      assert.equal(await redis(["GET", keys.openTrades]), "broken-json");
+      assert.equal((source.match(/registerOpenTrade\(/g) || []).length, 1,
+        "registration helper is not wired into any GET or internal Scanner request");
+    });
+
     await t.test("deduplicates retries and keeps totals beyond the 20 detail rows", async () => {
       await reset();
       const signals = Array.from({ length: 35 }, (_, i) => signal(`trade-${i}`));
