@@ -3855,7 +3855,10 @@ async function fetchScannerSymbol(
     const url =
       `${baseUrl}/api/market?symbol=${encodeURIComponent(symbol)}&instrumentType=SWAP`;
 
-    const response = await fetch(url, { signal: AbortSignal.timeout(45000) });
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(45000),
+      headers: { "x-sm1m-analysis-source": "scanner" }
+    });
 
     const payload = await response
       .json()
@@ -6829,7 +6832,7 @@ function writeOpenTradesCAS(raw, trades, execute, { registrationId = "", history
     history ? JSON.stringify(history) : "", String(GLOBAL_RANKING_HISTORY_LIMIT)]);
 }
 
-// Internal API only: single-market GET does not call this. Reuse capturedAt on retry.
+// Reuse the original server analysis timestamp as capturedAt on registration retry.
 async function registerOpenTrade(item, capturedAt, execute = runRedisCommand) {
   if (!getRedisConfig()) throw new Error("Redis unavailable for trade registration");
   const candidate = createFrozenTradeCandidate(item, capturedAt);
@@ -6848,6 +6851,15 @@ async function registerOpenTrade(item, capturedAt, execute = runRedisCommand) {
     if (committed === -1) throw new Error("Registration already completed");
   }
   throw new Error("Open trades changed repeatedly; retry registration");
+}
+
+// The marker only suppresses a write; it never grants canonical eligibility.
+// Existing tracked plans and candle lifecycle are SWAP-only.
+async function registerLiveAnalysisTrade(req, instrumentType, analysis, opportunity, capturedAt) {
+  if (req.headers?.["x-sm1m-analysis-source"] === "scanner" ||
+      instrumentType !== "SWAP" || opportunity.confirmedAPlus !== true) return null;
+  return registerOpenTrade({ ...analysis, opportunityScore: opportunity.score,
+    opportunityGrade: opportunity.grade }, capturedAt);
 }
 
 async function writeRankingHistory(snapshot, execute = runRedisCommand) {
@@ -9614,11 +9626,25 @@ const marketSummary =
     }, symbol);
     const liveOpportunity = calculateScannerOpportunity(executionAnalysis);
     const confirmedAPlus = liveOpportunity.confirmedAPlus;
+    const analysisTime = new Date().toISOString();
+    let registeredLiveTrade = null;
+    try {
+      registeredLiveTrade = await registerLiveAnalysisTrade(
+        req, instrumentType, executionAnalysis, liveOpportunity, analysisTime);
+    } catch (error) {
+      console.error("Live trade registration failed", { errorType: error?.name || "Error" });
+      return res.status(503).json({ ok: false, symbol,
+        error: "Live trade registration unavailable", time: analysisTime });
+    }
 
     res.status(200).json({
       ok: true,
       source: "CoinGecko + OKX + CoinGlass V4",
       capabilities: { orderFlow: true },
+      tradeRegistration: registeredLiveTrade ? {
+        tradeId: registeredLiveTrade.tradeId,
+        status: registeredLiveTrade.outcome.status
+      } : null,
       
      dataErrors: {
         coinGlass: coinGlass.errors,
@@ -9700,7 +9726,7 @@ technical: {
       volume24h: coin.total_volume,
       marketCap: coin.market_cap,
       circulatingSupply: coin.circulating_supply,
-      time: new Date().toISOString()
+      time: analysisTime
     });
   } catch (error) {
     res.status(500).json({

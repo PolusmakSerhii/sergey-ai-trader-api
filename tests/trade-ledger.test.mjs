@@ -89,8 +89,15 @@ test("trade ledger and backups against isolated Redis (no TCP or production)", a
       takeProfit2: direction === "Long" ? 120 : 80,
       takeProfit3: direction === "Long" ? 130 : 70 });
     const open = async () => JSON.parse(await redis(["GET", keys.openTrades]) || "[]");
-    const register = (item = candidate(), time = registrationTime, execute = redis) =>
-      context.registerOpenTrade(item, time, execute);
+    const register = async (item = candidate(), time = registrationTime, execute = redis) => {
+      // Inject transport only; exercise the live hook and real registration/CAS.
+      const original = context.runRedisCommand;
+      context.runRedisCommand = execute;
+      try {
+        return await context.registerLiveAnalysisTrade({ headers: {} }, "SWAP", item,
+          { score: item.opportunityScore, grade: "A+", confirmedAPlus: true }, time);
+      } finally { context.runRedisCommand = original; }
+    };
 
     await t.test("canonical registration creates only WaitingEntry even with current price inside zone", async () => {
       await reset();
@@ -226,8 +233,8 @@ test("trade ledger and backups against isolated Redis (no TCP or production)", a
       await redis(["SET", keys.openTrades, "broken-json"]);
       await assert.rejects(register());
       assert.equal(await redis(["GET", keys.openTrades]), "broken-json");
-      assert.equal((source.match(/registerOpenTrade\(/g) || []).length, 1,
-        "registration helper is not wired into any GET or internal Scanner request");
+      assert.equal((source.match(/registerLiveAnalysisTrade\(/g) || []).length, 2,
+        "live hook is wired only once, in the single-market handler");
     });
 
     await t.test("deduplicates retries and keeps totals beyond the 20 detail rows", async () => {
