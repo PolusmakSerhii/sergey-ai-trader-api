@@ -7509,6 +7509,65 @@ function createOutcomeSummary(history) {
   };
 }
 
+// Read-only Entry Setups projection. Never participates in execution decisions.
+function verifyEntrySetupOrigin(signal) {
+  const plan = signal?.initialPlan;
+  return Boolean(signal && typeof signal.tradeId === "string" && signal.tradeId &&
+    /^[A-Z0-9]+USDT$/.test(signal.symbol || "") &&
+    ["WaitingEntry", "Pending", "Active"].includes(signal.outcome?.status) &&
+    plan && Number.isFinite(Date.parse(plan.createdAt)) &&
+    Number.isFinite(Date.parse(plan.plannedAt)) && Number.isFinite(Date.parse(plan.expiresAt)) &&
+    Date.parse(plan.createdAt) <= Date.parse(plan.plannedAt) &&
+    Date.parse(plan.plannedAt) < Date.parse(plan.expiresAt) &&
+    typeof plan.entryPrice === "number" && Number.isFinite(plan.entryPrice) &&
+    plan.entryPrice >= plan.entryZone?.from && plan.entryPrice <= plan.entryZone?.to &&
+    isConfirmedAPlusTradeSignal(signal));
+}
+
+function calculateEntryLocationDiagnostics(direction, midpoint, stop, target, price) {
+  const valid = [midpoint, stop, target, price].every(v => typeof v === "number" && Number.isFinite(v) && v > 0);
+  const geometry = valid && (direction === "Long"
+    ? stop < midpoint && midpoint < target && stop < price && price < target
+    : direction === "Short" && target < midpoint && midpoint < stop && target < price && price < stop);
+  if (!geometry) return { pullbackR: null, currentRR: null };
+  const riskDistance = Math.abs(midpoint - stop);
+  return { pullbackR: (direction === "Long" ? midpoint - price : price - midpoint) / riskDistance,
+    currentRR: direction === "Long" ? (target - price) / (price - stop) : (price - target) / (stop - price) };
+}
+
+function projectEntrySetup(signal, ranking, updatedAt) {
+  if (!verifyEntrySetupOrigin(signal)) return null;
+  const plan = signal.initialPlan;
+  const row = ranking?.globalRanking?.find(item => item.symbol === signal.symbol);
+  const number = value => typeof value === "number" && Number.isFinite(value) ? value : null;
+  const asOf = row && Number.isFinite(Date.parse(ranking.generatedAt)) ? ranking.generatedAt : null;
+  const current = { price: asOf && number(row.price) > 0 ? row.price : null,
+    currentScore: asOf ? number(row.opportunityScore) : null,
+    currentGrade: asOf && ["A+", "A", "B", "C", "D"].includes(row.grade) ? row.grade : null,
+    currentConfidence: asOf ? number(row.confidence) : null, asOf };
+  return { tradeId: signal.tradeId, symbol: signal.symbol, direction: signal.direction,
+    policyVersion: "entry-setups-v1",
+    origin: { confirmedAPlus: true, detectedAt: plan.createdAt, originalScore: Number(signal.opportunityScore),
+      originalGrade: "A+", originalConfidence: Number(signal.confidence) },
+    originalPlan: { entryFrom: plan.entryZone.from, entryTo: plan.entryZone.to,
+      plannedEntry: plan.entryPrice, initialSL: plan.stopLoss, TP1: plan.takeProfit1,
+      TP2: plan.takeProfit2, TP3: plan.takeProfit3, originalRR: Number(signal.riskReward) },
+    current, entryAnalysis: { status: null, ...calculateEntryLocationDiagnostics(signal.direction,
+      plan.entryPrice, plan.stopLoss, plan.takeProfit2, current.price), structureValid: null, updatedAt },
+    lifecycleStatus: signal.outcome.status };
+}
+
+async function readEntrySetupSources(execute = runRedisCommand) {
+  if (!getRedisConfig()) throw new Error("Entry setup storage unavailable");
+  const [openRaw, rankingRaw] = await Promise.all([
+    execute(["GET", OPEN_TRADES_KEY]), execute(["GET", GLOBAL_RANKING_CACHE_KEY])
+  ]);
+  const trades = parseOpenTrades(openRaw);
+  const ranking = rankingRaw === null ? null : JSON.parse(rankingRaw);
+  if (ranking !== null && !Array.isArray(ranking?.globalRanking)) throw new Error("Invalid saved ranking");
+  return { trades, ranking };
+}
+
 async function verifyQStashRequest(req) {
   const currentSigningKey =
     process.env.QSTASH_CURRENT_SIGNING_KEY;
@@ -7586,6 +7645,19 @@ export default async function handler(req, res) {
       ok: false,
       error: "Method not allowed"
     });
+  }
+
+  if (mode === "entry-setups") {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const { trades, ranking } = await readEntrySetupSources();
+      const generatedAt = new Date().toISOString();
+      const setups = trades.map(signal => projectEntrySetup(signal, ranking, generatedAt)).filter(Boolean);
+      return res.status(200).json({ ok: true, policyVersion: "entry-setups-v1", generatedAt,
+        excludedUnverified: trades.length - setups.length, setups });
+    } catch {
+      return res.status(503).json({ ok: false, error: "Entry setup data unavailable" });
+    }
   }
 
   if (mode === "order-flow") {
