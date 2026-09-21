@@ -6928,7 +6928,11 @@ async function writeRankingHistory(snapshot, execute = runRedisCommand) {
         );
 
       if (Number(await writeOpenTradesCAS(openTradesRaw, openTrades, execute,
-        { history: historyEntry })) === 1) return true;
+        { history: historyEntry })) === 1) {
+        // Research persistence is isolated from the successfully committed trading state.
+        await collectEntryObservations(snapshot, historyEntry.readySignals || [], execute);
+        return true;
+      }
     // A registration won the race. Re-read and evaluate its frozen plan too.
     }
     throw new Error("Open trades changed repeatedly; retry ranking update");
@@ -7608,6 +7612,200 @@ function projectEntrySetup(signal, ranking, updatedAt) {
       TP2: plan.takeProfit2, TP3: plan.takeProfit3, originalRR: Number(signal.riskReward) },
     current, entryAnalysis: analyzeEntrySnapshot(signal, row, ranking?.generatedAt, updatedAt),
     lifecycleStatus: signal.outcome.status };
+}
+
+
+// Research-only store. Never read by execution, statistics, or the Entry Setups GET.
+const ENTRY_OBSERVATIONS_KEY = "sergey-ai:entry-observations:v1";
+const ENTRY_OBSERVATION_RULES = "snapshot-entry-2.1";
+const ENTRY_OBSERVATION_LIMITS = Object.freeze({ events: 16, trades: 2000,
+  detailMs: 30 * 86400000, summaryMs: 90 * 86400000, bytes: 4 * 1024 * 1024 });
+
+function buildEntryObservationBatch(snapshot, signals, observedAt) {
+  const rankingTime = Date.parse(snapshot?.generatedAt);
+  const now = Date.parse(observedAt);
+  if (!Number.isFinite(rankingTime) || !Number.isFinite(now) || rankingTime > now ||
+      now - rankingTime > ENTRY_OBSERVATION_LIMITS.summaryMs) return [];
+  const rankingGeneratedAt = new Date(rankingTime).toISOString();
+  const rows = new Map((snapshot.globalRanking || []).map(row => [row.symbol, row]));
+  const entries = new Map();
+  const number = value => typeof value === "number" && Number.isFinite(value) ? value : null;
+  for (const signal of signals) {
+    const status = signal?.outcome?.status;
+    if (!["WaitingEntry", "Pending", "Active", "Expired", "Invalidated", "Stopped", "TP1Hit", "TP3Hit"].includes(status)) continue;
+    // Preserve Phase 1 canonical origin verification, including frozen timestamps/geometry.
+    if (!verifyEntrySetupOrigin({ ...signal, outcome: { ...signal.outcome, status: "WaitingEntry" } })) continue;
+    const plan = signal.initialPlan;
+    if (rankingTime < Date.parse(plan.createdAt)) continue;
+    const preEntry = status === "WaitingEntry" || status === "Pending";
+    const row = rows.get(signal.symbol);
+    const analysis = preEntry ? analyzeEntrySnapshot(signal, row, snapshot.generatedAt, observedAt) : null;
+    const endedAt = preEntry ? null : [signal.outcome.activatedAt, signal.outcome.checkedAt,
+      status === "Expired" ? plan.expiresAt : null, rankingGeneratedAt]
+      .find(value => typeof value === "string" && Number.isFinite(Date.parse(value)) && Date.parse(value) <= rankingTime);
+    if (!preEntry && Number.isFinite(Date.parse(endedAt)) && now - Date.parse(endedAt) > ENTRY_OBSERVATION_LIMITS.summaryMs) continue;
+    const entry = {
+      tradeId: signal.tradeId, schemaVersion: "entry-observation-v1", rulesRevision: ENTRY_OBSERVATION_RULES,
+      originDetectedAt: plan.createdAt, direction: signal.direction,
+      frozenReference: { midpoint: plan.entryPrice, initialSL: plan.stopLoss,
+        entryFrom: plan.entryZone.from, entryTo: plan.entryZone.to, TP2: plan.takeProfit2 },
+      rankingGeneratedAt, observation: preEntry ? {
+        rankingGeneratedAt, snapshotAgeMs: now - rankingTime, lifecycleStatus: status,
+        price: number(row?.price), currentGrade: ["A+", "A", "B", "C", "D"].includes(row?.grade) ? row.grade : null,
+        currentScore: number(row?.opportunityScore), currentConfidence: number(row?.confidence),
+        currentDirection: ["Long", "Short", "Neutral"].includes(row?.direction) ? row.direction : null,
+        currentAction: ["Buy", "Strong Buy", "Sell", "Strong Sell", "Wait", "Avoid"].includes(row?.action) ? row.action : null,
+        tradeAllowed: typeof row?.tradeAllowed === "boolean" ? row.tradeAllowed : null,
+        tradeReadinessReady: typeof row?.tradeReadiness?.ready === "boolean" ? row.tradeReadiness.ready : null,
+        entryStatus: analysis.status, reasonCode: analysis.reasonCode
+      } : null,
+      collectionEnd: preEntry ? null : { lifecycleStatus: status, at: endedAt,
+        rankingGeneratedAt, reasonCode: status === "Active" ? "ENTRY_ALREADY_ACTIVE" : "LIFECYCLE_WINDOW_ENDED" },
+      outcomeReference: !preEntry && status !== "Active" ? { lifecycleStatus: status,
+        checkedAt: signal.outcome.checkedAt || null, resultR: number(signal.outcome.resultR) } : null
+    };
+    entries.set(signal.tradeId, entry);
+  }
+  return [...entries.values()].sort((a, b) => a.tradeId < b.tradeId ? -1 : a.tradeId > b.tradeId ? 1 : 0);
+}
+
+const WRITE_ENTRY_OBSERVATIONS_SCRIPT = `
+local raw = redis.call('GET', KEYS[1])
+local batch = cjson.decode(ARGV[1])
+local limits = cjson.decode(ARGV[2])
+local now = tonumber(ARGV[3])
+local null = cjson.null
+local doc = raw and cjson.decode(raw) or {schemaVersion='entry-observation-v1', records={}, metadata={}}
+if doc.schemaVersion ~= 'entry-observation-v1' or type(doc.records) ~= 'table' or type(doc.metadata) ~= 'table' then
+  return redis.error_reply('Invalid observation schema')
+end
+-- ISO inputs are normalized by the builder. Retention uses epoch milliseconds supplied with boundaries.
+local changed = false
+local count = 0
+for id, rec in pairs(doc.records) do
+  if type(rec) ~= 'table' or rec.tradeId ~= id or rec.schemaVersion ~= doc.schemaVersion or
+     type(rec.rulesRevision) ~= 'string' or type(rec.observations) ~= 'table' or
+     type(rec.summary) ~= 'table' or type(rec.lastRankingGeneratedAt) ~= 'string' then
+    return redis.error_reply('Invalid observation record')
+  end
+  count = count + 1
+end
+local function mark(reason)
+  if doc.metadata[reason] ~= true then doc.metadata[reason] = true; doc.metadata.gap = true; changed = true end
+end
+for id, rec in pairs(doc.records) do
+  if type(rec.collectionEnd) == 'table' and type(rec.collectionEnd.epochMs) == 'number' then
+    local age = now - rec.collectionEnd.epochMs
+    if age > limits.summaryMs then
+      doc.records[id] = nil; count = count - 1; mark('SUMMARY_RETENTION'); changed = true
+    elseif age > limits.detailMs and #rec.observations > 0 then
+      rec.observations = {}; rec.summary.truncated = true; rec.summary.gap = true
+      rec.summary.limitReason = 'DETAIL_RETENTION'; changed = true
+    end
+  end
+end
+-- Every retry has the same trade/time/rules identity. Older batches are ignored, never reopen a window.
+table.sort(batch, function(a,b)
+  if a.rankingGeneratedAt == b.rankingGeneratedAt then return a.tradeId < b.tradeId end
+  return a.rankingGeneratedAt < b.rankingGeneratedAt
+end)
+for _, item in ipairs(batch) do
+  local rec = doc.records[item.tradeId]
+  if rec and rec.rulesRevision ~= item.rulesRevision then
+    mark('RULES_REVISION_MISMATCH')
+  elseif rec and item.rankingGeneratedAt < rec.lastRankingGeneratedAt then
+    if not rec.summary.gap then rec.summary.gap = true; changed = true end
+    mark('OUT_OF_ORDER_BATCH')
+  elseif not rec or item.rankingGeneratedAt > rec.lastRankingGeneratedAt then
+    if not rec and count >= limits.trades then
+      mark('MAX_TRADE_RECORDS')
+    else
+      if not rec then
+        rec = {tradeId=item.tradeId, schemaVersion=doc.schemaVersion, rulesRevision=item.rulesRevision,
+          originDetectedAt=item.originDetectedAt, direction=item.direction, frozenReference=item.frozenReference,
+          observations={}, collectionEnd=null, outcomeReference=null,
+          summary={firstObservedAt=null,lastObservedAt=null,firstPullbackAt=null,maxObservedPullbackR=null,
+            firstAnalyticalInvalidationAt=null,lastState=null,sampleCount=0,truncated=false,gap=false}}
+        doc.records[item.tradeId] = rec; count = count + 1; changed = true
+      end
+      if rec.collectionEnd == null and item.observation ~= null then
+        local obs = item.observation
+        local sum = rec.summary
+        sum.firstObservedAt = sum.firstObservedAt == null and obs.rankingGeneratedAt or sum.firstObservedAt
+        sum.lastObservedAt = obs.rankingGeneratedAt; sum.lastState = obs.entryStatus
+        sum.sampleCount = sum.sampleCount + 1
+        if obs.entryStatus == 'UNKNOWN' then sum.gap = true end
+        if obs.entryStatus == 'PULLBACK' and sum.firstPullbackAt == null then sum.firstPullbackAt = obs.rankingGeneratedAt end
+        if obs.entryStatus == 'ANALYTICALLY INVALIDATED' and sum.firstAnalyticalInvalidationAt == null then
+          sum.firstAnalyticalInvalidationAt = obs.rankingGeneratedAt
+        end
+        if obs.entryStatus ~= 'UNKNOWN' and type(obs.price) == 'number' then
+          local ref = rec.frozenReference
+          local r = (rec.direction == 'Long' and (ref.midpoint-obs.price) or (obs.price-ref.midpoint)) / math.abs(ref.midpoint-ref.initialSL)
+          if sum.maxObservedPullbackR == null or r > sum.maxObservedPullbackR then sum.maxObservedPullbackR = r end
+        end
+        table.insert(rec.observations, obs)
+        if #rec.observations > limits.events then
+          table.remove(rec.observations, 1); sum.truncated = true; sum.gap = true; sum.limitReason = 'MAX_EVENTS'
+        end
+        rec.lastRankingGeneratedAt = item.rankingGeneratedAt; changed = true
+      elseif rec.collectionEnd == null and item.collectionEnd ~= null then
+        rec.collectionEnd = item.collectionEnd
+        if rec.summary.sampleCount == 0 then rec.collectionEnd.reasonCode = 'NO_PRE_ENTRY_OBSERVATIONS' end
+        rec.summary.lastState = item.collectionEnd.lifecycleStatus == 'Active' and 'ENTRY COMPLETED' or 'UNKNOWN'
+        rec.outcomeReference = item.outcomeReference
+        rec.lastRankingGeneratedAt = item.rankingGeneratedAt; changed = true
+      elseif rec.collectionEnd ~= null and rec.outcomeReference == null and item.outcomeReference ~= null then
+        rec.outcomeReference = item.outcomeReference
+        rec.lastRankingGeneratedAt = item.rankingGeneratedAt; changed = true
+      end
+    end
+  end
+end
+-- Redis cjson encodes empty Lua tables as {}. Preserve observations[] even at first-seen Active / after retention.
+local function encodeDocument(value)
+  local records = {}
+  for id, rec in pairs(value.records) do
+    local obs = rec.observations; rec.observations = nil
+    local encoded = cjson.encode(rec); rec.observations = obs
+    local events = {}; for _, o in ipairs(obs) do table.insert(events, cjson.encode(o)) end
+    table.insert(records, cjson.encode(id)..':'..string.sub(encoded,1,-2)..',"observations":['..table.concat(events,',')..']}')
+  end
+  table.sort(records)
+  return '{"schemaVersion":"entry-observation-v1","metadata":'..cjson.encode(value.metadata)..',"records":{'..table.concat(records,',')..'}}'
+end
+if not changed then return 0 end
+local encoded = encodeDocument(doc)
+-- Reserve metadata headroom; on overflow keep the previous records, persist an explicit loss marker.
+local limited = false
+if #encoded > limits.bytes - 4096 then
+  doc = raw and cjson.decode(raw) or {schemaVersion='entry-observation-v1', records={}, metadata={}}
+  if doc.metadata.MAX_DOCUMENT_BYTES == true then return 2 end
+  doc.metadata.MAX_DOCUMENT_BYTES = true; doc.metadata.gap = true
+  encoded = encodeDocument(doc); limited = true
+  if #encoded > limits.bytes then return redis.error_reply('Observation size guard; previous document retained') end
+end
+redis.call('SET', KEYS[1], encoded)
+return limited and 2 or 1
+`;
+
+async function collectEntryObservations(snapshot, signals, execute = runRedisCommand) {
+  try {
+    const now = new Date().toISOString();
+    const batch = buildEntryObservationBatch(snapshot, signals, now);
+    if (!batch.length) return;
+    for (const item of batch) {
+      if (item.collectionEnd) item.collectionEnd.epochMs = Date.parse(item.collectionEnd.at);
+    }
+    const result = await execute(["EVAL", WRITE_ENTRY_OBSERVATIONS_SCRIPT, "1", ENTRY_OBSERVATIONS_KEY,
+      JSON.stringify(batch), JSON.stringify(ENTRY_OBSERVATION_LIMITS), String(Date.parse(now))]);
+    if (![0, 1].includes(Number(result)) || result === null) throw new Error('Observation storage incomplete');
+  } catch (error) {
+    // Never leak Redis URL/token/error payload; never fail the already persisted Ranking.
+    console.error('[entry-observations]', JSON.stringify({ result: 'storage_error',
+      rankingGeneratedAt: snapshot?.generatedAt || null,
+      errorType: error?.name === 'TimeoutError' ? 'timeout' : 'operation_error' }));
+  }
 }
 
 async function readEntrySetupSources(execute = runRedisCommand) {
