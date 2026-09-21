@@ -7524,15 +7524,69 @@ function verifyEntrySetupOrigin(signal) {
     isConfirmedAPlusTradeSignal(signal));
 }
 
+// Matches frontend GLOBAL_RANKING_STALE_MS (15 minutes, stale only when age > limit).
+// Separate deployments cannot import the frontend constant; keep this policy aligned.
+const ENTRY_RANKING_STALE_MS = 15 * 60 * 1000;
+
 function calculateEntryLocationDiagnostics(direction, midpoint, stop, target, price) {
   const valid = [midpoint, stop, target, price].every(v => typeof v === "number" && Number.isFinite(v) && v > 0);
   const geometry = valid && (direction === "Long"
-    ? stop < midpoint && midpoint < target && stop < price && price < target
-    : direction === "Short" && target < midpoint && midpoint < stop && target < price && price < stop);
+    ? stop < midpoint && midpoint < target
+    : direction === "Short" && target < midpoint && midpoint < stop);
   if (!geometry) return { pullbackR: null, currentRR: null };
   const riskDistance = Math.abs(midpoint - stop);
+  const risk = direction === "Long" ? price - stop : stop - price;
+  const reward = direction === "Long" ? target - price : price - target;
   return { pullbackR: (direction === "Long" ? midpoint - price : price - midpoint) / riskDistance,
-    currentRR: direction === "Long" ? (target - price) / (price - stop) : (price - target) / (stop - price) };
+    currentRR: risk > 0 && reward > 0 ? reward / risk : null };
+}
+
+function analyzeEntrySnapshot(signal, row, rankingTimestamp, updatedAt) {
+  const active = signal?.outcome?.status === "Active";
+  const result = { status: "UNKNOWN", reasonCode: null, pullbackR: null, currentRR: null,
+    directionalSupport: "UNKNOWN", structureValid: null, updatedAt };
+  const finish = reasonCode => ({ ...result, reasonCode: active ? "ENTRY_ALREADY_ACTIVE" : reasonCode,
+    ...(active ? { status: "ENTRY COMPLETED", snapshotReasonCode: reasonCode } : {}) });
+  if (!["Active", "WaitingEntry", "Pending"].includes(signal?.outcome?.status)) {
+    return finish("LIFECYCLE_NOT_OPEN");
+  }
+  const stamp = typeof rankingTimestamp === "string" ? Date.parse(rankingTimestamp) : NaN;
+  const now = Date.parse(updatedAt);
+  if (!Number.isFinite(stamp) || !Number.isFinite(now)) return finish("RANKING_TIMESTAMP_INVALID");
+  if (stamp > now) return finish("RANKING_TIMESTAMP_FUTURE");
+  if (now - stamp > ENTRY_RANKING_STALE_MS) return finish("RANKING_STALE");
+  const plan = signal.initialPlan || {};
+  const originTime = Date.parse(plan.createdAt);
+  if (!Number.isFinite(originTime)) return finish("ORIGIN_TIMESTAMP_INVALID");
+  if (stamp < originTime) return finish("RANKING_BEFORE_ORIGIN");
+  const price = row?.price;
+  if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) return finish("CURRENT_PRICE_MISSING");
+  const { entryPrice: midpoint, stopLoss: stop, takeProfit2: target } = plan;
+  const { from, to } = plan.entryZone || {};
+  const direction = signal.direction;
+  const valid = [midpoint, stop, target, from, to].every(v => typeof v === "number" && Number.isFinite(v) && v > 0);
+  const geometry = valid && from <= midpoint && midpoint <= to && (direction === "Long"
+    ? stop < from && to < target : direction === "Short" && target < from && to < stop);
+  if (!geometry) return finish("INVALID_FROZEN_GEOMETRY");
+  Object.assign(result, calculateEntryLocationDiagnostics(direction, midpoint, stop, target, price));
+  if (["Long", "Short", "Neutral"].includes(row.direction) &&
+      ["Buy", "Strong Buy", "Sell", "Strong Sell", "Wait", "Avoid"].includes(row.action) &&
+      typeof row.tradeAllowed === "boolean" && typeof row.tradeReadiness?.ready === "boolean") {
+    const alignedAction = direction === "Long" ? ["Buy", "Strong Buy"] : ["Sell", "Strong Sell"];
+    result.directionalSupport = row.direction === direction && alignedAction.includes(row.action) &&
+      row.tradeAllowed && row.tradeReadiness.ready ? "SUPPORTED" : "UNSUPPORTED";
+  }
+  if (active) return finish(null);
+  if (direction === "Long" ? price <= stop : price >= stop) {
+    result.status = "ANALYTICALLY INVALIDATED";
+    return finish("ORIGINAL_SL_BOUNDARY_VIOLATED");
+  }
+  if (direction === "Long" ? price < midpoint : price > midpoint) {
+    result.status = "PULLBACK";
+    return finish(direction === "Long" ? "PRICE_BELOW_ORIGINAL_MIDPOINT_LONG" : "PRICE_ABOVE_ORIGINAL_MIDPOINT_SHORT");
+  }
+  result.status = "NO PULLBACK OBSERVED";
+  return finish("NO_MORE_FAVORABLE_PRICE_OBSERVED");
 }
 
 function projectEntrySetup(signal, ranking, updatedAt) {
@@ -7552,8 +7606,7 @@ function projectEntrySetup(signal, ranking, updatedAt) {
     originalPlan: { entryFrom: plan.entryZone.from, entryTo: plan.entryZone.to,
       plannedEntry: plan.entryPrice, initialSL: plan.stopLoss, TP1: plan.takeProfit1,
       TP2: plan.takeProfit2, TP3: plan.takeProfit3, originalRR: Number(signal.riskReward) },
-    current, entryAnalysis: { status: null, ...calculateEntryLocationDiagnostics(signal.direction,
-      plan.entryPrice, plan.stopLoss, plan.takeProfit2, current.price), structureValid: null, updatedAt },
+    current, entryAnalysis: analyzeEntrySnapshot(signal, row, ranking?.generatedAt, updatedAt),
     lifecycleStatus: signal.outcome.status };
 }
 
