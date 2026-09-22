@@ -67,13 +67,13 @@ test('post-CAS hook: conflicting attempt has no observation write; storage failu
   const result = await c.writeRankingHistory(snapshot(), async command => {
     commands.push(command[0]);
     if (command[0] === 'LINDEX' || command[0] === 'GET') return null;
-    assert.equal(trading.cas, 2); seen.push('observation');
+    assert.equal(trading.cas, 2); seen.push(command[0] === 'LRANGE' ? 'archive' : 'observation');
     throw Object.assign(new Error('secret must not be logged'), { name: 'TimeoutError' });
   });
-  assert.equal(result, true); assert.deepEqual(seen, ['CAS1', 'CAS2', 'observation']);
+  assert.equal(result, true); assert.deepEqual(seen, ['CAS1', 'CAS2', 'observation', 'archive']);
   assert.deepEqual(trading, { lifecycle: 2, ledger: 2, cas: 2 });
-  assert.deepEqual(commands, ['LINDEX', 'GET', 'LINDEX', 'GET', 'EVAL']);
-  assert.deepEqual(s, before); assert.equal(logs.length, 1);
+  assert.deepEqual(commands, ['LINDEX', 'GET', 'LINDEX', 'GET', 'EVAL', 'LRANGE']);
+  assert.deepEqual(s, before); assert.equal(logs.length, 2);
   assert.ok(JSON.stringify(logs).includes('timeout')); assert.ok(!JSON.stringify(logs).includes('secret'));
 });
 test('batch outside retention cannot resurrect a previously removed terminal record', () => {

@@ -6840,14 +6840,21 @@ async function registerOpenTrade(item, capturedAt, execute = runRedisCommand) {
     const raw = await execute(["GET", OPEN_TRADES_KEY]);
     const trades = parseOpenTrades(raw);
     const existing = trades.find(trade => trade.setupKey === candidate.setupKey);
-    if (existing) return existing;
+    if (existing) {
+      await collectValidationArchive([existing], execute);
+      return existing;
+    }
     // A delayed retry must not resurrect an already expired registration.
     if (Date.parse(candidate.initialPlan.expiresAt) <= Date.now()) {
       throw new Error("Registration window expired");
     }
     const committed = Number(await writeOpenTradesCAS(raw, [...trades, candidate], execute,
       { registrationId: candidate.tradeId }));
-    if (committed === 1) return candidate;
+    if (committed === 1) {
+      await collectValidationArchive([{ ...candidate,
+        recommendationConfidence: item.recommendationConfidence, instrumentType: item.instrumentType }], execute);
+      return candidate;
+    }
     if (committed === -1) throw new Error("Registration already completed");
   }
   throw new Error("Open trades changed repeatedly; retry registration");
@@ -6931,6 +6938,13 @@ async function writeRankingHistory(snapshot, execute = runRedisCommand) {
         { history: historyEntry })) === 1) {
         // Research persistence is isolated from the successfully committed trading state.
         await collectEntryObservations(snapshot, historyEntry.readySignals || [], execute);
+        await collectValidationArchive((historyEntry.readySignals || []).map(signal => {
+          // Supplement only newly frozen origins from this exact successful snapshot.
+          const original = signal.initialPlan?.createdAt === snapshot.generatedAt
+            ? snapshot.globalRanking?.find(item => item.symbol === signal.symbol) : null;
+          return original ? { ...signal, recommendationConfidence: original.recommendationConfidence,
+            instrumentType: original.instrumentType } : signal;
+        }), execute, true);
         return true;
       }
     // A registration won the race. Re-read and evaluate its frozen plan too.
@@ -6943,6 +6957,162 @@ async function writeRankingHistory(snapshot, execute = runRedisCommand) {
     );
     return false;
   }
+}
+
+// Non-critical audit projection. No lifecycle or trading calculations live here.
+const VALIDATION_ARCHIVE_KEY = "sergey-ai:validation-archive:v1";
+const VALIDATION_ARCHIVE_LIMITS = { records: 5000, bytes: 16 * 1024 * 1024 };
+const WRITE_VALIDATION_ARCHIVE_SCRIPT = `
+local raw = redis.call('GET', KEYS[1])
+local now = ARGV[2]
+local doc
+if raw then
+  doc = cjson.decode(raw)
+  if doc.schemaVersion ~= 1 or type(doc.tradesById) ~= 'table' or
+     type(doc.validationStartAt) ~= 'string' then return -3 end
+else
+  doc = {schemaVersion=1, rulesRevision='canonical-trade-archive-v1',
+    validationStartAt=now, boundaryPolicy='origin-at-or-after-first-successful-archive-write',
+    tradesById={}}
+end
+local batch = cjson.decode(ARGV[1])
+local limits = cjson.decode(ARGV[3])
+local count = 0
+for _, _ in pairs(doc.tradesById) do count = count + 1 end
+local changed = not raw
+for _, item in ipairs(batch) do
+  local old = doc.tradesById[item.tradeId]
+  if not old then
+    count = count + 1
+    if count > limits.records then return -1 end
+    item.cohort = 'legacy'
+    if item.origin.detectedAt ~= cjson.null and item.origin.detectedAt >= doc.validationStartAt then
+      item.cohort = 'forward'
+    end
+    item.createdAt = now
+    item.updatedAt = now
+    doc.tradesById[item.tradeId] = item
+    changed = true
+  elseif not old.terminal and item.progressAt >= old.progressAt and
+         item.stage >= old.stage and item.exitCount >= old.exitCount then
+    -- Original eligibility and frozen plan are immutable. Never adopt a later plan.
+    if old.outcomeJSON ~= item.outcomeJSON then
+      old.outcomeJSON = item.outcomeJSON
+      old.result = item.result
+      old.terminal = item.terminal
+      old.progressAt = item.progressAt
+      old.stage = item.stage
+      old.exitCount = item.exitCount
+      old.updatedAt = now
+      changed = true
+    end
+  end
+end
+if not changed then return 0 end
+local encoded = cjson.encode(doc)
+if string.len(encoded) > limits.bytes then return -2 end
+-- No TTL, trimming or partial writes. Rejection preserves the original bytes.
+redis.call('SET', KEYS[1], encoded)
+return 1
+`;
+
+function projectValidationTrade(signal) {
+  if (!signal?.tradeId || !isConfirmedAPlusTradeSignal(signal)) return null;
+  const status = signal.outcome?.status;
+  const stage = ["WaitingEntry", "Pending"].includes(status) ? 0 : status === "Active" ? 1 :
+    ["TP1Hit", "TP3Hit", "Stopped", "Expired"].includes(status) ? 2 : -1;
+  if (stage < 0) return null;
+  const plan = signal.initialPlan;
+  const iso = value => Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+  const detectedAt = iso(plan.createdAt); // capturedAt changes on subsequent Ranking updates.
+  const outcome = JSON.parse(JSON.stringify(signal.outcome));
+  const progressTimes = [outcome.lastPriceCheckedAt, outcome.verificationBoundaryAt,
+    outcome.checkedAt, outcome.activatedAt, plan.plannedAt].map(iso).filter(Boolean).sort();
+  const classification = classifyTradeResult(signal);
+  return {
+    tradeId: signal.tradeId, schemaVersion: 1, rulesRevision: "canonical-trade-archive-v1",
+    origin: { symbol: signal.symbol, direction: signal.direction,
+      instrumentType: signal.instrumentType || null, detectedAt, confirmedAPlus: true,
+      opportunityScore: signal.opportunityScore, grade: "A+", confidence: signal.confidence,
+      recommendationConfidence: Number.isFinite(signal.recommendationConfidence)
+        ? signal.recommendationConfidence : null,
+      action: signal.action, tradeAllowed: signal.tradeAllowed,
+      tradeReadiness: { ready: signal.tradeReadiness.ready }, riskReward: signal.riskReward },
+    // Lossless JSON preserves empty arrays and OHLC/price precision through Redis cjson.
+    initialPlanJSON: JSON.stringify(plan), outcomeJSON: JSON.stringify(outcome),
+    result: { classification, resultR: classification ? outcome.resultR : null,
+      completedAt: classification ? iso(outcome.checkedAt) : null },
+    terminal: stage === 2, stage, progressAt: progressTimes.at(-1) || "",
+    exitCount: Array.isArray(outcome.exits) ? outcome.exits.length : 0
+  };
+}
+
+async function collectValidationArchive(signals, execute = runRedisCommand, reconcileRecent = false) {
+  try {
+    if (!getRedisConfig()) throw new Error("Archive Redis unavailable");
+    let sources = signals;
+    if (reconcileRecent) {
+      // Repair a missed completion while canonical full evidence remains in recent history.
+      const recent = await execute(["LRANGE", COMPLETED_TRADES_KEY, "0", String(COMPLETED_TRADES_DISPLAY_LIMIT - 1)]);
+      sources = [...signals, ...(recent || []).map(raw => JSON.parse(raw))];
+    }
+    const batch = sources.map(projectValidationTrade).filter(Boolean);
+    const result = await execute(["EVAL", WRITE_VALIDATION_ARCHIVE_SCRIPT, "1",
+      VALIDATION_ARCHIVE_KEY, JSON.stringify(batch), new Date().toISOString(),
+      JSON.stringify(VALIDATION_ARCHIVE_LIMITS)]);
+    if (result !== 0 && result !== 1) {
+      console.error("[validation-archive]", { result: "rejected", reason:
+        result === -1 ? "record_limit" : result === -2 ? "byte_limit" : "schema_or_response" });
+      return false;
+    }
+    return true;
+  } catch {
+    console.error("[validation-archive]", { result: "storage_error" });
+    return false;
+  }
+}
+
+function hydrateValidationTrade(record) {
+  const { initialPlanJSON, outcomeJSON, ...metadata } = record;
+  return { ...metadata, initialPlan: JSON.parse(initialPlanJSON), outcome: JSON.parse(outcomeJSON) };
+}
+
+function summarizeValidationArchive(records) {
+  let stats = createEmptyPersistentTradeStats();
+  const completed = records.filter(record => record.result.classification &&
+    Number.isFinite(Date.parse(record.result.completedAt)))
+    .sort((a, b) => Date.parse(a.result.completedAt) - Date.parse(b.result.completedAt) ||
+      (a.tradeId < b.tradeId ? -1 : a.tradeId > b.tradeId ? 1 : 0));
+  for (const record of completed) {
+    // Reuse the canonical reducer, including direction/TP analytics and chronological R metrics.
+    stats = addTradeToPersistentStats(stats, { tradeId: record.tradeId,
+      direction: record.origin.direction, initialPlan: record.initialPlan, outcome: record.outcome });
+  }
+  return { total: records.length,
+    active: records.filter(r => r.outcome.status === "Active").length,
+    waiting: records.filter(r => ["WaitingEntry", "Pending"].includes(r.outcome.status)).length,
+    expired: records.filter(r => r.outcome.status === "Expired").length,
+    ...stats, expectancy: stats.completed ? stats.netR / stats.completed : null,
+    profitFactor: stats.grossLossR > 0 ? stats.grossProfitR / stats.grossLossR : null };
+}
+
+async function readValidationArchive(query, execute = runRedisCommand) {
+  if (!getRedisConfig()) throw new Error("Archive Redis unavailable");
+  const raw = await execute(["GET", VALIDATION_ARCHIVE_KEY]);
+  if (!raw) return { ok: true, initialized: false, validationStartAt: null, records: [] };
+  const doc = JSON.parse(raw);
+  if (doc.schemaVersion !== 1 || !doc.tradesById || !Number.isFinite(Date.parse(doc.validationStartAt))) {
+    throw new Error("Invalid validation archive");
+  }
+  const records = Object.values(doc.tradesById).map(hydrateValidationTrade).sort((a, b) => a.tradeId < b.tradeId ? -1 : a.tradeId > b.tradeId ? 1 : 0);
+  const offset = Math.max(0, Math.floor(Number(query.offset) || 0));
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(query.limit) || 50)));
+  return { ok: true, initialized: true, schemaVersion: doc.schemaVersion, rulesRevision: doc.rulesRevision,
+    validationStartAt: doc.validationStartAt, boundaryPolicy: doc.boundaryPolicy,
+    summary: summarizeValidationArchive(records.filter(r => r.cohort === "forward")),
+    legacySummary: summarizeValidationArchive(records.filter(r => r.cohort === "legacy")),
+    totalArchived: records.length, offset, limit, nextOffset: offset + limit < records.length ? offset + limit : null,
+    records: records.slice(offset, offset + limit) };
 }
 
 function updateTradeAnalytics(previous, signal) {
@@ -7896,6 +8066,15 @@ export default async function handler(req, res) {
       ok: false,
       error: "Method not allowed"
     });
+  }
+
+  if (mode === "validation-archive") {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      return res.status(200).json(await readValidationArchive(req.query));
+    } catch {
+      return res.status(503).json({ ok: false, error: "Validation archive unavailable" });
+    }
   }
 
   if (mode === "entry-setups") {
