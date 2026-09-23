@@ -32,7 +32,7 @@ test('zero activity and mismatched reported total remain explicit',()=>{
 });
 test('existing derivatives output stays identical after removing the additive flow field',()=>{
   const c=runtime();
-  const previous=runtime(source.replace('      flow: calculateLiquidationFlow(aggregatedLiquidations),',''));
+  const previous=runtime(source.replace('      flow: calculateLiquidationFlow(aggregatedLiquidations, source.errors?.liquidations),',''));
   for(const liquidations of [[],[row(75,25)],[{...row(75,25),exchange:'Binance'}],[row(null,10)]]){
     const input={available:true,liquidations};
     const current=JSON.parse(JSON.stringify(c.calculateDerivativesHistory(input)));

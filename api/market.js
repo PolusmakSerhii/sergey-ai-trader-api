@@ -3405,14 +3405,14 @@ async function requestOKXSwapTickers() {
   }
 }
 
-async function fetchOKXTicker(symbol) {
+async function fetchOKXTicker(symbol, instrumentType = "SWAP") {
   const normalizedSymbol =
     String(symbol || "")
       .toUpperCase()
       .replace(/USDT$/i, "");
 
   const instId =
-    `${normalizedSymbol}-USDT-SWAP`;
+    `${normalizedSymbol}-USDT${instrumentType === "SWAP" ? "-SWAP" : ""}`;
 
   const url = new URL(
     "https://www.okx.com/api/v5/market/ticker"
@@ -3478,7 +3478,7 @@ async function fetchOKXTicker(symbol) {
           )
         : null;
 
-    if (!Number.isFinite(last)) {
+    if (!Number.isFinite(last) || last <= 0 || ticker?.instId !== instId) {
       return {
         ok: false,
         source: "OKX",
@@ -3494,6 +3494,7 @@ async function fetchOKXTicker(symbol) {
       source: "OKX",
       symbol,
       instId,
+      instrumentType,
 
       price:
         Number(last.toFixed(8)),
@@ -4391,6 +4392,8 @@ async function requestOKXKlines(
       status: 200,
       source: "OKX",
       interval,
+      instrumentType,
+      instId,
       count: candles.length,
       data: candles,
       error:
@@ -5501,9 +5504,8 @@ function calculateDerivativesProbabilitySignal(
 }
 
 // Describes the existing 24h aggregate only; never consumed by scoring.
-function calculateLiquidationFlow(aggregate) {
-  const amount = value => typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? value : null;
+function calculateLiquidationFlow(aggregate, providerError = null) {
+  const amount = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
   const longUsd = amount(aggregate?.longLiquidation_usd);
   const shortUsd = amount(aggregate?.shortLiquidation_usd);
   const reportedTotalUsd = amount(aggregate?.liquidation_usd);
@@ -5520,6 +5522,7 @@ function calculateLiquidationFlow(aggregate) {
     timeframe: "24H",
     affectsTradingScore: false,
     available,
+    reasonCode: available ? null : providerError ? "PROVIDER_UNAVAILABLE" : aggregate ? "INVALID_DATA" : "MISSING_HISTORY",
     reason: !available ? "Missing or invalid liquidation amounts"
       : !hasActivity ? "No liquidations in the reported window" : null,
     longUsd,
@@ -5551,7 +5554,8 @@ function calculateOpenInterestPriceContext(response, dailyCandles, now = Date.no
     state: "N/A", observations: 0,
     limitation: "USD open interest includes price valuation effects. Cross-exchange OI and OKX spot price do not identify which side opened or closed positions."
   };
-  const unavailable = reason => ({ ...base, reason });
+  const unavailable = reason => ({ ...base, reason, reasonCode:
+    reason.includes("stale") ? "STALE_DATA" : reason.includes("unavailable") ? "MISSING_HISTORY" : "PERIOD_MISMATCH" });
   const numeric = value => typeof value === "number" && Number.isFinite(value);
   const positive = value => numeric(value) && value > 0;
   if (!numeric(now)) return unavailable("Invalid observation time");
@@ -5571,7 +5575,7 @@ function calculateOpenInterestPriceContext(response, dailyCandles, now = Date.no
     return unavailable("Duplicate daily price window");
   }
   if (response?.ok !== true || !Array.isArray(response.data)) {
-    return unavailable("Open interest history is unavailable");
+    return { ...unavailable("Open interest history is unavailable"), reasonCode: "PROVIDER_UNAVAILABLE" };
   }
   // CoinGlass uses numeric strings for OHLC. Reject null/empty values before conversion.
   const parse = value => (typeof value === "number" ||
@@ -5581,6 +5585,7 @@ function calculateOpenInterestPriceContext(response, dailyCandles, now = Date.no
     time: parse(row?.time), open: parse(row?.open), close: parse(row?.close)
   })).filter(row => row.time !== null && row.time >= start && row.time < end)
     .sort((a, b) => a.time - b.time);
+  if (response.data.length === 0) return { ...unavailable("Open interest history is unavailable"), reasonCode: "MISSING_HISTORY" };
   if (rows.length !== 6 || rows.some((row, i) => row.time !== start + i * interval ||
       !positive(row.open) || !positive(row.close))) {
     return unavailable("Six valid aligned 4H open interest intervals are required");
@@ -5600,7 +5605,7 @@ function calculateOpenInterestPriceContext(response, dailyCandles, now = Date.no
   };
 }
 
-function calculateDerivativesHistory(coinGlass, dailyCandles = []) {
+function calculateDerivativesHistory(coinGlass, dailyCandles = [], instrumentType = "SPOT") {
   const source = coinGlass || {};
   
   const lastUpdated =
@@ -5791,7 +5796,8 @@ const derivativesProbabilitySignal =
 
      openInterestAssessment,
 
-     priceContext: calculateOpenInterestPriceContext(source.openInterestHistoryResponse, dailyCandles),
+     priceContext: { ...calculateOpenInterestPriceContext(source.openInterestHistoryResponse, dailyCandles), priceSource: `OKX ${instrumentType}`,
+       limitation: "Aggregated OI and OKX price have different market coverage; USD OI includes price valuation effects." },
       
      source: "CoinGlass",
 
@@ -5869,7 +5875,7 @@ const derivativesProbabilitySignal =
 
       analysis: liquidationAssessment,
 
-      flow: calculateLiquidationFlow(aggregatedLiquidations),
+      flow: calculateLiquidationFlow(aggregatedLiquidations, source.errors?.liquidations),
 
       source: "CoinGlass",
       timeframe: "24H",
@@ -5934,19 +5940,31 @@ function contextNumber(value) {
     Number.isFinite(Number(value)) ? Number(value) : null;
 }
 
+function contextHistoryReason(response, now) {
+  if (response?.ok !== true) return "PROVIDER_UNAVAILABLE";
+  if (!Array.isArray(response.data) || !response.data.length) return "MISSING_HISTORY";
+  const rows = response.data;
+  if (rows.some(r => !Number.isSafeInteger(r?.time) || r.time <= 0 || r.time % 14400000)) return "PERIOD_MISMATCH";
+  const closed = rows.filter(r => r.time + 14400000 <= now).sort((a, b) => a.time - b.time);
+  if (!closed.length) return "MISSING_HISTORY";
+  if (now - closed.at(-1).time - 14400000 >= 14400000) return "STALE_DATA";
+  return "PERIOD_MISMATCH";
+}
+
 function calculateLiquidationHistoryContext(response, now = Date.now()) {
   const base = {available:false,timeframe:"4h",source:"CoinGlass",exchange:"OKX",unit:"USD",
-    affectsTradingScore:false,reason:"Incomplete or stale liquidation history"};
+    affectsTradingScore:false,reasonCode:contextHistoryReason(response,now),reason:"Incomplete or stale liquidation history"};
   const rows = closedContextRows(response, now);
-  if (!rows || rows.length < 7) return base;
+  if (!rows) return base;
+  if (rows.length < 7) return {...base,reasonCode:"MISSING_HISTORY"};
   const window = rows.slice(-7).map(r => ({time:r.time,
     long:contextNumber(r.aggregated_long_liquidation_usd),short:contextNumber(r.aggregated_short_liquidation_usd)}));
-  if (window.some(r => r.long === null || r.short === null || r.long < 0 || r.short < 0 || !Number.isFinite(r.long+r.short))) return base;
+  if (window.some(r => r.long === null || r.short === null || r.long < 0 || r.short < 0 || !Number.isFinite(r.long+r.short))) return {...base,reasonCode:"INVALID_DATA"};
   const latest = window[6], total = latest.long + latest.short;
   const baseline = window.slice(0,6).reduce((sum,r) => sum+(r.long+r.short)/6,0);
   const ratio = baseline > 0 ? total/baseline : null;
   if (!Number.isFinite(baseline) || (ratio !== null && !Number.isFinite(ratio))) return base;
-  return {...base,available:true,reason:null,startTime:latest.time,endTime:latest.time+14400000,
+  return {...base,available:true,reasonCode:null,reason:null,startTime:latest.time,endTime:latest.time+14400000,
     longUsd:latest.long,shortUsd:latest.short,totalUsd:total,baselineMeanUsd:baseline,
     baselineStartTime:window[0].time,baselineIntervals:6,relativeToBaseline:ratio,
     dominantSide:total === 0 ? "NONE" : latest.long > latest.short ? "LONG" : latest.short > latest.long ? "SHORT" : "BALANCED"};
@@ -5957,15 +5975,15 @@ function calculateOIPrice4h(oiResponse, priceResponse, now = Date.now()) {
     openInterestSource:"CoinGlass · aggregated futures",openInterestUnit:"USD",affectsTradingScore:false,
     reason:"Matching closed OI and price intervals unavailable"};
   const oi = closedContextRows(oiResponse,now), prices = closedContextRows(priceResponse,now);
-  if (!oi || !prices) return base;
+  if (!oi || !prices) return {...base,reasonCode:contextHistoryReason(!oi ? oiResponse : priceResponse,now)};
   const o=oi[oi.length-1], p=prices[prices.length-1];
-  if (o.time !== p.time) return base;
+  if (o.time !== p.time) return {...base,reasonCode:"PERIOD_MISMATCH"};
   const values=[o.open,o.close,p.open,p.close].map(contextNumber);
-  if (values.some(v=>v===null || v<=0)) return base;
+  if (values.some(v=>v===null || v<=0)) return {...base,reasonCode:"INVALID_DATA"};
   const oiPct=(values[1]/values[0]-1)*100, pricePct=(values[3]/values[2]-1)*100;
   if (![oiPct,pricePct].every(Number.isFinite)) return base;
   const direction=v=>v>0?"UP":v<0?"DOWN":"FLAT";
-  return {...base,available:true,reason:null,startTime:o.time,endTime:o.time+14400000,
+  return {...base,available:true,reasonCode:null,reason:null,startTime:o.time,endTime:o.time+14400000,
     priceChangePct:pricePct,openInterestChangePct:oiPct,state:`PRICE_${direction(pricePct)}_OI_${direction(oiPct)}`,
     limitation:"Aggregated OI and Binance price have different market coverage. USD OI includes price valuation effects; no inference of new longs or shorts."};
 }
@@ -6957,6 +6975,102 @@ async function writeRankingHistory(snapshot, execute = runRedisCommand) {
     );
     return false;
   }
+}
+
+// Read-only, user-declared account scenario. Never an order reservation or lifecycle input.
+function assessExecutionData({ price, candles, instrumentType = "SWAP", now = Date.now() }) {
+  const number = value => typeof value === "number" && Number.isFinite(value);
+  const age = time => number(time) && time > 0 && time <= now ? now - time : null;
+  const day = 86400000;
+  const rows = Array.isArray(candles?.data) ? candles.data.filter(c => c.confirmed === true)
+    .sort((a, b) => a.openTime - b.openTime) : [];
+  const last = rows.at(-1);
+  const closedAt = last ? last.openTime + day : null;
+  const priceAge = age(price?.timestamp), candleAge = age(closedAt);
+  const validRows = rows.length > 0 && rows.every((c, i) =>
+    [c.openTime, c.open, c.high, c.low, c.close].every(v => number(v) && v > 0) &&
+    c.low <= Math.min(c.open, c.close) && c.high >= Math.max(c.open, c.close) &&
+    c.openTime + day <= now && (!i || c.openTime - rows[i - 1].openTime === day));
+  const priceFresh = price?.ok === true && number(price.price) && price.price > 0 && priceAge !== null && priceAge <= 60000;
+  const candlesFresh = candles?.ok === true && validRows && candleAge !== null && candleAge <= day + 300000;
+  const reasons = [];
+  if (price?.instrumentType !== instrumentType || candles?.instrumentType !== instrumentType ||
+      price?.instId !== candles?.instId || !price?.instId) reasons.push("INSTRUMENT_MISMATCH");
+  if (!priceFresh) reasons.push(priceAge !== null && priceAge > 60000 ? "STALE_PRICE" : "MISSING_OR_INVALID_PRICE");
+  if (!candlesFresh) reasons.push(candleAge !== null && candleAge > day + 300000 ? "STALE_CANDLES" : "MISSING_OR_INVALID_CANDLES");
+  return { status: reasons.length ? "BLOCKED" : "READY", reasonCodes: reasons,
+    price: { source: price?.source || null, instrumentType: price?.instrumentType || null,
+      instId: price?.instId || null, asOf: priceAge === null ? null : new Date(price.timestamp).toISOString(),
+      ageMs: priceAge, fresh: priceFresh, maxAgeMs: 60000 },
+    candles: { source: candles?.source || "OKX", instrumentType: candles?.instrumentType || null,
+      instId: candles?.instId || null, timeframe: "1D", lastConfirmedAt: candleAge === null ? null : new Date(closedAt).toISOString(),
+      ageMs: candleAge, fresh: candlesFresh, maxAgeMs: day + 300000,
+      timestampMeaning: "confirmed candle close (openTime + 24h); not response generation time" } };
+}
+
+function calculateAccountRisk({ account = {}, plan = {}, direction, dataSafety, now = Date.now() }) {
+  const positive = v => typeof v === "number" && Number.isFinite(v) && v > 0;
+  const nonnegative = v => typeof v === "number" && Number.isFinite(v) && v >= 0;
+  const base = { status: "UNAVAILABLE", reasonCodes: [], configurationSource: "user-declared, not exchange-verified",
+    executionAuthorized: false, quantity: null, quantityReason: "MISSING_INSTRUMENT_METADATA",
+    costs: { fees: null, slippage: null, funding: null, netRisk: null, basis: "gross before costs" },
+    calculation: null };
+  const stop = (status, ...codes) => ({ ...base, status, reasonCodes: codes });
+  if (!positive(account.balance)) return stop("UNAVAILABLE", "INVALID_BALANCE");
+  if (!positive(account.riskPercent) || account.riskPercent > 100 ||
+      !positive(account.maxOpenRiskPercent) || account.maxOpenRiskPercent > 100 ||
+      !Number.isInteger(account.maxTrades) || account.maxTrades < 1 || !positive(account.leverage)) {
+    return stop("UNAVAILABLE", "INVALID_RISK_CONFIGURATION");
+  }
+  if (!nonnegative(account.openRiskAmount) || !Number.isInteger(account.openTrades) || account.openTrades < 0 ||
+      !nonnegative(account.usedMargin) || account.confirmedCurrent !== true) return stop("UNAVAILABLE", "MISSING_PORTFOLIO_STATE");
+  const accountAge = now - Date.parse(account.asOf);
+  if (!Number.isFinite(accountAge) || accountAge < 0 || accountAge > 60000) return stop("UNAVAILABLE", "STALE_ACCOUNT_STATE");
+  const entry = plan.entryPrice, sl = plan.initialStopLoss ?? plan.stopLoss;
+  if (!positive(entry)) return stop("BLOCKED", "INVALID_ENTRY");
+  if (!positive(sl) || !["Long", "Short"].includes(direction) ||
+      (direction === "Long" ? sl >= entry : sl <= entry)) return stop("BLOCKED", "INVALID_STOP");
+  if (!dataSafety || dataSafety.status !== "READY") return stop("BLOCKED", ...(dataSafety?.reasonCodes?.length ? dataSafety.reasonCodes : ["MISSING_EXECUTION_DATA"]));
+  const riskAmount = account.balance * account.riskPercent / 100;
+  const stopDistancePercent = Math.abs(entry - sl) / entry * 100;
+  const positionNotional = riskAmount / (stopDistancePercent / 100);
+  const requiredMargin = positionNotional / account.leverage;
+  const projectedOpenRiskAmount = account.openRiskAmount + riskAmount;
+  if (![riskAmount, stopDistancePercent, positionNotional, requiredMargin, projectedOpenRiskAmount].every(positive)) return stop("BLOCKED", "INVALID_CALCULATION");
+  const reasons = [];
+  if (projectedOpenRiskAmount > account.balance * account.maxOpenRiskPercent / 100) reasons.push("RISK_LIMIT_EXCEEDED");
+  if (account.openTrades >= account.maxTrades) reasons.push("MAX_TRADES_REACHED");
+  if (requiredMargin + account.usedMargin > account.balance) reasons.push("INSUFFICIENT_MARGIN");
+  return { ...base, status: reasons.length ? "BLOCKED" : "READY", reasonCodes: reasons,
+    calculation: { referenceEntry: entry, initialStopLoss: sl, riskAmount, stopDistancePercent,
+      positionNotional, requiredMargin, expectedGrossLossAtSL: riskAmount,
+      portfolioOpenRisk: account.openRiskAmount, projectedOpenRiskAmount,
+      projectedOpenRiskPercent: projectedOpenRiskAmount / account.balance * 100 },
+    limitation: "READY means the declared gross-risk scenario passes. Contract quantity, exchange limits and costs require separate verification. No order permission or reservation." };
+}
+
+async function readAccountRisk(body) {
+  if (!getRedisConfig()) throw new Error("Storage unavailable");
+  if (!body || typeof body.tradeId !== "string" || body.tradeId.length > 200) throw new Error("Invalid trade identity");
+  const trades = parseOpenTrades(await runRedisCommand(["GET", OPEN_TRADES_KEY]));
+  const trade = trades.find(t => t.tradeId === body.tradeId);
+  if (!trade || !isConfirmedAPlusTradeSignal(trade)) return { status: "UNAVAILABLE", reasonCodes: ["FROZEN_PLAN_UNAVAILABLE"], executionAuthorized: false };
+  if (trade.outcome.status === "Active") return { status: "BLOCKED", reasonCodes: ["EXISTING_ACTIVE_TRADE"], executionAuthorized: false };
+  if (!Number.isFinite(Date.parse(trade.initialPlan.expiresAt)) || Date.parse(trade.initialPlan.expiresAt) <= Date.now()) {
+    return { status: "BLOCKED", reasonCodes: ["EXPIRED_PLAN"], executionAuthorized: false };
+  }
+  const [price, candles] = await Promise.all([
+    fetchOKXTicker(trade.symbol, "SWAP"), fetchOKXKlines(trade.symbol, "1D", 2, "SWAP")
+  ]);
+  const dataSafety = assessExecutionData({ price, candles });
+  const result = calculateAccountRisk({ account: body.account, plan: trade.initialPlan, direction: trade.direction, dataSafety });
+  if (result.status === "READY" && !(price.price >= trade.initialPlan.entryZone.from && price.price <= trade.initialPlan.entryZone.to)) {
+    result.status = "BLOCKED"; result.reasonCodes = ["OUTSIDE_ENTRY_ZONE"];
+  }
+  const expires = Math.min(price.timestamp + 60000, Date.parse(body.account?.asOf) + 60000,
+    Date.parse(dataSafety.candles.lastConfirmedAt) + dataSafety.candles.maxAgeMs);
+  return { ...result, tradeId: trade.tradeId, dataSafety, checkedAt: new Date().toISOString(),
+    validUntil: Number.isFinite(expires) ? new Date(expires).toISOString() : null };
 }
 
 // Non-critical audit projection. No lifecycle or trading calculations live here.
@@ -8037,7 +8151,7 @@ export default async function handler(req, res) {
 
   res.setHeader(
     "Access-Control-Allow-Methods",
-    "GET, OPTIONS"
+    "GET, POST, OPTIONS"
   );
 
   res.setHeader(
@@ -8050,6 +8164,16 @@ export default async function handler(req, res) {
   }
 
   const { mode } = req.query;
+  if (mode === "risk-manager") {
+    res.setHeader("Cache-Control", "no-store");
+    if (req.method !== "POST") return res.status(405).json({ ok: false, error: "POST required" });
+    try {
+      return res.status(200).json({ ok: true, risk: await readAccountRisk(req.body) });
+    } catch {
+      return res.status(503).json({ ok: false, risk: { status: "UNAVAILABLE",
+        reasonCodes: ["RISK_DATA_UNAVAILABLE"], executionAuthorized: false } });
+    }
+  }
   const isRankingRefreshRequest =
     req.method === "POST" &&
     mode === "scanner" &&
@@ -9823,6 +9947,7 @@ const okxDailyOhlc =
 let coin = null;
 let marketDataSource = null;
 let coinGeckoError = null;
+let executionPrice = null;
 
 /*
  * Для известных монет используем CoinGecko:
@@ -9866,9 +9991,10 @@ if (coinGeckoId) {
  * Для монет без CoinGecko mapping
  * используем универсальный OKX Ticker.
  */
-if (!coin) {
+if (!coin || instrumentType === "SWAP") {
   const okxTicker =
-    await fetchOKXTicker(symbol);
+    await fetchOKXTicker(symbol, instrumentType);
+  executionPrice = okxTicker;
 
   if (okxTicker.ok !== true) {
     throw new Error(
@@ -9881,12 +10007,13 @@ if (!coin) {
     symbol.replace(/USDT$/i, "");
 
   coin = {
-    id: null,
-    name: baseAsset,
+    ...(coin || {}),
+    id: coin?.id || null,
+    name: coin?.name || baseAsset,
     symbol:
       baseAsset.toLowerCase(),
 
-    market_cap_rank: null,
+    market_cap_rank: coin?.market_cap_rank ?? null,
 
     current_price:
       okxTicker.price,
@@ -9903,9 +10030,9 @@ if (!coin) {
     total_volume:
       okxTicker.volume24h,
 
-    market_cap: null,
+    market_cap: coin?.market_cap ?? null,
 
-    circulating_supply: null
+    circulating_supply: coin?.circulating_supply ?? null
   };
 
   marketDataSource = "OKX";
@@ -9921,6 +10048,11 @@ if (
   );
 }    
     
+    const dataSafety = assessExecutionData({
+      price: executionPrice || { ok: true, source: "CoinGecko", instrumentType: "AGGREGATED",
+        price: coin.current_price, timestamp: Date.parse(coin.last_updated) },
+      candles: okxDailyResponse, instrumentType
+    });
     const fearGreed = await fetchFearGreed();
 
    const rsi14 = calculateRSI(okxDailyCloses, 14);
@@ -9985,7 +10117,7 @@ if (ema20 && ema50 && ema100 && ema200) {
 }  
 const derivativesHistory =
   calculateDerivativesHistory(
-    coinGlass, okxDailyCandles
+    coinGlass, okxDailyCandles, instrumentType
   );
 
 const derivativesProbabilitySignal =
@@ -10142,7 +10274,8 @@ const marketSummary =
     res.status(200).json({
       ok: true,
       source: "CoinGecko + OKX + CoinGlass V4",
-      capabilities: { orderFlow: true },
+      capabilities: { orderFlow: true, accountRisk: true },
+      dataSafety,
       tradeRegistration: registeredLiveTrade ? {
         tradeId: registeredLiveTrade.tradeId,
         status: registeredLiveTrade.outcome.status

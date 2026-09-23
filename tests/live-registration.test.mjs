@@ -28,6 +28,7 @@ function runtime() {
     coinGeckoError:null,derivativesHistory:{},okxDailyResponse:{ok:true},
     okxDailyCandles:[],okxConfirmedDailyCandles:[],fearGreed:null,
     res:{status(code){this.code=code;return this;},json(body){this.body=body;return this;}}});
+  c.dataSafety = {status:"READY",reasonCodes:[]};
   c.registrations = [];
   c.registerOpenTrade = async (item, capturedAt) => {
     c.registrations.push({item,capturedAt});
