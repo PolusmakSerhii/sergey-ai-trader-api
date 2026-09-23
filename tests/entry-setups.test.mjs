@@ -3,7 +3,9 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 const source=readFileSync(new URL('../api/market.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace('export default async function handler','async function handler');
-const runtime=()=>{const c=vm.createContext({process:{env:{}},Date,console});vm.runInContext(source,c);return c;};
+const runtime=()=>{const c=vm.createContext({process:{env:{}},Date,console});vm.runInContext(source,c);
+  // Domain tests use an authorized transport; real auth is covered in private-access tests.
+  Object.assign(c, { requirePrivateApi: () => true, privateBackendOrigin: () => "https://sergey-ai-trader-api.vercel.app", internalApiHeaders: () => ({Authorization:"Bearer test-only"}) });return c;};
 const fixture=(direction='Long')=>({tradeId:'original-id',setupKey:'TESTUSDT:'+direction,symbol:'TESTUSDT',direction,
  opportunityScore:90,confidence:95,action:direction==='Long'?'Strong Buy':'Strong Sell',tradeAllowed:true,tradeReadiness:{ready:true},riskReward:2,
  initialPlan:{createdAt:'2026-09-19T00:00:00Z',plannedAt:'2026-09-19T00:01:00Z',expiresAt:'2026-09-19T01:01:00Z',entryPrice:100,entryZone:{from:99,to:101},stopLoss:direction==='Long'?90:110,takeProfit1:direction==='Long'?110:90,takeProfit2:direction==='Long'?120:80,takeProfit3:direction==='Long'?130:70},outcome:{status:'Active'}});

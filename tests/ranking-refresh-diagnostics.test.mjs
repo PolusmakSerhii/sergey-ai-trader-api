@@ -33,7 +33,9 @@ function harness(mode){
   if(mode==='batch')throw new Error('SECRET');
   return {ok:true,json:async()=>({ok:true,totalBatches:1,failed:0,globalBatchResults:[{symbol:'BTCUSDT',opportunityScore:90}]})};
  }});
- vm.runInContext(source,c);c.verifyQStashRequest=async()=>true;
+ vm.runInContext(source,c);
+  // Domain tests use an authorized transport; real auth is covered in private-access tests.
+  Object.assign(c, { requirePrivateApi: () => true, privateBackendOrigin: () => "https://sergey-ai-trader-api.vercel.app", internalApiHeaders: () => ({Authorization:"Bearer test-only"}) });c.verifyQStashRequest=async()=>true;
  c.writeGlobalRankingCache=async()=>mode!=='persist';c.writeRankingHistory=async()=>true;
  const res={headers:{},setHeader(k,v){this.headers[k]=v;},status(code){this.code=code;return this;},json(body){this.body=body;return this;}};
  return {events,commands,res,releaseSignals,delays,get batches(){return batches;},run:()=>c.handler({method:'POST',headers:{host:'api.test'},query:{mode:'scanner',globalRank:'true',refresh:'true'}},res)};

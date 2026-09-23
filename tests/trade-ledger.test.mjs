@@ -54,6 +54,8 @@ test("trade ledger and backups against isolated Redis (no TCP or production)", a
       process: { env: { UPSTASH_REDIS_REST_URL: "audit-local", UPSTASH_REDIS_REST_TOKEN: "test" } },
       fetch() { throw new Error("Network forbidden in tests"); } });
     vm.runInContext(source, context);
+  // Domain tests use an authorized transport; real auth is covered in private-access tests.
+  Object.assign(context, { requirePrivateApi: () => true, privateBackendOrigin: () => "https://sergey-ai-trader-api.vercel.app", internalApiHeaders: () => ({Authorization:"Bearer test-only"}) });
     context.runRedisCommand = redis;
     const record = signals => context.recordCompletedTradeSignals(signals);
     const stats = async () => JSON.parse(await redis(["GET", keys.completedTradeStats]));

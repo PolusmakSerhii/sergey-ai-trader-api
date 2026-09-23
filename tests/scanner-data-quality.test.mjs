@@ -11,6 +11,8 @@ function runtime() {
   const context = vm.createContext({ process: { env: {} }, console, URL,
     URLSearchParams, Date, AbortSignal, structuredClone, randomUUID });
   vm.runInContext(source, context);
+  // Domain tests use an authorized transport; real auth is covered in private-access tests.
+  Object.assign(context, { requirePrivateApi: () => true, privateBackendOrigin: () => "https://sergey-ai-trader-api.vercel.app", internalApiHeaders: () => ({Authorization:"Bearer test-only"}) });
   return context;
 }
 const candles = count => Array.from({ length: count }, () => ({ confirmed: true }));

@@ -1,3 +1,4 @@
+import { requirePrivateApi, privateBackendOrigin, internalApiHeaders } from "../lib/private-access.js";
 import { randomUUID } from "node:crypto";
 import { Receiver } from "@upstash/qstash";
 
@@ -3858,7 +3859,8 @@ async function fetchScannerSymbol(
 
     const response = await fetch(url, {
       signal: AbortSignal.timeout(45000),
-      headers: { "x-sm1m-analysis-source": "scanner" }
+      redirect: "error",
+      headers: { ...internalApiHeaders(baseUrl), "x-sm1m-analysis-source": "scanner" }
     });
 
     const payload = await response
@@ -8164,6 +8166,11 @@ export default async function handler(req, res) {
   }
 
   const { mode } = req.query;
+  const trustedRankingRefresh = req.method === "POST" && mode === "scanner" &&
+    String(req.query.globalRank || "false").toLowerCase() === "true" &&
+    String(req.query.refresh || "false").toLowerCase() === "true" &&
+    await verifyQStashRequest(req);
+  if (!requirePrivateApi(req, res, trustedRankingRefresh)) return;
   if (mode === "risk-manager") {
     res.setHeader("Cache-Control", "no-store");
     if (req.method !== "POST") return res.status(405).json({ ok: false, error: "POST required" });
@@ -8483,15 +8490,7 @@ if (mode === "chart") {
 }
   
 if (mode === "scanner") {
-  const protocol =
-    req.headers["x-forwarded-proto"] ||
-    "https";
-
-  const host =
-    req.headers.host;
-
-  const baseUrl =
-    `${protocol}://${host}`;
+  const baseUrl = privateBackendOrigin();
 
   const requestedLimit =
   Number.parseInt(
@@ -8545,7 +8544,7 @@ const forceGlobalRefresh =
 
 if (
   forceGlobalRefresh &&
-  !(await verifyQStashRequest(req))
+  !(trustedRankingRefresh || await verifyQStashRequest(req))
 ) {
   return res.status(401).json({
     ok: false,
@@ -8655,7 +8654,7 @@ const loadGlobalBatch = async page => {
   const response =
     await fetch(
       batchUrl.toString(),
-      { signal: AbortSignal.timeout(60000) }
+      { signal: AbortSignal.timeout(60000), headers: internalApiHeaders(baseUrl), redirect: "error" }
     );
 
   if (!response.ok) {

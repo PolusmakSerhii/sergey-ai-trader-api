@@ -13,7 +13,9 @@ function runtime() {
   const logs = [];
   const c = vm.createContext({ Date, setTimeout, URL, process: {env:{}},
     console: {error(...args) {logs.push(args);}}, fetch() {throw Error('Network forbidden');} });
-  vm.runInContext(source,c); c.getRedisConfig = () => ({}); return {c,logs};
+  vm.runInContext(source,c);
+  // Domain tests use an authorized transport; real auth is covered in private-access tests.
+  Object.assign(c, { requirePrivateApi: () => true, privateBackendOrigin: () => "https://sergey-ai-trader-api.vercel.app", internalApiHeaders: () => ({Authorization:"Bearer test-only"}) }); c.getRedisConfig = () => ({}); return {c,logs};
 }
 function signal(id='TEST', status='WaitingEntry', direction='Long', minute=1) {
   const long=direction==='Long';

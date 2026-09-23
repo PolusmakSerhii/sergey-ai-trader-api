@@ -1,3 +1,4 @@
+import { requirePrivateApi } from "../lib/private-access.js";
 const DASHBOARD_ORIGIN =
   "https://sergey-ai-dashboard.vercel.app";
 
@@ -245,6 +246,7 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
 
+  if (!requirePrivateApi(req, res)) return;
   if (req.method !== "POST") {
     return res.status(405).json({
       ok: false,

@@ -12,6 +12,8 @@ function runtime() {
   const c = vm.createContext({Date, URL, AbortSignal, setTimeout,
     process: {env: {}}, console: {error() {}}, fetch() {throw new Error('Network forbidden');}});
   vm.runInContext(source, c);
+  // Domain tests use an authorized transport; real auth is covered in private-access tests.
+  Object.assign(c, { requirePrivateApi: () => true, privateBackendOrigin: () => "https://sergey-ai-trader-api.vercel.app", internalApiHeaders: () => ({Authorization:"Bearer test-only"}) });
   // Inputs supplied by the analysis pipeline immediately before the real response block.
   const technical = source.slice(source.indexOf('technical: {', start), source.indexOf('\n   },', start));
   for (const line of technical.split('\n')) {

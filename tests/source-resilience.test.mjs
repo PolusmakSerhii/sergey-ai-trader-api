@@ -9,6 +9,8 @@ function runtime(fetch) {
   const context = vm.createContext({ process:{env:{COINGLASS_API_KEY:'test'}}, console, URL,
     URLSearchParams, Date, AbortSignal, structuredClone, randomUUID, fetch });
   vm.runInContext(source,context);
+  // Domain tests use an authorized transport; real auth is covered in private-access tests.
+  Object.assign(context, { requirePrivateApi: () => true, privateBackendOrigin: () => "https://sergey-ai-trader-api.vercel.app", internalApiHeaders: () => ({Authorization:"Bearer test-only"}) });
   return context;
 }
 const response = data => ({ok:true,status:200,json:async()=>({code:'0',data})});

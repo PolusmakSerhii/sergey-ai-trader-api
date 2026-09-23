@@ -1,3 +1,4 @@
+import { requirePrivateApi } from "../lib/private-access.js";
 const NEWS_CACHE_KEY = "crypto-ai:news-context:v4";
 const NEWS_CACHE_TTL_SECONDS = 10 * 60;
 const NEWS_LIMIT = 30;
@@ -293,6 +294,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") return res.status(204).end();
+  if (!requirePrivateApi(req, res)) return;
   if (req.method !== "GET") {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   }
