@@ -7010,6 +7010,20 @@ function assessExecutionData({ price, candles, instrumentType = "SWAP", now = Da
       timestampMeaning: "confirmed candle close (openTime + 24h); not response generation time" } };
 }
 
+function getRiskFrozenReference(plan, direction) {
+  const positive = v => typeof v === "number" && Number.isFinite(v) && v > 0;
+  if (!plan || !["Long", "Short"].includes(direction)) return null;
+  const from = plan.entryZone?.from, to = plan.entryZone?.to;
+  const entry = plan.entryPrice, stop = plan.initialStopLoss;
+  if (![from, to, entry, stop, plan.stopLoss, plan.takeProfit1, plan.takeProfit2, plan.takeProfit3].every(positive) || from > to) return null;
+  const midpoint = Math.round((from + to) / 2 * 1e12) / 1e12;
+  if (!positive(midpoint) || entry !== midpoint || stop !== plan.stopLoss) return null;
+  const valid = direction === "Long"
+    ? stop < from && to < plan.takeProfit1 && plan.takeProfit1 < plan.takeProfit2 && plan.takeProfit2 < plan.takeProfit3
+    : stop > to && from > plan.takeProfit1 && plan.takeProfit1 > plan.takeProfit2 && plan.takeProfit2 > plan.takeProfit3;
+  return valid ? { source: "frozen-initial-plan", plannedEntry: midpoint, initialStopLoss: stop } : null;
+}
+
 function calculateAccountRisk({ account = {}, plan = {}, direction, dataSafety, now = Date.now() }) {
   const positive = v => typeof v === "number" && Number.isFinite(v) && v > 0;
   const nonnegative = v => typeof v === "number" && Number.isFinite(v) && v >= 0;
@@ -7028,10 +7042,9 @@ function calculateAccountRisk({ account = {}, plan = {}, direction, dataSafety, 
       !nonnegative(account.usedMargin) || account.confirmedCurrent !== true) return stop("UNAVAILABLE", "MISSING_PORTFOLIO_STATE");
   const accountAge = now - Date.parse(account.asOf);
   if (!Number.isFinite(accountAge) || accountAge < 0 || accountAge > 60000) return stop("UNAVAILABLE", "STALE_ACCOUNT_STATE");
-  const entry = plan.entryPrice, sl = plan.initialStopLoss ?? plan.stopLoss;
-  if (!positive(entry)) return stop("BLOCKED", "INVALID_ENTRY");
-  if (!positive(sl) || !["Long", "Short"].includes(direction) ||
-      (direction === "Long" ? sl >= entry : sl <= entry)) return stop("BLOCKED", "INVALID_STOP");
+  const reference = getRiskFrozenReference(plan, direction);
+  if (!reference) return stop("BLOCKED", "INVALID_FROZEN_PLAN");
+  const entry = reference.plannedEntry, sl = reference.initialStopLoss;
   if (!dataSafety || dataSafety.status !== "READY") return stop("BLOCKED", ...(dataSafety?.reasonCodes?.length ? dataSafety.reasonCodes : ["MISSING_EXECUTION_DATA"]));
   const riskAmount = account.balance * account.riskPercent / 100;
   const stopDistancePercent = Math.abs(entry - sl) / entry * 100;
@@ -7057,7 +7070,15 @@ async function readAccountRisk(body) {
   const trades = parseOpenTrades(await runRedisCommand(["GET", OPEN_TRADES_KEY]));
   const trade = trades.find(t => t.tradeId === body.tradeId);
   if (!trade || !isConfirmedAPlusTradeSignal(trade)) return { status: "UNAVAILABLE", reasonCodes: ["FROZEN_PLAN_UNAVAILABLE"], executionAuthorized: false };
-  if (trade.outcome.status === "Active") return { status: "BLOCKED", reasonCodes: ["EXISTING_ACTIVE_TRADE"], executionAuthorized: false };
+  const reference = getRiskFrozenReference(trade.initialPlan, trade.direction);
+  if (!reference) return { status: "BLOCKED", reasonCodes: ["INVALID_FROZEN_PLAN"], executionAuthorized: false };
+  if (trade.outcome.status === "Active") return {
+    status: "BLOCKED", mode: "existing-position", reasonCodes: ["EXISTING_ACTIVE_TRADE"], executionAuthorized: false,
+    tradeId: trade.tradeId, reference: { ...reference,
+      actualEntry: typeof trade.outcome.entryPrice === "number" && Number.isFinite(trade.outcome.entryPrice) && trade.outcome.entryPrice > 0 ? trade.outcome.entryPrice : null,
+      currentStopLoss: typeof trade.outcome.currentStopLoss === "number" && Number.isFinite(trade.outcome.currentStopLoss) && trade.outcome.currentStopLoss > 0 ? trade.outcome.currentStopLoss : null },
+    calculation: null
+  };
   if (!Number.isFinite(Date.parse(trade.initialPlan.expiresAt)) || Date.parse(trade.initialPlan.expiresAt) <= Date.now()) {
     return { status: "BLOCKED", reasonCodes: ["EXPIRED_PLAN"], executionAuthorized: false };
   }
@@ -7071,7 +7092,7 @@ async function readAccountRisk(body) {
   }
   const expires = Math.min(price.timestamp + 60000, Date.parse(body.account?.asOf) + 60000,
     Date.parse(dataSafety.candles.lastConfirmedAt) + dataSafety.candles.maxAgeMs);
-  return { ...result, tradeId: trade.tradeId, dataSafety, checkedAt: new Date().toISOString(),
+  return { ...result, mode: "planned-entry", reference, tradeId: trade.tradeId, dataSafety, checkedAt: new Date().toISOString(),
     validUntil: Number.isFinite(expires) ? new Date(expires).toISOString() : null };
 }
 

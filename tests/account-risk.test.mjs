@@ -7,11 +7,11 @@ const now=Date.UTC(2026,8,23,12),day=86400000;
 function runtime(){const c=vm.createContext({Date,URL,URLSearchParams,AbortSignal,process:{env:{}},console,fetch(){throw Error('Network forbidden');}});vm.runInContext(source,c);return c;}
 const inputs=()=>({now,account:{balance:10000,riskPercent:.5,maxOpenRiskPercent:2,maxTrades:3,leverage:2,
   openRiskAmount:20,openTrades:1,usedMargin:100,confirmedCurrent:true,asOf:new Date(now).toISOString()},
-  plan:{entryPrice:100,stopLoss:90},direction:'Long',dataSafety:{status:'READY',reasonCodes:[]}});
+  plan:{entryPrice:100,entryZone:{from:99,to:101},stopLoss:90,initialStopLoss:90,takeProfit1:110,takeProfit2:120,takeProfit3:130},direction:'Long',dataSafety:{status:'READY',reasonCodes:[]}});
 const sources=()=>({now,price:{ok:true,source:'OKX',instrumentType:'SWAP',instId:'BTC-USDT-SWAP',price:100,timestamp:now-1000},
   candles:{ok:true,source:'OKX',instrumentType:'SWAP',instId:'BTC-USDT-SWAP',data:[{confirmed:true,openTime:now-day-3600000,open:99,high:110,low:90,close:100}]}});
 for(const direction of ['Long','Short'])test(direction+' sizing reuses frozen reference and is symmetric',()=>{
- const c=runtime(),x=inputs();x.direction=direction;x.plan.stopLoss=direction==='Long'?90:110;
+ const c=runtime(),x=inputs();x.direction=direction;x.plan.stopLoss=x.plan.initialStopLoss=direction==='Long'?90:110;if(direction==='Short')Object.assign(x.plan,{takeProfit1:90,takeProfit2:80,takeProfit3:70});
  const r=c.calculateAccountRisk(x);assert.equal(r.status,'READY');assert.equal(r.calculation.riskAmount,50);
  assert.equal(r.calculation.positionNotional,500);assert.equal(r.calculation.requiredMargin,250);
  assert.equal(r.calculation.expectedGrossLossAtSL,50);assert.equal(r.executionAuthorized,false);
@@ -20,7 +20,7 @@ for(const direction of ['Long','Short'])test(direction+' sizing reuses frozen re
 for(const value of [null,0,-1,NaN,Infinity,'100'])test('invalid balance '+value,()=>{
  const x=inputs();x.account.balance=value;const r=runtime().calculateAccountRisk(x);assert.equal(r.status,'UNAVAILABLE');assert.equal(r.calculation,null);
 });
-for(const [field,value,reason]of [['entryPrice',0,'INVALID_ENTRY'],['stopLoss',101,'INVALID_STOP'],['stopLoss',100,'INVALID_STOP']])test(reason+value,()=>{
+for(const [field,value,reason]of [['entryPrice',0,'INVALID_FROZEN_PLAN'],['stopLoss',101,'INVALID_FROZEN_PLAN'],['stopLoss',100,'INVALID_FROZEN_PLAN']])test(reason+value,()=>{
  const x=inputs();x.plan[field]=value;assert.equal(runtime().calculateAccountRisk(x).reasonCodes[0],reason);
 });
 test('risk/trade/margin controls block without hidden account assumptions',()=>{
@@ -64,15 +64,20 @@ test('ticker uses requested instrument and rejects unexpected provider instId',a
 test('risk endpoint reuses frozen trade, ignores client plan, performs no writes or duplicate registration',async()=>{
  const c=runtime(),calls=[],t=Date.now(),s=sources();s.now=t;s.price.timestamp=t;s.candles.data[0].openTime=t-day-3600000;
  const trade={tradeId:'test',setupKey:'TEST:Long',symbol:'BTCUSDT',direction:'Long',action:'Strong Buy',opportunityScore:90,
- confidence:90,riskReward:2,tradeAllowed:true,tradeReadiness:{ready:true},initialPlan:{entryPrice:100,entryZone:{from:99,to:101},stopLoss:90,takeProfit1:110,takeProfit2:120,takeProfit3:130,expiresAt:new Date(t+3600000).toISOString()},outcome:{status:'WaitingEntry'}};
+ confidence:90,riskReward:2,tradeAllowed:true,tradeReadiness:{ready:true},initialPlan:{entryPrice:100,entryZone:{from:99,to:101},stopLoss:90,initialStopLoss:90,takeProfit1:110,takeProfit2:120,takeProfit3:130,expiresAt:new Date(t+3600000).toISOString()},outcome:{status:'WaitingEntry'}};
  const before=JSON.stringify(trade);c.getRedisConfig=()=>({});c.runRedisCommand=async cmd=>{calls.push(cmd);assert.equal(cmd[0],'GET');return JSON.stringify([trade]);};
  c.fetchOKXTicker=async()=>s.price;c.fetchOKXKlines=async()=>s.candles;
  c.registerOpenTrade=async()=>assert.fail();c.collectValidationArchive=async()=>assert.fail();
  const account={...inputs().account,asOf:new Date(t).toISOString()};
  const r=await c.readAccountRisk({tradeId:'test',account,plan:{entryPrice:500},confirmedAPlus:true});
  assert.equal(r.status,'READY');assert.equal(r.calculation.referenceEntry,100);assert.equal(calls.length,1);assert.equal(JSON.stringify(trade),before);
- trade.outcome.status='Active';const frozen=JSON.stringify(trade.initialPlan);
- assert.equal((await c.readAccountRisk({tradeId:'test',account})).reasonCodes[0],'EXISTING_ACTIVE_TRADE');assert.equal(JSON.stringify(trade.initialPlan),frozen);
+ s.price.price=500;
+ const outside=await c.readAccountRisk({tradeId:'test',account,plan:{entryPrice:500,stopLoss:490}});
+ assert.equal(outside.reasonCodes[0],'OUTSIDE_ENTRY_ZONE');assert.equal(outside.calculation.referenceEntry,100);
+ s.price.price=100;trade.outcome.status='Pending';
+ assert.equal((await c.readAccountRisk({tradeId:'test',account})).calculation.initialStopLoss,90);
+ trade.outcome.status='Active';trade.outcome.entryPrice=99.5;trade.outcome.currentStopLoss=99.5;const frozen=JSON.stringify(trade.initialPlan);
+ const active=await c.readAccountRisk({tradeId:'test',account});assert.equal(active.reasonCodes[0],'EXISTING_ACTIVE_TRADE');assert.equal(active.mode,'existing-position');assert.equal(active.reference.actualEntry,99.5);assert.equal(active.reference.plannedEntry,100);assert.equal(active.reference.currentStopLoss,99.5);assert.equal(active.calculation,null);assert.equal(JSON.stringify(trade.initialPlan),frozen);
 });
 test('Redis failure cannot fabricate READY',async()=>{const c=runtime();c.getRedisConfig=()=>({});c.runRedisCommand=async()=>{throw Error('offline');};await assert.rejects(c.readAccountRisk({tradeId:'x'}));});
 
@@ -88,4 +93,29 @@ test('new safety functions do not call canonical registration, statistics or arc
  const section=source.slice(source.indexOf('// Read-only, user-declared account scenario.'),source.indexOf('// Non-critical audit projection.'));
  assert.doesNotMatch(section,/registerOpenTrade\(|recordCompletedTradeSignals\(|collectValidationArchive\(|calculateScannerOpportunity\(/);
  assert.doesNotMatch(section,/\["(?:SET|EVAL|DEL|LPUSH)"/);
+});
+
+for(const mutate of [p=>delete p.entryZone,p=>p.entryZone.from=102,p=>p.entryPrice=99,p=>delete p.initialStopLoss,p=>p.initialStopLoss=100,p=>p.initialStopLoss=Infinity,p=>p.takeProfit2=NaN])test('damaged frozen reference blocks sizing without fallback '+String(mutate),()=>{
+ const x=inputs();mutate(x.plan);x.livePlan={entryPrice:100,stopLoss:90};x.price=100;
+ const r=runtime().calculateAccountRisk(x);assert.equal(r.status,'BLOCKED');assert.equal(r.calculation,null);
+});
+test('frozen sizing ignores market price and live plan and preserves algebra',()=>{
+ const x=inputs();x.price=500;x.livePlan={entryPrice:500,stopLoss:490};
+ const r=runtime().calculateAccountRisk(x);assert.equal(r.calculation.referenceEntry,100);
+ assert.equal(r.calculation.positionNotional,r.calculation.riskAmount*100/Math.abs(100-90));
+});
+test('completed and ambiguous identities never become sizing opportunities',async()=>{
+ const c=runtime();c.getRedisConfig=()=>({});c.fetchOKXTicker=async()=>assert.fail('no provider call');
+ for(const status of ['Stopped','TP3Hit','TP1Hit','Completed','Expired']){
+ c.runRedisCommand=async()=>JSON.stringify([{tradeId:'x',setupKey:'x',initialPlan:inputs().plan,outcome:{status}}]);
+ await assert.rejects(c.readAccountRisk({tradeId:'x',account:inputs().account}));
+ }
+ const trade={tradeId:'x',setupKey:'x',initialPlan:inputs().plan,outcome:{status:'WaitingEntry'}};
+ c.runRedisCommand=async()=>JSON.stringify([trade,trade]);await assert.rejects(c.readAccountRisk({tradeId:'x'}));
+ c.runRedisCommand=async()=>JSON.stringify([]);assert.equal((await c.readAccountRisk({tradeId:'old'})).status,'UNAVAILABLE');
+});
+
+for(const direction of ['Long','Short'])for(const sl of [0,100,NaN,Infinity])test(`invalid ${direction} frozen SL ${sl} blocks`,()=>{
+ const x=inputs();x.direction=direction;x.plan.initialStopLoss=x.plan.stopLoss=sl;
+ assert.equal(runtime().calculateAccountRisk(x).calculation,null);
 });
