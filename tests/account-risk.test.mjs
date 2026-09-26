@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import test from 'node:test';
 const source=(await readFile(new URL('../api/market.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace('export default async function handler','async function handler');
 const now=Date.UTC(2026,8,23,12),day=86400000;
-function runtime(){const c=vm.createContext({Date,URL,URLSearchParams,AbortSignal,process:{env:{}},console,fetch(){throw Error('Network forbidden');}});vm.runInContext(source,c);return c;}
+function runtime(){const c=vm.createContext({Date,URL,URLSearchParams,AbortSignal,structuredClone,process:{env:{}},console,fetch(){throw Error('Network forbidden');}});vm.runInContext(source,c);return c;}
 const inputs=()=>({now,account:{balance:10000,riskPercent:.5,maxOpenRiskPercent:2,maxTrades:3,leverage:2,
   openRiskAmount:20,openTrades:1,usedMargin:100,confirmedCurrent:true,asOf:new Date(now).toISOString()},
   plan:{entryPrice:100,entryZone:{from:99,to:101},stopLoss:90,initialStopLoss:90,takeProfit1:110,takeProfit2:120,takeProfit3:130},direction:'Long',dataSafety:{status:'READY',reasonCodes:[]}});
@@ -118,4 +118,90 @@ test('completed and ambiguous identities never become sizing opportunities',asyn
 for(const direction of ['Long','Short'])for(const sl of [0,100,NaN,Infinity])test(`invalid ${direction} frozen SL ${sl} blocks`,()=>{
  const x=inputs();x.direction=direction;x.plan.initialStopLoss=x.plan.stopLoss=sl;
  assert.equal(runtime().calculateAccountRisk(x).calculation,null);
+});
+
+const projectionInput = (c, direction = 'Long') => {
+ const plan = inputs().plan;
+ if (direction === 'Short') Object.assign(plan,{stopLoss:110,initialStopLoss:110,takeProfit1:90,takeProfit2:80,takeProfit3:70});
+ plan.exitStrategy = c.createPartialExitStrategy();
+ return {plan,direction,riskAmount:10,lifecycleStatus:'WaitingEntry',instrument:{source:'OKX',instrumentType:'SWAP',ctType:'linear',settleCcy:'USDT'}};
+};
+for (const direction of ['Long','Short']) test(`planned ${direction} partial contributions use frozen fractions`,()=>{
+ const c=runtime(),x=projectionInput(c,direction),before=JSON.stringify(x),p=c.calculatePlannedTargetPotential(x);
+ assert.deepEqual([p.tp1.contribution,p.tp2.contribution,p.tp3.contribution],[2.5,5,15]);
+ assert.equal(p.weightedAmount,22.5);assert.equal(p.weightedR,2.25);assert.equal(JSON.stringify(x),before);
+ const sign=direction==='Long'?1:-1;
+ for(const [i,target] of [x.plan.takeProfit1,x.plan.takeProfit2,x.plan.takeProfit3].entries())
+  assert.equal(p['tp'+(i+1)].contribution,10/10*sign*(target-100)*[.25,.25,.5][i]);
+});
+test('nonuniform frozen geometry, leverage and live inputs do not alter planned basis',()=>{
+ const c=runtime(),x=projectionInput(c);Object.assign(x.plan,{takeProfit1:112,takeProfit2:125,takeProfit3:137});
+ const a=c.calculatePlannedTargetPotential(x);assert.ok(Math.abs(a.weightedR-2.775)<1e-12);assert.ok(Math.abs(a.weightedAmount-27.75)<1e-12);
+ const accountInput=inputs();accountInput.plan=x.plan;
+ const low=c.calculateAccountRisk(accountInput);accountInput.account.leverage=10;const high=c.calculateAccountRisk(accountInput);
+ assert.notEqual(low.calculation.requiredMargin,high.calculation.requiredMargin);
+ assert.equal(low.calculation.riskAmount,high.calculation.riskAmount);
+ assert.equal(JSON.stringify(c.calculatePlannedTargetPotential({...x,riskAmount:low.calculation.riskAmount})),JSON.stringify(c.calculatePlannedTargetPotential({...x,riskAmount:high.calculation.riskAmount,price:900,livePlan:{takeProfit1:999}})));
+});
+for(const [name,mutate] of [
+ ['entry',x=>x.plan.entryPrice=0],['stop',x=>x.plan.initialStopLoss=100],
+ ['nonfinite',x=>x.plan.takeProfit1=Infinity],['target order',x=>x.plan.takeProfit2=109],
+ ['target side',x=>x.plan.takeProfit1=95],['missing strategy',x=>delete x.plan.exitStrategy],
+ ['legacy',x=>x.plan.exitStrategy.version='legacy'],['fractions',x=>x.plan.exitStrategy.allocations.TP3=.4],
+ ['other allocation',x=>Object.assign(x.plan.exitStrategy.allocations,{TP1:.2,TP2:.3})],
+ ['zero risk',x=>x.riskAmount=0],['unknown metadata',x=>delete x.instrument.ctType],
+ ['SWAP alone',x=>x.instrument={instrumentType:'SWAP',instId:'BTC-USDT-SWAP'}],
+ ['inverse',x=>x.instrument.ctType='inverse'],['settlement',x=>x.instrument.settleCcy='BTC'],
+ ...['Active','Completed','Expired','Stopped','TP3Hit'].map(status=>[status,x=>x.lifecycleStatus=status])
+]) test('planned potential fails closed: '+name,()=>{const c=runtime(),x=projectionInput(c);mutate(x);assert.equal(c.calculatePlannedTargetPotential(x),null);});
+test('Pending supports projection; current ticker metadata cannot prove monetary semantics',()=>{
+ const c=runtime(),x=projectionInput(c);x.lifecycleStatus='Pending';assert.ok(c.calculatePlannedTargetPotential(x));
+ x.instrument=sources().price;assert.equal(c.calculatePlannedTargetPotential(x),null);
+ assert.equal(c.calculateAccountRisk(inputs()).targetPotential,null);
+});
+test('endpoint keeps unsupported metadata null, ignores client evidence, and gates final risk state',async()=>{
+ const c=runtime(),t=Date.now(),s=sources(),x=projectionInput(c),counts={redis:0,ticker:0,candles:0};
+ s.price.timestamp=t;s.candles.data[0].openTime=t-day-3600000;
+ const trade={tradeId:'test',setupKey:'BTC:Long',symbol:'BTCUSDT',direction:'Long',action:'Strong Buy',opportunityScore:90,confidence:90,riskReward:2,tradeAllowed:true,tradeReadiness:{ready:true},initialPlan:{...x.plan,expiresAt:new Date(t+3600000).toISOString()},outcome:{status:'WaitingEntry'}};
+ c.getRedisConfig=()=>({});c.runRedisCommand=async cmd=>{assert.equal(cmd[0],'GET');counts.redis++;return JSON.stringify([trade]);};
+ c.fetchOKXTicker=async()=>{counts.ticker++;return s.price;};c.fetchOKXKlines=async()=>{counts.candles++;return s.candles;};
+ const body={tradeId:'test',account:{...inputs().account,asOf:new Date(t).toISOString()},instrument:x.instrument,plan:x.plan};
+ let r=await c.readAccountRisk(body);assert.equal(r.targetPotential,null);assert.equal(r.targetPotentialReason,'UNVERIFIED_INSTRUMENT_OR_EXIT_STRATEGY');assert.deepEqual(counts,{redis:1,ticker:1,candles:1});
+ // Authoritative universe fixture, separate from ticker and client metadata.
+ c.fetchOKXSwapSymbols=async()=>({ok:true,source:'OKX',symbols:[{instId:'BTC-USDT-SWAP',symbol:'BTC-USDT-SWAP',marketSymbol:'BTCUSDT',instType:'SWAP',ctType:'linear',settleCcy:'USDT',state:'live'}]});r=await c.readAccountRisk(body);assert.equal(r.targetPotential.weightedAmount,112.5);assert.equal(r.executionAuthorized,false);
+ s.price.price=100.5;body.plan={takeProfit1:999};assert.equal((await c.readAccountRisk(body)).targetPotential.weightedAmount,112.5);
+ s.price.price=500;assert.equal((await c.readAccountRisk(body)).targetPotential,null);
+ s.price.price=100;trade.outcome.status='Active';assert.equal((await c.readAccountRisk(body)).targetPotential,null);
+ trade.outcome.status='Pending';trade.initialPlan.expiresAt=new Date(t-1).toISOString();assert.equal((await c.readAccountRisk(body)).targetPotential,null);
+});
+
+const instrumentRecord=()=>({instId:'BTC-USDT-SWAP',instType:'SWAP',ctType:'linear',settleCcy:'USDT',state:'live',ctVal:'0.01',ctValCcy:'BTC',ctMult:'1',lotSz:'0.01',minSz:'0.01',tickSz:'0.1'});
+test('universe normalization preserves authoritative fields and existing filter, cache and concurrent dedupe',async()=>{
+ const c=runtime(),raw=instrumentRecord();let calls=0;
+ c.fetch=async()=>{calls++;return {ok:true,json:async()=>({code:'0',data:[raw,...[{state:'suspend'},{settleCcy:'BTC'},{instType:'SPOT'}].map(change=>({...raw,...change}))]})};};
+ const [a,b]=await Promise.all([c.fetchOKXSwapSymbols(),c.fetchOKXSwapSymbols()]);
+ assert.equal(calls,1);assert.equal(a.count,1);assert.equal(b.count,1);
+ const item=a.symbols[0];for(const key of Object.keys(raw))assert.equal(item[key],raw[key],key);
+ for(const [key,value] of Object.entries({symbol:raw.instId,marketSymbol:'BTCUSDT',baseAsset:'BTC',quoteAsset:'USDT',settleAsset:'USDT'}))assert.equal(item[key],value);
+ item.ctType='inverse';assert.equal((await c.fetchOKXSwapSymbols()).symbols[0].ctType,'linear');assert.equal(calls,1);
+ vm.runInContext("sourceResponses.get('okx:symbols').expiresAt = 0",c);
+ c.fetch=async()=>{calls++;throw Error('offline');};assert.equal((await c.fetchOKXSwapSymbols()).ok,false);assert.equal(calls,2);
+});
+for(const [name,change] of [
+ ['valid',r=>r],['inverse',r=>({...r,ctType:'inverse'})],['settlement',r=>({...r,settleCcy:'BTC'})],
+ ['state',r=>({...r,state:'suspend'})],['type',r=>({...r,instType:'FUTURES'})],
+ ['wrong identity',r=>({...r,instId:'ETH-USDT-SWAP'})],['missing identity',r=>({...r,instId:undefined})],
+ ['wrong market symbol',r=>({...r,marketSymbol:'ETHUSDT'})],['duplicate',r=>[r,r]],
+ ['missing',()=>[]],['failed',()=>null],['throws',()=>{throw Error('offline');}]
+])test('authoritative risk lookup '+name,async()=>{
+ const c=runtime(),t=Date.now(),s=sources(),x=projectionInput(c);s.price.timestamp=t;s.candles.data[0].openTime=t-day-3600000;
+ const trade={tradeId:'test',setupKey:'BTC:Long',symbol:'BTCUSDT',direction:'Long',action:'Strong Buy',opportunityScore:90,confidence:90,riskReward:2,tradeAllowed:true,tradeReadiness:{ready:true},initialPlan:{...x.plan,expiresAt:new Date(t+3600000).toISOString()},outcome:{status:'WaitingEntry'}};
+ c.getRedisConfig=()=>({});c.runRedisCommand=async cmd=>{assert.equal(cmd[0],'GET');return JSON.stringify([trade]);};
+ c.fetchOKXTicker=async()=>s.price;c.fetchOKXKlines=async()=>s.candles;
+ c.fetchOKXSwapSymbols=async()=>{const record=change({...instrumentRecord(),symbol:'BTC-USDT-SWAP',marketSymbol:'BTCUSDT'});return {ok:record!==null,source:'OKX',symbols:Array.isArray(record)?record:[record]};};
+ const before=JSON.stringify(trade);
+ const r=await c.readAccountRisk({tradeId:'test',account:{...inputs().account,asOf:new Date(t).toISOString()},instrument:instrumentRecord(),ctType:'linear',settleCcy:'USDT'});
+ assert.equal(r.status,'READY');assert.equal(r.executionAuthorized,false);assert.equal(JSON.stringify(trade),before);
+ if(name==='valid')assert.equal(r.targetPotential.weightedAmount,112.5);else {assert.equal(r.targetPotential,null);assert.equal(r.targetPotentialReason,'UNVERIFIED_INSTRUMENT_OR_EXIT_STRATEGY');}
+ assert.equal(r.instrument,undefined);
 });

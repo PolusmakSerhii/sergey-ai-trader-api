@@ -3239,6 +3239,16 @@ async function requestOKXSwapSymbols() {
 
   return {
     symbol: item.instId,
+    instId: item.instId,
+    instType: item.instType,
+    ctType: item.ctType,
+    settleCcy: item.settleCcy,
+    ctVal: item.ctVal,
+    ctValCcy: item.ctValCcy,
+    ctMult: item.ctMult,
+    lotSz: item.lotSz,
+    minSz: item.minSz,
+    tickSz: item.tickSz,
 
     marketSymbol:
       baseAsset && quoteAsset
@@ -7024,13 +7034,41 @@ function getRiskFrozenReference(plan, direction) {
   return valid ? { source: "frozen-initial-plan", plannedEntry: midpoint, initialStopLoss: stop } : null;
 }
 
+// Pure gross scenario only. Instrument evidence must be server-owned, never request data.
+function calculatePlannedTargetPotential({ plan, direction, riskAmount, lifecycleStatus, instrument }) {
+  if (!["WaitingEntry", "Pending"].includes(lifecycleStatus)) return null;
+  const reference = getRiskFrozenReference(plan, direction);
+  if (!reference || typeof riskAmount !== "number" || !Number.isFinite(riskAmount) || riskAmount <= 0) return null;
+  const strategy = plan.exitStrategy;
+  const fractions = [strategy?.allocations?.TP1, strategy?.allocations?.TP2, strategy?.allocations?.TP3];
+  if (strategy?.version !== "partial-25-25-50-be-v1" || strategy.allocationBasis !== "initial-position" ||
+      strategy.stopManagement?.afterTP1 !== "actual-entry" || strategy.stopManagement?.afterTP2 !== "unchanged" ||
+      !fractions.every(f => typeof f === "number" && Number.isFinite(f) && f > 0) ||
+      Math.abs(fractions.reduce((a, b) => a + b, 0) - 1) > 1e-12 ||
+      fractions[0] !== 0.25 || fractions[1] !== 0.25 || fractions[2] !== 0.5) return null;
+  // SWAP or a USDT-looking symbol alone is not proof of linear settlement.
+  if (instrument?.source !== "OKX" || instrument.instrumentType !== "SWAP" ||
+      instrument.ctType !== "linear" || instrument.settleCcy !== "USDT") return null;
+  const distance = Math.abs(reference.plannedEntry - reference.initialStopLoss);
+  const sign = direction === "Long" ? 1 : -1;
+  const targets = [plan.takeProfit1, plan.takeProfit2, plan.takeProfit3].map((price, i) => {
+    const rMultiple = sign * (price - reference.plannedEntry) / distance;
+    return { fraction: fractions[i], rMultiple, contribution: riskAmount * rMultiple * fractions[i] };
+  });
+  const weightedR = targets.reduce((sum, t) => sum + t.rMultiple * t.fraction, 0);
+  const weightedAmount = riskAmount * weightedR;
+  if (![weightedR, weightedAmount, ...targets.flatMap(t => [t.rMultiple, t.contribution])].every(v => Number.isFinite(v) && v > 0)) return null;
+  return { mode: "planned", currency: "USDT", basis: "linear-gross-before-costs",
+    tp1: targets[0], tp2: targets[1], tp3: targets[2], weightedR, weightedAmount };
+}
+
 function calculateAccountRisk({ account = {}, plan = {}, direction, dataSafety, now = Date.now() }) {
   const positive = v => typeof v === "number" && Number.isFinite(v) && v > 0;
   const nonnegative = v => typeof v === "number" && Number.isFinite(v) && v >= 0;
   const base = { status: "UNAVAILABLE", reasonCodes: [], configurationSource: "user-declared, not exchange-verified",
     executionAuthorized: false, quantity: null, quantityReason: "MISSING_INSTRUMENT_METADATA",
     costs: { fees: null, slippage: null, funding: null, netRisk: null, basis: "gross before costs" },
-    calculation: null };
+    calculation: null, targetPotential: null };
   const stop = (status, ...codes) => ({ ...base, status, reasonCodes: codes });
   if (!positive(account.balance)) return stop("UNAVAILABLE", "INVALID_BALANCE");
   if (!positive(account.riskPercent) || account.riskPercent > 100 ||
@@ -7069,18 +7107,18 @@ async function readAccountRisk(body) {
   if (!body || typeof body.tradeId !== "string" || body.tradeId.length > 200) throw new Error("Invalid trade identity");
   const trades = parseOpenTrades(await runRedisCommand(["GET", OPEN_TRADES_KEY]));
   const trade = trades.find(t => t.tradeId === body.tradeId);
-  if (!trade || !isConfirmedAPlusTradeSignal(trade)) return { status: "UNAVAILABLE", reasonCodes: ["FROZEN_PLAN_UNAVAILABLE"], executionAuthorized: false };
+  if (!trade || !isConfirmedAPlusTradeSignal(trade)) return { status: "UNAVAILABLE", reasonCodes: ["FROZEN_PLAN_UNAVAILABLE"], targetPotential: null, executionAuthorized: false };
   const reference = getRiskFrozenReference(trade.initialPlan, trade.direction);
-  if (!reference) return { status: "BLOCKED", reasonCodes: ["INVALID_FROZEN_PLAN"], executionAuthorized: false };
+  if (!reference) return { status: "BLOCKED", reasonCodes: ["INVALID_FROZEN_PLAN"], targetPotential: null, executionAuthorized: false };
   if (trade.outcome.status === "Active") return {
-    status: "BLOCKED", mode: "existing-position", reasonCodes: ["EXISTING_ACTIVE_TRADE"], executionAuthorized: false,
+    status: "BLOCKED", mode: "existing-position", reasonCodes: ["EXISTING_ACTIVE_TRADE"], targetPotential: null, executionAuthorized: false,
     tradeId: trade.tradeId, reference: { ...reference,
       actualEntry: typeof trade.outcome.entryPrice === "number" && Number.isFinite(trade.outcome.entryPrice) && trade.outcome.entryPrice > 0 ? trade.outcome.entryPrice : null,
       currentStopLoss: typeof trade.outcome.currentStopLoss === "number" && Number.isFinite(trade.outcome.currentStopLoss) && trade.outcome.currentStopLoss > 0 ? trade.outcome.currentStopLoss : null },
     calculation: null
   };
   if (!Number.isFinite(Date.parse(trade.initialPlan.expiresAt)) || Date.parse(trade.initialPlan.expiresAt) <= Date.now()) {
-    return { status: "BLOCKED", reasonCodes: ["EXPIRED_PLAN"], executionAuthorized: false };
+    return { status: "BLOCKED", reasonCodes: ["EXPIRED_PLAN"], targetPotential: null, executionAuthorized: false };
   }
   const [price, candles] = await Promise.all([
     fetchOKXTicker(trade.symbol, "SWAP"), fetchOKXKlines(trade.symbol, "1D", 2, "SWAP")
@@ -7089,6 +7127,25 @@ async function readAccountRisk(body) {
   const result = calculateAccountRisk({ account: body.account, plan: trade.initialPlan, direction: trade.direction, dataSafety });
   if (result.status === "READY" && !(price.price >= trade.initialPlan.entryZone.from && price.price <= trade.initialPlan.entryZone.to)) {
     result.status = "BLOCKED"; result.reasonCodes = ["OUTSIDE_ENTRY_ZONE"];
+  }
+  if (result.status === "READY") {
+    // Reuse the universe cache; never accept instrument semantics from the request body.
+    let instrument = null;
+    try {
+      const universe = await fetchOKXSwapSymbols();
+      const expectedId = `${trade.symbol.replace(/USDT$/, "")}-USDT-SWAP`;
+      const matches = universe?.ok === true && universe.source === "OKX" && Array.isArray(universe.symbols)
+        ? universe.symbols.filter(item => item?.instId === expectedId) : [];
+      const record = matches.length === 1 ? matches[0] : null;
+      if (record && price.instId === expectedId && record.symbol === expectedId &&
+          record.marketSymbol === trade.symbol && record.instType === "SWAP" &&
+          record.ctType === "linear" && record.settleCcy === "USDT" && record.state === "live") {
+        instrument = { source: "OKX", instrumentType: record.instType, ctType: record.ctType, settleCcy: record.settleCcy };
+      }
+    } catch { /* Optional projection fails closed; existing risk calculation is unchanged. */ }
+    result.targetPotential = calculatePlannedTargetPotential({ plan: trade.initialPlan, direction: trade.direction,
+      riskAmount: result.calculation.riskAmount, lifecycleStatus: trade.outcome.status, instrument });
+    if (!result.targetPotential) result.targetPotentialReason = "UNVERIFIED_INSTRUMENT_OR_EXIT_STRATEGY";
   }
   const expires = Math.min(price.timestamp + 60000, Date.parse(body.account?.asOf) + 60000,
     Date.parse(dataSafety.candles.lastConfirmedAt) + dataSafety.candles.maxAgeMs);
