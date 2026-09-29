@@ -78,3 +78,16 @@ test('failed persistence returns 503 and never reports a registered trade',async
   assert.equal(c.res.body.tradeRegistration,undefined);
   assert.equal(c.res.body.error,'Live trade registration unavailable');
 });
+
+test('original live projection is transported on same response and frozen without another request',async()=>{
+  const c=runtime();c.rsi14=61;
+  c.probability={confidence:{score:95},aiAssessment:{direction:'Long',tradeAllowed:true}};
+  c.recommendation={action:'Strong Buy',confidence:80};
+  await vm.runInContext(liveBlock,c);
+  const snapshot=c.createFrozenTradeCandidate(c.registrations[0].item,c.registrations[0].capturedAt).researchSnapshot;
+  assert.equal(snapshot.telemetryStatus,'captured');assert.equal(snapshot.indicators.rsi14,61);
+  assert.equal(snapshot.analysisAt,c.res.body.time);assert.equal(snapshot.capturedAt,c.res.body.time);
+  assert.equal(c.res.body.researchProjectionJSON,c.registrations[0].item.researchProjectionJSON);
+  const n=runtime();n.executionAnalysis.action='Buy';await vm.runInContext(liveBlock,n);
+  assert.equal(n.res.body.researchProjectionJSON,undefined);assert.equal(n.registrations.length,0);
+});

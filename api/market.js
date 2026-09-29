@@ -3714,6 +3714,7 @@ function createScannerAnalysis(payload, symbol) {
       technical.tradePlan || {};
     return {
       symbol,
+      researchProjectionJSON: typeof payload.researchProjectionJSON === "string" ? payload.researchProjectionJSON : undefined,
       ok: true,
 
       price:
@@ -6440,11 +6441,113 @@ async function writeGlobalRankingCache(snapshot, execute = runRedisCommand) {
   }
 }
 
+// Passive original-signal telemetry. Never an input to a trading calculation.
+const RESEARCH_SCHEMA = "original-signal-research-v2";
+const RESEARCH_MAX_BYTES = 2304;
+function researchBytes(value) {
+  return encodeURIComponent(JSON.stringify(value)).replace(/%[A-F\d]{2}/gi, "x").length;
+}
+function unavailableResearch(tradeId, capturedAt, reasonCode) {
+  return { schemaVersion: RESEARCH_SCHEMA, telemetryStatus: "unavailable",
+    tradeId, capturedAt, reasonCode };
+}
+
+// v2 omits parent tradeId, exact swing/range levels, free-form reasons, and duplicate
+// component inputs. Null means unavailable; missing v1-only fields are intentionally
+// outside this contract. Structure counts cover only the provider-calculated last-3 sample.
+// Explicit allowlist; raw analysis/provider/request objects are never transported.
+function projectOriginalResearch(input) {
+  try {
+    const t = input.technical || {}, p = t.probability || {}, e = t.marketEnvironment || {};
+    const r = t.tradeReadiness || {}, plan = t.tradePlan || {}, safety = input.dataSafety || {};
+    const n = v => typeof v === "number" && Number.isFinite(v) ? v : null;
+    const b = v => typeof v === "boolean" ? v : null;
+    const str = v => typeof v === "string" && v.length <= 48 ? v : null;
+    const fields = (v, names, convert = n) => {
+      if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+      const out = {}; for (const name of names.split(" ")) out[name] = convert(v[name]);
+      return out;
+    };
+    const component = (v, names) => fields(v, names, x => typeof x === "boolean" ? x : typeof x === "string" ? str(x) : n(x));
+    // Counts describe only the bounded returned sample, never all market structures.
+    const structures = (v, bullish, bearish) => {
+      if (!Array.isArray(v) || v.length > 3 || v.some(x => !x || ![bullish, bearish].includes(x.type))) return null;
+      return { bullish: v.filter(x => x.type === bullish).length,
+        bearish: v.filter(x => x.type === bearish).length };
+    };
+    const structureState = (v, available) => available && v !== "Unknown" ? str(v) : null;
+    const snapshot = {
+      schemaVersion: RESEARCH_SCHEMA, telemetryStatus: "captured", capturedAt: null,
+      analysisAt: str(input.analysisAt),
+      instrument: { symbol: str(input.symbol), instrumentType: str(input.instrumentType) },
+      decision: { opportunityScore: n(input.opportunity?.score), opportunityGrade: str(input.opportunity?.grade),
+        confirmedAPlus: b(input.opportunity?.confirmedAPlus), signalConfidence: n(p.confidence?.score),
+        recommendationConfidence: n(t.recommendation?.confidence), direction: str(p.aiAssessment?.direction || p.direction),
+        action: str(t.recommendation?.action), tradeAllowed: b(p.aiAssessment?.tradeAllowed),
+        setupScore: n(plan.setupScore), riskReward: n(plan.riskReward) },
+      indicators: { rsi14: n(t.rsi14), ema20: n(t.ema20), ema50: n(t.ema50), ema100: n(t.ema100), ema200: n(t.ema200),
+        macd: component(t.macd, "macd signal histogram"), atr14: n(t.atr14),
+        volumeStats: component(t.volumeStats, "ratio spike") },
+      structure: { bos: structureState(t.bos, !!t.swingLevels),
+        choch: structureState(t.choch, !!t.swingLevels && n(t.ema20) !== null && n(t.ema50) !== null),
+        liquiditySweep: structureState(t.liquiditySweep, !!t.swingLevels), mss: structureState(t.mss, !!t.swingLevels),
+        premiumDiscount: component(t.premiumDiscount, "zone"),
+        imbalance: component(t.imbalance, "type bodyRatio"),
+        fvgSummary: structures(t.fvg, "Bullish FVG", "Bearish FVG"),
+        orderBlockSummary: structures(t.orderBlocks, "Bullish Order Block", "Bearish Order Block"),
+        equalHighLowSummary: t.equalHighLow ? {
+          returnedHighCount: Array.isArray(t.equalHighLow.equalHighs) ? Math.min(3, t.equalHighLow.equalHighs.length) : null,
+          returnedLowCount: Array.isArray(t.equalHighLow.equalLows) ? Math.min(3, t.equalHighLow.equalLows.length) : null } : null,
+        smartMoneyScore: n(t.smartMoney?.score), smartMoneyRating: str(t.smartMoney?.rating) },
+      probability: { version: str(p.version), longScore: n(p.longScore), shortScore: n(p.shortScore),
+        scoreDifference: n(p.scoreDifference), bullish: n(p.probabilities?.bullish), bearish: n(p.probabilities?.bearish),
+        neutral: n(p.probabilities?.neutral),
+        confidenceComponents: fields(p.confidence?.components, "strength separation confluence volume") },
+      environment: { version: str(e.version), score: n(e.score), condition: str(e.condition), tradable: b(e.tradable),
+        components: { participation: component(e.components?.participation, "score status"),
+          volatility: component(e.components?.volatility, "score status atrPercent"),
+          clarity: component(e.components?.clarity, "score status"),
+          dataQuality: component(e.components?.dataQuality, "score status coinGlassAvailable") }, trend: str(t.trend) },
+      readiness: { version: str(r.version), score: n(r.score), ready: b(r.ready), status: str(r.status), direction: str(r.direction),
+        components: { environment: fields(r.components?.environment, "score"),
+          confidence: fields(r.components?.confidence, "score"),
+          clarity: fields(r.components?.clarity, "score"),
+          separation: fields(r.components?.separation, "score") } },
+      provenance: { projectionRevision: "2", dailySource: str(safety.candles?.source), dailyBar: str(safety.candles?.timeframe),
+        confirmedOnly: input.confirmedOnly === true ? true : null,
+        dailyLastConfirmedAt: str(safety.candles?.lastConfirmedAt), confirmedCount: n(input.confirmedCount),
+        priceSource: str(safety.price?.source), priceTimestamp: str(safety.price?.asOf) }
+    };
+    return researchBytes(snapshot) <= RESEARCH_MAX_BYTES ? snapshot : unavailableResearch(null, null, "SIZE_LIMIT");
+  } catch {
+    return unavailableResearch(null, null, "PROJECTION_ERROR");
+  }
+}
+
+function bindOriginalResearch(item, trade) {
+  try {
+    const raw = item.researchProjectionJSON;
+    if (typeof raw !== "string" || raw.length > RESEARCH_MAX_BYTES) return unavailableResearch(trade.tradeId, trade.initialPlan.createdAt, "MISSING_PROJECTION");
+    const snapshot = JSON.parse(raw);
+    if (snapshot.schemaVersion !== RESEARCH_SCHEMA) return unavailableResearch(trade.tradeId, trade.initialPlan.createdAt, "INVALID_PROJECTION");
+    if (snapshot.telemetryStatus === "unavailable") return unavailableResearch(trade.tradeId, trade.initialPlan.createdAt,
+      snapshot.reasonCode === "SIZE_LIMIT" ? "SIZE_LIMIT" : "PROJECTION_ERROR");
+    if (snapshot.telemetryStatus !== "captured" || snapshot.instrument?.symbol !== trade.symbol ||
+        snapshot.instrument?.instrumentType !== "SWAP" || snapshot.decision?.confirmedAPlus !== true) {
+      return unavailableResearch(trade.tradeId, trade.initialPlan.createdAt, "IDENTITY_MISMATCH");
+    }
+    snapshot.capturedAt = trade.initialPlan.createdAt;
+    return researchBytes(snapshot) <= RESEARCH_MAX_BYTES ? snapshot : unavailableResearch(trade.tradeId, trade.initialPlan.createdAt, "SIZE_LIMIT");
+  } catch { return unavailableResearch(trade.tradeId, trade.initialPlan.createdAt, "INVALID_PROJECTION"); }
+}
+
 // Shared creation/update projection; only the existing lifecycle advances state.
 function createFrozenTradeCandidate(item, capturedAt) {
   if (!item?.symbol || !Number.isFinite(Date.parse(capturedAt)) ||
       !isConfirmedAPlusTrade(item)) throw new Error("Canonical A+ candidate required");
-  return buildTrackedTradeSignal({ ...item, grade: "A+", opportunityGrade: "A+" }, capturedAt);
+  const candidate = buildTrackedTradeSignal({ ...item, grade: "A+", opportunityGrade: "A+" }, capturedAt);
+  candidate.researchSnapshot = bindOriginalResearch(item, candidate);
+  return candidate;
 }
 
 function buildTrackedTradeSignal(item, capturedAt, previousSignal = null, recentPriceRange = null) {
@@ -6643,6 +6746,7 @@ function buildTrackedTradeSignal(item, capturedAt, previousSignal = null, recent
     takeProfit3:
       initialPlan?.takeProfit3 ?? item.takeProfit3 ?? null,
     initialPlan,
+    ...(previousSignal?.researchSnapshot !== undefined ? { researchSnapshot: previousSignal.researchSnapshot } : {}),
     outcome
   };
 }
@@ -7234,6 +7338,7 @@ function projectValidationTrade(signal) {
       tradeReadiness: { ready: signal.tradeReadiness.ready }, riskReward: signal.riskReward },
     // Lossless JSON preserves empty arrays and OHLC/price precision through Redis cjson.
     initialPlanJSON: JSON.stringify(plan), outcomeJSON: JSON.stringify(outcome),
+    ...(signal.researchSnapshot !== undefined ? { researchSnapshotJSON: JSON.stringify(signal.researchSnapshot) } : {}),
     result: { classification, resultR: classification ? outcome.resultR : null,
       completedAt: classification ? iso(outcome.checkedAt) : null },
     terminal: stage === 2, stage, progressAt: progressTimes.at(-1) || "",
@@ -7267,8 +7372,9 @@ async function collectValidationArchive(signals, execute = runRedisCommand, reco
 }
 
 function hydrateValidationTrade(record) {
-  const { initialPlanJSON, outcomeJSON, ...metadata } = record;
-  return { ...metadata, initialPlan: JSON.parse(initialPlanJSON), outcome: JSON.parse(outcomeJSON) };
+  const { initialPlanJSON, outcomeJSON, researchSnapshotJSON, ...metadata } = record;
+  return { ...metadata, initialPlan: JSON.parse(initialPlanJSON), outcome: JSON.parse(outcomeJSON),
+    ...(researchSnapshotJSON !== undefined ? { researchSnapshot: JSON.parse(researchSnapshotJSON) } : {}) };
 }
 
 function summarizeValidationArchive(records) {
@@ -9431,6 +9537,7 @@ const ranked =
   globalScanner
     ? ranked.map(item => ({
         symbol: item.symbol,
+        researchProjectionJSON: item.researchProjectionJSON,
         confirmedAPlus: item.confirmedAPlus === true,
 
         price:
@@ -10338,6 +10445,21 @@ const marketSummary =
     const liveOpportunity = calculateScannerOpportunity(executionAnalysis);
     const confirmedAPlus = liveOpportunity.confirmedAPlus;
     const analysisTime = new Date().toISOString();
+    let researchProjectionJSON;
+    if (confirmedAPlus) try {
+      researchProjectionJSON = JSON.stringify(projectOriginalResearch({
+      symbol, instrumentType, analysisAt: analysisTime, opportunity: liveOpportunity, dataSafety,
+      confirmedOnly: true, confirmedCount: okxConfirmedDailyCandles.length,
+      technical: { rsi14, ema20, ema50, ema100, ema200, trend, macd, atr14, volumeStats, swingLevels,
+        bos, choch, liquiditySweep, fvg, orderBlocks, premiumDiscount, equalHighLow, imbalance, mss,
+        probability, smartMoney, tradePlan, recommendation, marketEnvironment, tradeReadiness }
+      }));
+    } catch {
+      // Includes input assembly/serialization failures; canonical persistence errors stay outside this catch.
+      researchProjectionJSON = JSON.stringify({ schemaVersion: "original-signal-research-v2",
+        telemetryStatus: "unavailable", tradeId: null, capturedAt: null, reasonCode: "PROJECTION_ERROR" });
+    }
+    executionAnalysis.researchProjectionJSON = researchProjectionJSON;
     let registeredLiveTrade = null;
     try {
       registeredLiveTrade = await registerLiveAnalysisTrade(
@@ -10353,6 +10475,7 @@ const marketSummary =
       source: "CoinGecko + OKX + CoinGlass V4",
       capabilities: { orderFlow: true, accountRisk: true },
       dataSafety,
+      researchProjectionJSON,
       tradeRegistration: registeredLiveTrade ? {
         tradeId: registeredLiveTrade.tradeId,
         status: registeredLiveTrade.outcome.status
