@@ -413,6 +413,11 @@ test("trade ledger and backups against isolated Redis (no TCP or production)", a
       try {
         context.fetchOKXRecentPriceRange=async()=>({source:"OKX 1m candles",data:candles});
         assert.equal(await context.writeRankingHistory(snapshot(0)),true);
+        // Seed an existing legacy policy; new registrations now use TP1 reanalysis.
+        const existing=JSON.parse(await redis(["GET",keys.openTrades]));
+        existing[0].initialPlan.exitStrategy=context.createPartialExitStrategy();
+        existing[0].outcome.lifecycleVersion="partial-candles-v1";
+        await redis(["SET",keys.openTrades,JSON.stringify(existing)]);
         assert.equal(await context.writeRankingHistory(snapshot(2)),true);
         const first=JSON.parse(await redis(["GET",keys.openTrades]))[0];
         assert.equal(first.outcome.status,"Active");assert.equal(first.outcome.remainingPosition,.75);

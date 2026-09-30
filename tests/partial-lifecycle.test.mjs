@@ -144,7 +144,7 @@ test('new snapshots get frozen strategy while existing waiting and active plans 
   const c=runtime(),p=plan(c);delete p.exitStrategy;delete p.initialStopLoss;
   const item={...p,symbol:'TESTUSDT',direction:'Long',price:100,opportunityGrade:'A+',opportunityScore:90,confidence:90,riskReward:2,action:'Strong Buy',tradeAllowed:true,tradeReadiness:{ready:true}};
   const first=await c.createRankingHistoryEntry({generatedAt:time(0),globalRanking:[item]});
-  assert.equal(first.readySignals[0].initialPlan.exitStrategy.allocations.TP1,.25);
+  assert.equal(first.readySignals[0].initialPlan.exitStrategy.allocations.TP1,.5);
   const old={...first.readySignals[0],initialPlan:p,outcome:{status:'WaitingEntry',plannedAt:time(0),lastPriceCheckedAt:time(0)}};
   c.fetchOKXRecentPriceRange=async()=>({source:'OKX 1m candles',data:[candle(0,100,111,99,110)]});
   const next=await c.createRankingHistoryEntry({generatedAt:time(1),globalRanking:[{...item,stopLoss:80}]},{readySignals:[old]});

@@ -4097,6 +4097,130 @@ function processPartialCandle(plan, outcome, candle, direction) {
   return "verified";
 }
 
+function createTp1ReanalysisStrategy() {
+  return { version: "tp1-50-reanalyse-v1", allocationBasis: "initial-position",
+    allocations: { TP1: 0.5 }, remainingFraction: 0.5,
+    stopManagement: { afterTP1: "actual-entry" } };
+}
+
+function prepareTp1ReanalysisOutcome(plan, outcome, previous, direction) {
+  const strategy = plan.exitStrategy;
+  const allocation = strategy?.allocations;
+  const fractions = [allocation?.TP1];
+  const levels = [plan.takeProfit1];
+  const valid = strategy?.version === "tp1-50-reanalyse-v1" &&
+    strategy.allocationBasis === "initial-position" &&
+    strategy.stopManagement?.afterTP1 === "actual-entry" && strategy.remainingFraction === 0.5 &&
+    fractions.every(x => typeof x === "number" && Number.isFinite(x) && x > 0 && x <= 1) &&
+    Math.abs(fractions.reduce((a,b) => a+b, 0) - 0.5) < 1e-12 &&
+    plan.initialStopLoss === plan.stopLoss &&
+    levels.every(x => typeof x === "number" && Number.isFinite(x) && x > 0) &&
+    ["Long", "Short"].includes(direction);
+  if (!valid) return false;
+  // Never silently reset a partially managed position after a damaged state load.
+  if (previous.lifecycleVersion === "tp1-reanalysis-candles-v1" && !Array.isArray(previous.exits)) return false;
+  const exits = Array.isArray(previous.exits) ? previous.exits : [];
+  let remaining = 1, realized = 0;
+  const risk = Math.abs(outcome.entryPrice - plan.initialStopLoss);
+  for (let i = 0; i < exits.length; i += 1) {
+    const event = exits[i];
+    const expectedR = (direction === "Long" ? 1 : -1) *
+      (levels[i] - outcome.entryPrice) / risk * fractions[i];
+    if (i > 0 || event.target !== `TP${i+1}` || event.initialFraction !== fractions[i] ||
+        event.price !== levels[i] || !Number.isFinite(event.realizedR) ||
+        !Number.isFinite(expectedR) || Math.abs(event.realizedR - expectedR) > 1e-10 ||
+        !Number.isFinite(Date.parse(event.checkedAt))) return false;
+    remaining -= event.initialFraction;
+    realized += event.realizedR;
+  }
+  const currentStop = exits.length ? outcome.entryPrice : plan.initialStopLoss;
+  if (previous.lifecycleVersion === "tp1-reanalysis-candles-v1" &&
+      (previous.remainingPosition !== remaining || previous.currentStopLoss !== currentStop ||
+       Math.abs(previous.realizedR - realized) > 1e-10 || !Number.isFinite(previous.realizedR))) return false;
+  Object.assign(outcome, { lifecycleVersion: "tp1-reanalysis-candles-v1", initialStopLoss: plan.initialStopLoss,
+    currentStopLoss: currentStop, initialPositionSize: 1, positionSizeUnit: "normalized-initial-position",
+    remainingPosition: remaining, realizedR: realized, unrealizedR: null, totalR: null,
+    exits: exits.map(event => ({...event})) });
+  outcome.reanalysisPending = exits.length === 1;
+  return true;
+}
+
+function processTp1ReanalysisCandle(plan, outcome, candle, direction) {
+  const sign = direction === "Long" ? 1 : -1;
+  const stopTouched = price => direction === "Long" ? candle.low <= price : candle.high >= price;
+  const targetTouched = price => direction === "Long" ? candle.high >= price : candle.low <= price;
+  const closeExit = (target, price, fraction, rule) => {
+    const realizedR = sign * (price - outcome.entryPrice) /
+      Math.abs(outcome.entryPrice - outcome.initialStopLoss) * fraction;
+    const checkedAt = new Date(candle.timestamp + LIFECYCLE_MINUTE_MS).toISOString();
+    const evidence = { source: "OKX 1m candles", candle, rule, timestampPrecision: "1m" };
+    outcome.exits.push({ target, price, initialFraction: fraction, realizedR, checkedAt, evidence });
+    outcome.realizedR += realizedR;
+    outcome.remainingPosition = Math.max(0, outcome.remainingPosition - fraction);
+    if (outcome.remainingPosition < 1e-12) {
+      outcome.remainingPosition = 0;
+      outcome.status = "Stopped";
+      outcome.reanalysisPending = false;
+      outcome.exitPrice = price;
+      outcome.checkedAt = checkedAt;
+      outcome.resultR = outcome.realizedR;
+      outcome.exitCheck = evidence;
+    }
+  };
+  // Never replay the ambiguous candle. Resume only at its next chronological minute.
+  if (outcome.managementPending) {
+    const pendingCandle = outcome.managementPending.candle;
+    if (!isValidLifecycleCandle(pendingCandle) || pendingCandle.confirmed !== true ||
+        candle.timestamp !== pendingCandle.timestamp + LIFECYCLE_MINUTE_MS) {
+      return "ambiguous_management_candle";
+    }
+    delete outcome.managementPending;
+  }
+  const entryInThisCandle = outcome.entryCheck && Date.parse(outcome.activatedAt) === candle.timestamp;
+  // For a position already active before this candle, the opening price provides
+  // known ordering: targets reached at the open precede a later intraminute stop.
+  if (!entryInThisCandle) {
+    for (let i = outcome.exits.length + 1; i <= 1; i += 1) {
+      const price = plan[`takeProfit${i}`];
+      if (sign * (candle.open - price) < 0) break;
+      closeExit(`TP${i}`, price, plan.exitStrategy.allocations[`TP${i}`], "target-reached-at-candle-open");
+      if (i === 1) {
+        outcome.currentStopLoss = outcome.entryPrice;
+        outcome.reanalysisPending = true;
+        outcome.stopMovedAt = new Date(candle.timestamp).toISOString();
+      }
+      if (outcome.remainingPosition === 0) return "verified";
+    }
+  }
+  const nextPrice = outcome.exits.length === 0 ? plan.takeProfit1 : undefined;
+  if (stopTouched(outcome.currentStopLoss)) {
+    closeExit("STOP", outcome.currentStopLoss, outcome.remainingPosition,
+      targetTouched(nextPrice) ? "same-candle-sl-first" : "first-level-in-candle-order");
+    return "verified";
+  }
+  for (let i = outcome.exits.length + 1; i <= 1; i += 1) {
+    const target = `TP${i}`, price = plan[`takeProfit${i}`];
+    if (!targetTouched(price)) break;
+    closeExit(target, price, plan.exitStrategy.allocations[target], "first-level-in-candle-order");
+    if (i === 1) {
+      outcome.currentStopLoss = outcome.entryPrice;
+        outcome.reanalysisPending = true;
+      outcome.stopMovedAt = new Date(candle.timestamp + LIFECYCLE_MINUTE_MS).toISOString();
+      if (stopTouched(outcome.currentStopLoss)) {
+        const closedBeyondStop = sign * (candle.close - outcome.currentStopLoss) <= 0;
+        if (closedBeyondStop) {
+          closeExit("STOP", outcome.currentStopLoss, outcome.remainingPosition,
+            "tp1-then-close-confirms-break-even-stop");
+          return "verified";
+        }
+        outcome.managementPending = { candle, reason: "TP1 confirmed; order of new BE stop is unknown" };
+        return "ambiguous_management_candle";
+      }
+    }
+  }
+  return "verified";
+}
+
 function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, capturedAt, priceRange }) {
   if (["TP1Hit", "TP3Hit", "Stopped", "Expired"].includes(previousOutcome.status)) return previousOutcome;
   const plannedAt = initialPlan.plannedAt;
@@ -4129,9 +4253,15 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
   const stopLoss = initialPlan.stopLoss;
   const takeProfit1 = initialPlan.takeProfit1;
   const rawLevels = [initialPlan.entryZone?.from, initialPlan.entryZone?.to, stopLoss, takeProfit1];
+  const policy = initialPlan.exitStrategy?.version;
   const partial = initialPlan.exitStrategy !== undefined;
-  if (partial) outcome.lifecycleVersion = "partial-candles-v1";
-  const partialValid = !partial || preparePartialOutcome(initialPlan, outcome, previousOutcome, direction);
+  const reanalysis = policy === "tp1-50-reanalyse-v1";
+  const legacyPartial = policy === "partial-25-25-50-be-v1";
+  if (partial) outcome.lifecycleVersion = reanalysis ? "tp1-reanalysis-candles-v1"
+    : legacyPartial ? "partial-candles-v1" : previousOutcome.lifecycleVersion;
+  const partialValid = !partial || (legacyPartial
+    ? preparePartialOutcome(initialPlan, outcome, previousOutcome, direction)
+    : reanalysis && prepareTp1ReanalysisOutcome(initialPlan, outcome, previousOutcome, direction));
   const validPlan = partialValid && rawLevels.every(value => typeof value === "number" && Number.isFinite(value) && value > 0) &&
     (direction === "Long" ? stopLoss < frozenEntryLow && takeProfit1 > frozenEntryHigh
       : direction === "Short" && stopLoss > frozenEntryHigh && takeProfit1 < frozenEntryLow) &&
@@ -4158,7 +4288,8 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
       verification = "verified";
       const touchesEntry = candle.low <= frozenEntryHigh && candle.high >= frozenEntryLow;
       const activeStop = partial ? outcome.currentStopLoss : stopLoss;
-      const activeTarget = partial ? initialPlan[`takeProfit${outcome.exits.length + 1}`] : takeProfit1;
+      const activeTarget = reanalysis ? (outcome.exits.length ? undefined : takeProfit1)
+        : partial ? initialPlan[`takeProfit${outcome.exits.length + 1}`] : takeProfit1;
       const touchesExit = direction === "Long"
         ? candle.low <= activeStop || candle.high >= activeTarget
         : candle.high >= activeStop || candle.low <= activeTarget;
@@ -4203,7 +4334,9 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
           }
         }
         if (partial) {
-          verification = processPartialCandle(initialPlan, outcome, candle, direction);
+          verification = reanalysis
+            ? processTp1ReanalysisCandle(initialPlan, outcome, candle, direction)
+            : processPartialCandle(initialPlan, outcome, candle, direction);
           if (verification === "ambiguous_management_candle") {
             if (outcome.managementPending?.candle?.timestamp === cursor) cursor += LIFECYCLE_MINUTE_MS;
             break;
@@ -6654,7 +6787,7 @@ function buildTrackedTradeSignal(item, capturedAt, previousSignal = null, recent
         });
   if (!previousSignal) {
     initialPlan = { ...initialPlan, initialStopLoss: initialPlan.stopLoss,
-      exitStrategy: createPartialExitStrategy() };
+      exitStrategy: createTp1ReanalysisStrategy() };
   }
   initialPlan = {
     ...initialPlan,

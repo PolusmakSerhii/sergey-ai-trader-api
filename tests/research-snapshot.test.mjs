@@ -76,6 +76,8 @@ for(const status of ['WaitingEntry','Active','TP3Hit','Stopped']) test('refresh 
 test('activation, TP1/TP2/TP3 and stop preserve telemetry; lifecycle and stats identical',()=>{
  const c=runtime(); const candles=[{o:100,h:101,l:99,c:100},{o:105,h:111,l:104,c:110},{o:111,h:121,l:110,c:120},{o:121,h:131,l:120,c:130}];
  for(const stop of [false,true]) {let a=candidate(c),b=c.createFrozenTradeCandidate(item(),time);const frozen=JSON.stringify(a.researchSnapshot);
+ a.initialPlan.exitStrategy=c.createPartialExitStrategy();b.initialPlan.exitStrategy=c.createPartialExitStrategy();
+ a.outcome.lifecycleVersion="partial-candles-v1";b.outcome.lifecycleVersion="partial-candles-v1";
  for(let k=0;k<candles.length;k++){const x=stop&&k===1?{o:100,h:101,l:89,c:90}:candles[k];
  const bar={timestamp:Date.parse(at(k)),open:x.o,high:x.h,low:x.l,close:x.c,confirmed:true};
  a=c.buildTrackedTradeSignal(item(),at(k+1),a,{source:'OKX 1m candles',data:[bar]});b=c.buildTrackedTradeSignal(item(),at(k+1),b,{source:'OKX 1m candles',data:[bar]});
