@@ -3682,6 +3682,39 @@ function calculateScannerOpportunity(data) {
   };
 }
 
+// Transient scanner context, never a replacement for the frozen research snapshot.
+function createCurrentAnalysisContext(payload, symbol) {
+  const t = payload?.technical, c = payload?.dataSafety?.candles;
+  if (!t || c?.fresh !== true || c.source !== "OKX" || c.timeframe !== "1D" ||
+      c.instrumentType !== "SWAP" || c.instId !== symbol.replace(/USDT$/, "-USDT-SWAP")) return null;
+  const context = {
+    symbol, analysisAt: payload.time, source: "OKX", timeframe: "1D",
+    lastConfirmedAt: c.lastConfirmedAt,
+    structure: { bos: t.bos, choch: t.choch, mss: t.mss },
+    trend: { trend: t.trend, ema20: t.ema20, ema50: t.ema50, ema100: t.ema100, ema200: t.ema200 },
+    momentum: { rsi14: t.rsi14, macd: { macd: t.macd?.macd, signal: t.macd?.signal, histogram: t.macd?.histogram } },
+    smartMoney: { score: t.smartMoney?.score },
+    volume: { ratio: t.volumeStats?.ratio, spike: t.volumeStats?.spike }
+  };
+  return validateCurrentAnalysisContext(context, symbol, payload.time);
+}
+
+function validateCurrentAnalysisContext(context, symbol, asOf) {
+  if (!context || context.symbol !== symbol || context.source !== "OKX" || context.timeframe !== "1D") return null;
+  const now = Date.parse(asOf), analysis = Date.parse(context.analysisAt), closed = Date.parse(context.lastConfirmedAt);
+  if (![now, analysis, closed].every(Number.isFinite) || analysis > now || closed > analysis ||
+      now - analysis > ENTRY_RANKING_STALE_MS || now - closed > 86400000 + 300000) return null;
+  const { structure: s, trend: t, momentum: m, smartMoney: sm, volume: v } = context;
+  const number = x => typeof x === "number" && Number.isFinite(x);
+  if (!s || !t || !m?.macd || !sm || !v ||
+      ![s.bos, s.choch, s.mss, t.trend].every(x => typeof x === "string" && x.length > 0 && x.length <= 48 && x !== "Unknown") ||
+      ![t.ema20,t.ema50,t.ema100,t.ema200].every(x => number(x) && x > 0) ||
+      ![m.rsi14,sm.score].every(x => number(x) && x >= 0 && x <= 100) ||
+      ![m.macd.macd,m.macd.signal,m.macd.histogram,v.ratio].every(number) ||
+      v.ratio < 0 || typeof v.spike !== "boolean") return null;
+  return context;
+}
+
 // Shared projection keeps live Execution eligibility and Scanner on the same contract.
 function createScannerAnalysis(payload, symbol) {
     const technical =
@@ -3714,6 +3747,7 @@ function createScannerAnalysis(payload, symbol) {
       technical.tradePlan || {};
     return {
       symbol,
+      analysisContext: createCurrentAnalysisContext(payload, symbol),
       researchProjectionJSON: typeof payload.researchProjectionJSON === "string" ? payload.researchProjectionJSON : undefined,
       ok: true,
 
@@ -4221,7 +4255,8 @@ function processTp1ReanalysisCandle(plan, outcome, candle, direction) {
   return "verified";
 }
 
-function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, capturedAt, priceRange }) {
+function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, capturedAt, priceRange, analysisContext = null }) {
+  // Reserved transient input for the future post-TP1 engine; no decision or persistence in Step 3A.
   if (["TP1Hit", "TP3Hit", "Stopped", "Expired"].includes(previousOutcome.status)) return previousOutcome;
   const plannedAt = initialPlan.plannedAt;
   const expiresAt = initialPlan.expiresAt;
@@ -6683,7 +6718,7 @@ function createFrozenTradeCandidate(item, capturedAt) {
   return candidate;
 }
 
-function buildTrackedTradeSignal(item, capturedAt, previousSignal = null, recentPriceRange = null) {
+function buildTrackedTradeSignal(item, capturedAt, previousSignal = null, recentPriceRange = null, currentAnalysisContext = null) {
   const direction =
     item.direction || "Neutral";
   const entryFrom =
@@ -6802,7 +6837,10 @@ function buildTrackedTradeSignal(item, capturedAt, previousSignal = null, recent
       initialPlan?.expiresAt || expiresAt
   };
   const outcome = evaluateTradeLifecycle({ initialPlan, direction,
-    previousOutcome, capturedAt, priceRange: recentPriceRange });
+    previousOutcome, capturedAt, priceRange: recentPriceRange,
+    analysisContext: initialPlan.exitStrategy?.version === "tp1-50-reanalyse-v1" &&
+      previousOutcome.status === "Active" && previousOutcome.reanalysisPending === true
+      ? validateCurrentAnalysisContext(currentAnalysisContext, item.symbol, capturedAt) : null });
 
   return {
     tradeId:
@@ -7007,7 +7045,8 @@ async function createRankingHistoryEntry(
       signal.setupKey === [item.symbol, item.direction || "Neutral"].join(":")) || null;
     return previousSignal
       ? buildTrackedTradeSignal(item, capturedAt, previousSignal,
-          openPriceRanges.get(previousSignal.tradeId) || null)
+          openPriceRanges.get(previousSignal.tradeId) || null,
+          ranking.find(row => row.symbol === previousSignal.symbol)?.analysisContext || null)
       : createFrozenTradeCandidate(item, capturedAt);
   });
   const readyTrades = readyItems.length;
@@ -9670,6 +9709,7 @@ const ranked =
   globalScanner
     ? ranked.map(item => ({
         symbol: item.symbol,
+        analysisContext: item.analysisContext,
         researchProjectionJSON: item.researchProjectionJSON,
         confirmedAPlus: item.confirmedAPlus === true,
 
