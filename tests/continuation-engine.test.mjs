@@ -35,14 +35,41 @@ for(const d of ['Long','Short']){
   for(const x of [null,weak(d,-20)]){const out=run(c,p,one,[candle(1,115,140,110,130,d)],2,d,x);assert.equal(out.status,'Active');assert.equal(out.lastReanalysis,undefined);assert.equal(out.resultR,null);}
   const stopped=run(c,p,one,[candle(1,105,120,99,115,d)],2,d,weak(d,1));assert.equal(stopped.status,'Stopped');assert.equal(stopped.resultR,.5);assert.equal(stopped.exits[1].target,'STOP');
  });
- test(`${d}: no look-ahead, missing input does not execute pending CLOSE; fresh same timestamp can execute once`,()=>{
+ test(`${d}: no look-ahead; accepted pending CLOSE executes without new input exactly once`,()=>{
   const c=runtime(),{p,one}=post(c,d),x=weak(d,2);
   const pending=run(c,p,one,[candle(1,115,140,110,130,d)],2,d,x);assert.equal(pending.status,'Active');assert.equal(pending.lastReanalysis.executionStatus,'pending');
-  const missing=run(c,p,pending,[candle(2,115,140,110,130,d)],3,d,null);assert.equal(missing.status,'Active');assert.equal(missing.exits.length,1);
-  const closed=run(c,p,missing,[candle(3,115,140,110,120,d)],4,d,x);assert.equal(closed.status,'Closed');assert.equal(closed.checkedAt,time(4));
+  const missing=run(c,p,pending,[candle(2,115,140,110,130,d)],3,d,null);assert.equal(missing.status,'Closed');assert.equal(missing.exits.length,2);
+  const closed=run(c,p,missing,[candle(3,115,140,110,120,d)],4,d,x);assert.equal(closed.status,'Closed');assert.equal(closed.checkedAt,time(3));assert.equal(closed,missing);
  });
 }
 test('exactly 70 holds; lower score closes; opposing structure caps total below 70',()=>{const c=runtime(),x=ctx();x.structure=weak().structure;x.smartMoney.score=20;assert.equal(c.calculateContinuationDecision(x,'Long',time(2)).continuationScore,70);assert.equal(c.calculateContinuationDecision(x,'Long',time(2)).decision,'HOLD');x.smartMoney.score=19;assert.equal(c.calculateContinuationDecision(x,'Long',time(2)).decision,'CLOSE');x.structure=ctx('Short').structure;x.smartMoney.score=100;const r=c.calculateContinuationDecision(x,'Long',time(2));assert.equal(r.components.structure,0);assert.equal(r.continuationScore,66.67);assert.equal(r.decision,'CLOSE');});
 test('volume is diagnostic only and approved RSI breakpoints are exact',()=>{const c=runtime(),x=ctx(),a=c.calculateContinuationDecision(x,'Long',time(2));x.volume={ratio:99,spike:true};assert.deepEqual(c.calculateContinuationDecision(x,'Long',time(2)),a);for(const [r,score] of [[0,0],[30,0],[40,25],[50,50],[55,75],[60,100],[70,100],[80,75],[90,50],[100,50]]){x.momentum.rsi14=r;assert.equal(c.calculateContinuationDecision(x,'Long',time(2)).components.momentum,(score+100)/2);}});
 for(const mutate of [x=>x.structure.choch='Nope',x=>x.structure.mss='Bearish MSS',x=>x.trend.trend='Bullish',x=>x.trend.ema20=80,x=>x.momentum.rsi14=101,x=>x.momentum.macd.signal=99,x=>x.smartMoney.score=NaN,x=>delete x.smartMoney])test('invalid component gives no decision: '+mutate,()=>{const c=runtime(),x=ctx();mutate(x);assert.equal(c.calculateContinuationDecision(x,'Long',time(2)),null);});
 test('invalid direction, old analysis and unknown policy cannot close',()=>{const c=runtime(),{p,one}=post(c,'Long');assert.equal(c.calculateContinuationDecision(ctx(),'Neutral',time(2)),null);const old=run(c,p,one,[candle(1,115,140,110,130)],2,'Long',weak('Long',0));assert.equal(old.lastReanalysis,undefined);p.exitStrategy.version='unknown';assert.equal(run(c,p,one,[candle(1,115,140,110,130)],2,'Long',weak('Long',1)).priceCheck.status,'invalid_plan');});
+
+for (const direction of ['Long', 'Short']) {
+ test(`${direction}: pending CLOSE freezes 10:04 across fresh cycles and executes original boundary`, () => {
+  const c=runtime(), {p,one}=post(c,direction);
+  const bars=[1,2,3].map(n=>candle(n,115,125,110,120,direction));
+  const pending=run(c,p,one,bars,4,direction,weak(direction,4));
+  assert.equal(pending.lastReanalysis.decidedAt,time(4));
+  const next=run(c,p,pending,[],5,direction,weak(direction,5));
+  assert.deepEqual(next.lastReanalysis,pending.lastReanalysis);
+  const hold=run(c,p,next,[],6,direction,ctx(direction,6));
+  assert.deepEqual(hold.lastReanalysis,pending.lastReanalysis);
+  const closed=run(c,p,hold,[candle(4,115,125,110,120,direction)],7,direction,ctx(direction,7));
+  assert.equal(closed.status,'Closed');assert.equal(closed.resultR,1.5);
+  assert.equal(closed.exits.length,2);assert.equal(closed.exits[1].initialFraction,.5);
+  assert.equal(closed.lastReanalysis.decidedAt,time(4));assert.equal(closed.checkedAt,time(5));
+  assert.equal(run(c,p,closed,[],8,direction,ctx(direction,8)),closed);
+ });
+ test(`${direction}: pending CLOSE survives missing or expired analysis; BE still wins`, () => {
+  const c=runtime(),{p,one}=post(c,direction);
+  const pending=run(c,p,one,[candle(1,115,125,110,120,direction)],2,direction,weak(direction,2));
+  const closed=run(c,p,pending,[candle(2,115,125,110,120,direction)],25,direction,null);
+  assert.equal(closed.status,'Closed');assert.equal(closed.resultR,1.5);
+  const be=run(c,p,pending,[candle(2,105,120,99,115,direction)],3,direction,ctx(direction,3));
+  assert.equal(be.status,'Stopped');assert.equal(be.resultR,.5);assert.equal(be.exits.length,2);
+  assert.equal(be.exits[1].target,'STOP');assert.equal(run(c,p,be,[],4,direction,weak(direction,4)),be);
+ });
+}

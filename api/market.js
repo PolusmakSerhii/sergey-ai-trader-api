@@ -4170,12 +4170,11 @@ function calculateContinuationDecision(context, direction, asOf) {
     analysisAt: context.analysisAt, reasons: [decision === "HOLD" ? "CONTINUATION_SUPPORTED" : "INSUFFICIENT_CONTINUATION"] };
 }
 
-// An accepted CLOSE is a bounded intent, not a reused analysis or a new signal.
-function executeContinuationClose(outcome, candle, direction, now) {
+// An accepted CLOSE stays frozen until execution or the existing BE stop closes the trade.
+function executeContinuationClose(outcome, candle, direction) {
   const decision = outcome.lastReanalysis;
   if (outcome.status !== "Active" || !outcome.reanalysisPending || outcome.remainingPosition !== 0.5 ||
       decision?.decision !== "CLOSE" || decision.executionStatus !== "pending" ||
-      !Number.isFinite(Date.parse(decision.validUntil)) || now > Date.parse(decision.validUntil) ||
       !Number.isFinite(Date.parse(decision.decidedAt)) ||
       candle.timestamp < Math.ceil(Date.parse(decision.decidedAt) / LIFECYCLE_MINUTE_MS) * LIFECYCLE_MINUTE_MS) return;
   const fraction = outcome.remainingPosition;
@@ -4366,9 +4365,10 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
        (direction === "Long" ? outcome.entryPrice > stopLoss && outcome.entryPrice < takeProfit1
          : outcome.entryPrice < stopLoss && outcome.entryPrice > takeProfit1)));
   // Never apply current analysis to candles preceding its source timestamp.
-  // Persist the latest decision in the existing outcome, but require fresh input on each execution pass.
-  let continuationInputValid = false;
-  if (reanalysis && validPlan && previousOutcome.status === "Active" && previousOutcome.reanalysisPending &&
+  // A pending CLOSE is already accepted: never replace it with a newer analysis.
+  const pendingClose = outcome.lastReanalysis?.decision === "CLOSE" &&
+    outcome.lastReanalysis.executionStatus === "pending";
+  if (!pendingClose && reanalysis && validPlan && previousOutcome.status === "Active" && previousOutcome.reanalysisPending &&
       outcome.remainingPosition === 0.5) {
     const analysisTime = Date.parse(analysisContext?.analysisAt);
     const tp1Time = Date.parse(outcome.exits[0]?.checkedAt);
@@ -4377,11 +4377,8 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
         (!outcome.lastReanalysis || analysisTime >= lastTime)) {
       const decision = calculateContinuationDecision(analysisContext, direction, capturedAt);
       if (decision) {
-        continuationInputValid = true;
         if (!outcome.lastReanalysis || analysisTime > lastTime) outcome.lastReanalysis = {
           ...decision, decidedAt: analysisContext.analysisAt,
-          validUntil: new Date(Math.min(analysisTime + ENTRY_RANKING_STALE_MS,
-            Date.parse(analysisContext.lastConfirmedAt) + 86400000 + 300000)).toISOString(),
           executionStatus: decision.decision === "CLOSE" ? "pending" : "observed" };
       }
     }
@@ -4458,7 +4455,7 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
             break;
           }
           // BE/ambiguous-candle handling above always precedes a discretionary close.
-          if (reanalysis && continuationInputValid) executeContinuationClose(outcome, candle, direction, now);
+          if (reanalysis) executeContinuationClose(outcome, candle, direction);
           outcome.markPrice = candle.close;
           outcome.markPriceAt = new Date(candle.timestamp + LIFECYCLE_MINUTE_MS).toISOString();
           if (outcome.remainingPosition === 0) {
