@@ -4131,6 +4131,67 @@ function processPartialCandle(plan, outcome, candle, direction) {
   return "verified";
 }
 
+// Pure v1 scoring. Null means no decision; volume remains diagnostic only.
+function calculateContinuationDecision(context, direction, asOf) {
+  if (!["Long", "Short"].includes(direction) ||
+      !validateCurrentAnalysisContext(context, context?.symbol, asOf)) return null;
+  const aligned = direction === "Long" ? "Bullish" : "Bearish";
+  const opposite = direction === "Long" ? "Bearish" : "Bullish";
+  const { structure: s, trend: t, momentum: m } = context;
+  let structure;
+  if (s.bos === `${aligned} BOS` && s.mss === `${aligned} MSS`) {
+    if (s.choch === `${aligned} CHOCH`) structure = 100;
+    else if (s.choch === "No CHOCH") structure = 75;
+  } else if (s.bos === "Inside Range" && s.choch === "No CHOCH" && s.mss === "No MSS") structure = 50;
+  else if (s.bos === `${opposite} BOS` && s.mss === `${opposite} MSS`) {
+    if (s.choch === "No CHOCH") structure = 25;
+    else if (s.choch === `${opposite} CHOCH`) structure = 0;
+  }
+  const d = direction === "Long" ? 1 : -1;
+  const deltas = [t.ema20 - t.ema50, t.ema50 - t.ema100, t.ema100 - t.ema200];
+  const alignedChain = deltas.every(x => d * x > 0), oppositeChain = deltas.every(x => d * x < 0);
+  let trend;
+  if (t.trend === `Strong ${aligned}` && alignedChain) trend = 100;
+  else if (t.trend === `Strong ${opposite}` && oppositeChain) trend = 0;
+  else if (t.trend === "Neutral") trend = alignedChain ? 75 : oppositeChain ? 25 : 50;
+  if (!Number.isFinite(structure) || !Number.isFinite(trend) ||
+      Math.abs(m.macd.histogram - (m.macd.macd - m.macd.signal)) > 0.0002) return null;
+  const r = direction === "Long" ? m.rsi14 : 100 - m.rsi14;
+  const rsi = r <= 30 ? 0 : r <= 50 ? 2.5 * (r - 30) : r <= 60 ? 50 + 5 * (r - 50)
+    : r <= 70 ? 100 : r <= 90 ? 100 - 2.5 * (r - 70) : 50;
+  const signScore = x => x > 0 ? 100 : x < 0 ? 0 : 50;
+  const macd = (signScore(d * m.macd.macd) + signScore(d * m.macd.histogram)) / 2;
+  const momentum = (Math.max(0, Math.min(100, rsi)) + macd) / 2;
+  const smartMoney = direction === "Long" ? context.smartMoney.score : 100 - context.smartMoney.score;
+  const continuationScore = Math.max(0, Math.min(100,
+    Math.round((30 * structure + 25 * trend + 20 * momentum + 15 * smartMoney) / 90 * 100) / 100));
+  const decision = continuationScore >= 70 ? "HOLD" : "CLOSE";
+  return { decision, continuationScore, components: { structure, trend, momentum, smartMoney },
+    analysisAt: context.analysisAt, reasons: [decision === "HOLD" ? "CONTINUATION_SUPPORTED" : "INSUFFICIENT_CONTINUATION"] };
+}
+
+// An accepted CLOSE is a bounded intent, not a reused analysis or a new signal.
+function executeContinuationClose(outcome, candle, direction, now) {
+  const decision = outcome.lastReanalysis;
+  if (outcome.status !== "Active" || !outcome.reanalysisPending || outcome.remainingPosition !== 0.5 ||
+      decision?.decision !== "CLOSE" || decision.executionStatus !== "pending" ||
+      !Number.isFinite(Date.parse(decision.validUntil)) || now > Date.parse(decision.validUntil) ||
+      !Number.isFinite(Date.parse(decision.decidedAt)) ||
+      candle.timestamp < Math.ceil(Date.parse(decision.decidedAt) / LIFECYCLE_MINUTE_MS) * LIFECYCLE_MINUTE_MS) return;
+  const fraction = outcome.remainingPosition;
+  const realizedR = (direction === "Long" ? 1 : -1) * (candle.close - outcome.entryPrice) /
+    Math.abs(outcome.entryPrice - outcome.initialStopLoss) * fraction;
+  if (!Number.isFinite(realizedR)) return;
+  const checkedAt = new Date(candle.timestamp + LIFECYCLE_MINUTE_MS).toISOString();
+  const evidence = { source: "OKX 1m candles", candle, rule: "post-analysis-confirmed-close",
+    timestampPrecision: "1m", analysisAt: decision.analysisAt };
+  outcome.exits.push({ target: "CLOSE", price: candle.close, initialFraction: fraction, realizedR, checkedAt, evidence });
+  Object.assign(outcome, { status: "Closed", remainingPosition: 0, realizedR: outcome.realizedR + realizedR,
+    exitPrice: candle.close, checkedAt, exitCheck: evidence, reanalysisPending: false,
+    lastReanalysis: { ...decision, executionStatus: "executed", executedAt: checkedAt } });
+  outcome.resultR = outcome.realizedR;
+}
+
 function createTp1ReanalysisStrategy() {
   return { version: "tp1-50-reanalyse-v1", allocationBasis: "initial-position",
     allocations: { TP1: 0.5 }, remainingFraction: 0.5,
@@ -4256,8 +4317,7 @@ function processTp1ReanalysisCandle(plan, outcome, candle, direction) {
 }
 
 function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, capturedAt, priceRange, analysisContext = null }) {
-  // Reserved transient input for the future post-TP1 engine; no decision or persistence in Step 3A.
-  if (["TP1Hit", "TP3Hit", "Stopped", "Expired"].includes(previousOutcome.status)) return previousOutcome;
+  if (["TP1Hit", "TP3Hit", "Stopped", "Closed", "Expired"].includes(previousOutcome.status)) return previousOutcome;
   const plannedAt = initialPlan.plannedAt;
   const expiresAt = initialPlan.expiresAt;
   const now = Date.parse(capturedAt);
@@ -4305,6 +4365,27 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
       (typeof outcome.entryPrice === "number" && Number.isFinite(outcome.entryPrice) &&
        (direction === "Long" ? outcome.entryPrice > stopLoss && outcome.entryPrice < takeProfit1
          : outcome.entryPrice < stopLoss && outcome.entryPrice > takeProfit1)));
+  // Never apply current analysis to candles preceding its source timestamp.
+  // Persist the latest decision in the existing outcome, but require fresh input on each execution pass.
+  let continuationInputValid = false;
+  if (reanalysis && validPlan && previousOutcome.status === "Active" && previousOutcome.reanalysisPending &&
+      outcome.remainingPosition === 0.5) {
+    const analysisTime = Date.parse(analysisContext?.analysisAt);
+    const tp1Time = Date.parse(outcome.exits[0]?.checkedAt);
+    const lastTime = Date.parse(outcome.lastReanalysis?.analysisAt);
+    if (Number.isFinite(analysisTime) && analysisTime >= tp1Time &&
+        (!outcome.lastReanalysis || analysisTime >= lastTime)) {
+      const decision = calculateContinuationDecision(analysisContext, direction, capturedAt);
+      if (decision) {
+        continuationInputValid = true;
+        if (!outcome.lastReanalysis || analysisTime > lastTime) outcome.lastReanalysis = {
+          ...decision, decidedAt: analysisContext.analysisAt,
+          validUntil: new Date(Math.min(analysisTime + ENTRY_RANKING_STALE_MS,
+            Date.parse(analysisContext.lastConfirmedAt) + 86400000 + 300000)).toISOString(),
+          executionStatus: decision.decision === "CLOSE" ? "pending" : "observed" };
+      }
+    }
+  }
   let verification = validPlan ? "awaiting_closed_candle" : "invalid_plan";
   const inspected = [];
   const candles = new Map((Array.isArray(priceRange?.data) ? priceRange.data : [])
@@ -4376,6 +4457,8 @@ function evaluateTradeLifecycle({ initialPlan, direction, previousOutcome = {}, 
             if (outcome.managementPending?.candle?.timestamp === cursor) cursor += LIFECYCLE_MINUTE_MS;
             break;
           }
+          // BE/ambiguous-candle handling above always precedes a discretionary close.
+          if (reanalysis && continuationInputValid) executeContinuationClose(outcome, candle, direction, now);
           outcome.markPrice = candle.close;
           outcome.markPriceAt = new Date(candle.timestamp + LIFECYCLE_MINUTE_MS).toISOString();
           if (outcome.remainingPosition === 0) {
@@ -6761,7 +6844,7 @@ function buildTrackedTradeSignal(item, capturedAt, previousSignal = null, recent
     previousSignal?.outcome || {};
   const previousIsClosed =
     previousOutcome.status === "TP1Hit" || previousOutcome.status === "TP3Hit" ||
-    previousOutcome.status === "Stopped";
+    previousOutcome.status === "Stopped" || previousOutcome.status === "Closed";
   const previousIsActive =
     previousOutcome.status === "Active";
   const previousWasActivated =
@@ -7490,7 +7573,7 @@ function projectValidationTrade(signal) {
   if (!signal?.tradeId || !isConfirmedAPlusTradeSignal(signal)) return null;
   const status = signal.outcome?.status;
   const stage = ["WaitingEntry", "Pending"].includes(status) ? 0 : status === "Active" ? 1 :
-    ["TP1Hit", "TP3Hit", "Stopped", "Expired"].includes(status) ? 2 : -1;
+    ["TP1Hit", "TP3Hit", "Stopped", "Closed", "Expired"].includes(status) ? 2 : -1;
   if (stage < 0) return null;
   const plan = signal.initialPlan;
   const iso = value => Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
@@ -7634,7 +7717,7 @@ function isCompletedTradeSignal(signal) {
   const status = signal?.outcome?.status;
 
   return Boolean(signal?.tradeId) &&
-    (status === "TP1Hit" || status === "TP3Hit" || status === "Stopped");
+    (status === "TP1Hit" || status === "TP3Hit" || status === "Stopped" || status === "Closed");
 }
 
 function isConfirmedAPlusTrade(signal) {
@@ -8274,7 +8357,7 @@ function buildEntryObservationBatch(snapshot, signals, observedAt) {
   const number = value => typeof value === "number" && Number.isFinite(value) ? value : null;
   for (const signal of signals) {
     const status = signal?.outcome?.status;
-    if (!["WaitingEntry", "Pending", "Active", "Expired", "Invalidated", "Stopped", "TP1Hit", "TP3Hit"].includes(status)) continue;
+    if (!["WaitingEntry", "Pending", "Active", "Expired", "Invalidated", "Stopped", "Closed", "TP1Hit", "TP3Hit"].includes(status)) continue;
     // Preserve Phase 1 canonical origin verification, including frozen timestamps/geometry.
     if (!verifyEntrySetupOrigin({ ...signal, outcome: { ...signal.outcome, status: "WaitingEntry" } })) continue;
     const plan = signal.initialPlan;
@@ -8682,7 +8765,7 @@ if (mode === "statistics") {
           ? snapshot.readySignals.filter(signal =>
               isVisibleTrackedTradeSignal(signal) &&
               (signal?.outcome?.status === "TP1Hit" || signal?.outcome?.status === "TP3Hit" ||
-                signal?.outcome?.status === "Stopped")
+                signal?.outcome?.status === "Stopped" || signal?.outcome?.status === "Closed")
             )
           : []
     })

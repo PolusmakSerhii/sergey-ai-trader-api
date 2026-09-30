@@ -81,6 +81,24 @@ test("trade ledger and backups against isolated Redis (no TCP or production)", a
       assert.equal(await redis(["EVAL", releaseScript, "1", lock, "owner-b"]), 1);
     });
 
+    await t.test("continuation CLOSE is completed exactly once through Redis ledger", async () => {
+      await reset();
+      const item = signal("continuation-close", 1.5);
+      item.initialPlan.exitStrategy = context.createTp1ReanalysisStrategy();
+      item.outcome = { status: "Closed", resultR: 1.5, realizedR: 1.5,
+        remainingPosition: 0, reanalysisPending: false, entryPrice: 100,
+        checkedAt: "2026-09-07T12:00:00.000Z", exits: [
+          { target: "TP1", initialFraction: .5, price: 110, weightedR: .5 },
+          { target: "CLOSE", initialFraction: .5, price: 120, weightedR: 1 }
+        ] };
+      await record([item]);
+      await record([item]);
+      const saved = await stats();
+      assert.equal(saved.completed, 1);
+      assert.equal(saved.netR, 1.5);
+      assert.equal(context.projectValidationTrade(item).terminal, true);
+    });
+
     const registrationTime = new Date(Math.floor(Date.now() / 60000) * 60000 + 1000).toISOString();
     const candidate = (direction = "Long") => ({ symbol: "REGISTERUSDT", price: 100,
       direction, grade: "A+", opportunityGrade: "A+", opportunityScore: 90,
