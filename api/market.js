@@ -6802,12 +6802,53 @@ function bindOriginalResearch(item, trade) {
   } catch { return unavailableResearch(trade.tradeId, trade.initialPlan.createdAt, "INVALID_PROJECTION"); }
 }
 
+// Observational origin evidence only; never consulted by registration or execution.
+// Raw inputs live in researchSnapshot (direction, price, indicators, e20), and
+// proposed SL/TP1 in initialPlan. Persist only derived evidence beside the snapshot
+// so its 2304-byte budget and existing raw evidence remain untouched.
+function createObservationalEntryDecision(snapshot, plan) {
+  const result = { version: "entry-decision-v1", mode: "observational",
+    status: "UNAVAILABLE", reasonCodes: [],
+    evidence: { directionalRsi: null, macdSign: null, geometryValid: false } };
+  try {
+    const finite = value => typeof value === "number" && Number.isFinite(value);
+    const positive = value => finite(value) && value > 0;
+    const direction = snapshot?.decision?.direction;
+    const supported = direction === "Long" || direction === "Short";
+    const price = snapshot?.originPrice, indicators = snapshot?.indicators;
+    const rsi = indicators?.rsi14, histogram = indicators?.macd?.histogram;
+    const validRsi = finite(rsi) && rsi >= 0 && rsi <= 100;
+    const sl = plan?.initialStopLoss, tp1 = plan?.takeProfit1;
+    const geometryValid = supported && positive(price) && positive(sl) && positive(tp1) &&
+      (direction === "Long" ? sl < price && price < tp1 : tp1 < price && price < sl);
+    const checks = [
+      [supported, "INVALID_DIRECTION"], [positive(price), "INVALID_ORIGIN_PRICE"],
+      [positive(indicators?.atr14), "INVALID_ATR"], [positive(indicators?.ema20), "INVALID_EMA20"],
+      [finite(snapshot?.e20), "INVALID_E20"], [validRsi, "INVALID_RSI"],
+      [finite(histogram), "INVALID_MACD"], [geometryValid, "INVALID_GEOMETRY"]
+    ];
+    result.reasonCodes = checks.filter(([valid]) => !valid).map(([, code]) => code);
+    if (supported && validRsi) result.evidence.directionalRsi = direction === "Long" ? rsi : 100 - rsi;
+    if (supported && finite(histogram)) {
+      const directed = (direction === "Long" ? 1 : -1) * histogram;
+      result.evidence.macdSign = directed > 0 ? "SUPPORTING" : directed < 0 ? "OPPOSING" : "NEUTRAL";
+    }
+    result.evidence.geometryValid = geometryValid;
+    result.status = result.reasonCodes.length ? "UNAVAILABLE" : "AVAILABLE";
+  } catch {
+    // Telemetry errors never revoke canonical permission or abort candidate creation.
+    result.reasonCodes = ["EVIDENCE_ERROR"];
+  }
+  return result;
+}
+
 // Shared creation/update projection; only the existing lifecycle advances state.
 function createFrozenTradeCandidate(item, capturedAt) {
   if (!item?.symbol || !Number.isFinite(Date.parse(capturedAt)) ||
       !isConfirmedAPlusTrade(item)) throw new Error("Canonical A+ candidate required");
   const candidate = buildTrackedTradeSignal({ ...item, grade: "A+", opportunityGrade: "A+" }, capturedAt);
   candidate.researchSnapshot = bindOriginalResearch(item, candidate);
+  candidate.entryDecision = createObservationalEntryDecision(candidate.researchSnapshot, candidate.initialPlan);
   return candidate;
 }
 
@@ -7011,6 +7052,7 @@ function buildTrackedTradeSignal(item, capturedAt, previousSignal = null, recent
       initialPlan?.takeProfit3 ?? item.takeProfit3 ?? null,
     initialPlan,
     ...(previousSignal?.researchSnapshot !== undefined ? { researchSnapshot: previousSignal.researchSnapshot } : {}),
+    ...(previousSignal?.entryDecision !== undefined ? { entryDecision: previousSignal.entryDecision } : {}),
     outcome
   };
 }
@@ -7604,6 +7646,7 @@ function projectValidationTrade(signal) {
     // Lossless JSON preserves empty arrays and OHLC/price precision through Redis cjson.
     initialPlanJSON: JSON.stringify(plan), outcomeJSON: JSON.stringify(outcome),
     ...(signal.researchSnapshot !== undefined ? { researchSnapshotJSON: JSON.stringify(signal.researchSnapshot) } : {}),
+    ...(signal.entryDecision !== undefined ? { entryDecisionJSON: JSON.stringify(signal.entryDecision) } : {}),
     result: { classification, resultR: classification ? outcome.resultR : null,
       completedAt: classification ? iso(outcome.checkedAt) : null },
     terminal: stage === 2, stage, progressAt: progressTimes.at(-1) || "",
@@ -7637,9 +7680,10 @@ async function collectValidationArchive(signals, execute = runRedisCommand, reco
 }
 
 function hydrateValidationTrade(record) {
-  const { initialPlanJSON, outcomeJSON, researchSnapshotJSON, ...metadata } = record;
+  const { initialPlanJSON, outcomeJSON, researchSnapshotJSON, entryDecisionJSON, ...metadata } = record;
   return { ...metadata, initialPlan: JSON.parse(initialPlanJSON), outcome: JSON.parse(outcomeJSON),
-    ...(researchSnapshotJSON !== undefined ? { researchSnapshot: JSON.parse(researchSnapshotJSON) } : {}) };
+    ...(researchSnapshotJSON !== undefined ? { researchSnapshot: JSON.parse(researchSnapshotJSON) } : {}),
+    ...(entryDecisionJSON !== undefined ? { entryDecision: JSON.parse(entryDecisionJSON) } : {}) };
 }
 
 function summarizeValidationArchive(records) {

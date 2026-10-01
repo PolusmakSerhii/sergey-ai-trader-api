@@ -32,7 +32,7 @@ function input() {return {originPrice:100,symbol:'TESTUSDT',instrumentType:'SWAP
     clarity:{score:25,status:'Strong',neutralProbability:5,confidence:95},dataQuality:{score:15,status:'Complete',coinGlassAvailable:true}}},
   tradeReadiness:{version:'1.0',score:95,ready:true,status:'Ready',direction:'Long',components:{environment:{score:35,sourceScore:85},confidence:{score:30,sourceScore:95},clarity:{score:20,neutralProbability:5},separation:{score:10,scoreDifference:90}},reasons:[],blockers:[]}}}; }
 function candidate(c, data=input()) {return c.createFrozenTradeCandidate({...item(),researchProjectionJSON:JSON.stringify(c.projectOriginalResearch(data))},time);}
-const without = trade => {const copy=json(trade);delete copy.researchSnapshot;return copy;};
+const without = trade => {const copy=json(trade);delete copy.researchSnapshot;delete copy.entryDecision;return copy;};
 test('same-analysis projection binds only a new canonical candidate; metadata and exact source scalars',()=>{
  const c=runtime(),s=candidate(c);assert.equal(s.researchSnapshot.telemetryStatus,'captured');
  assert.equal(s.researchSnapshot.schemaVersion,'original-signal-research-v2');assert.equal(s.researchSnapshot.tradeId,undefined);assert.equal(s.researchSnapshot.capturedAt,s.initialPlan.createdAt);
@@ -75,13 +75,13 @@ for(const status of ['WaitingEntry','Active','TP3Hit','Stopped']) test('refresh 
 });
 test('activation, TP1/TP2/TP3 and stop preserve telemetry; lifecycle and stats identical',()=>{
  const c=runtime(); const candles=[{o:100,h:101,l:99,c:100},{o:105,h:111,l:104,c:110},{o:111,h:121,l:110,c:120},{o:121,h:131,l:120,c:130}];
- for(const stop of [false,true]) {let a=candidate(c),b=c.createFrozenTradeCandidate(item(),time);const frozen=JSON.stringify(a.researchSnapshot);
+ for(const stop of [false,true]) {let a=candidate(c),b=c.createFrozenTradeCandidate(item(),time);const frozen=JSON.stringify(a.researchSnapshot),decision=JSON.stringify(a.entryDecision);
  a.initialPlan.exitStrategy=c.createPartialExitStrategy();b.initialPlan.exitStrategy=c.createPartialExitStrategy();
  a.outcome.lifecycleVersion="partial-candles-v1";b.outcome.lifecycleVersion="partial-candles-v1";
  for(let k=0;k<candles.length;k++){const x=stop&&k===1?{o:100,h:101,l:89,c:90}:candles[k];
  const bar={timestamp:Date.parse(at(k)),open:x.o,high:x.h,low:x.l,close:x.c,confirmed:true};
  a=c.buildTrackedTradeSignal(item(),at(k+1),a,{source:'OKX 1m candles',data:[bar]});b=c.buildTrackedTradeSignal(item(),at(k+1),b,{source:'OKX 1m candles',data:[bar]});
- assert.deepEqual(without(a),without(b));assert.equal(JSON.stringify(a.researchSnapshot),frozen);}
+ assert.deepEqual(without(a),without(b));assert.equal(JSON.stringify(a.researchSnapshot),frozen);assert.equal(JSON.stringify(a.entryDecision),decision);}
  assert.equal(a.outcome.status,stop?'Stopped':'TP3Hit');
  assert.deepEqual(json(c.addTradeToPersistentStats(c.createEmptyPersistentTradeStats(),a)),json(c.addTradeToPersistentStats(c.createEmptyPersistentTradeStats(),b)));
  }
@@ -152,10 +152,10 @@ test('archive actual Lua preserves original telemetry across outcome updates and
  try{let ready=false;for(let i=0;i<100;i++){if(error)throw error;try{ready=await redis(['PING'])==='PONG'}catch{}if(ready)break;await new Promise(r=>setTimeout(r,20));}assert.ok(ready);
  const c=runtime(),s=candidate(c),legacy=without(s);legacy.tradeId='LEGACY';
  const write=rows=>redis(['EVAL',vm.runInContext('WRITE_VALIDATION_ARCHIVE_SCRIPT',c),1,'test:archive',JSON.stringify(rows.map(c.projectValidationTrade)),time,JSON.stringify({records:5000,bytes:16*1024*1024})]);
- await write([s,legacy]);const original=JSON.stringify(s.researchSnapshot);
- s.researchSnapshot={different:true};s.outcome={...s.outcome,status:'Stopped',checkedAt:at(5),resultR:-1};await write([s]);
- const doc=JSON.parse(await redis(['GET','test:archive']));const hydrated=c.hydrateValidationTrade(doc.tradesById[s.tradeId]);assert.equal(JSON.stringify(hydrated.researchSnapshot),original);assert.equal(hydrated.outcome.resultR,-1);
- assert.equal(c.hydrateValidationTrade(doc.tradesById.LEGACY).researchSnapshot,undefined);
+ await write([s,legacy]);const original=JSON.stringify(s.researchSnapshot),originalDecision=JSON.stringify(s.entryDecision);
+ s.researchSnapshot={different:true};s.entryDecision={different:true};s.outcome={...s.outcome,status:'Stopped',checkedAt:at(5),resultR:-1};await write([s]);
+ const doc=JSON.parse(await redis(['GET','test:archive']));const hydrated=c.hydrateValidationTrade(doc.tradesById[s.tradeId]);assert.equal(JSON.stringify(hydrated.researchSnapshot),original);assert.equal(hydrated.outcome.resultR,-1);assert.equal(JSON.stringify(hydrated.entryDecision),originalDecision);
+ assert.equal(c.hydrateValidationTrade(doc.tradesById.LEGACY).researchSnapshot,undefined);assert.equal(c.hydrateValidationTrade(doc.tradesById.LEGACY).entryDecision,undefined);
  // Exercise the actual open-trades Lua conflict path with two distinct original analyses.
  c.runRedisCommand=redis;c.fetchOKXRecentPriceRange=async()=>null;
  const firstInput=input(),laterInput=input();firstInput.technical.rsi14=60;laterInput.technical.rsi14=70;
@@ -224,7 +224,7 @@ test('old v2 snapshot remains readable without evidence or backfill',()=>{
 });
 
 test('origin evidence survives new-policy activation, TP1, HOLD, CLOSE and archive without execution changes',()=>{
- const c=runtime();let a=candidate(c),b=c.createFrozenTradeCandidate(item(),time);const frozen=JSON.stringify(a.researchSnapshot);
+ const c=runtime();let a=candidate(c),b=c.createFrozenTradeCandidate(item(),time);const frozen=JSON.stringify(a.researchSnapshot),decision=JSON.stringify(a.entryDecision);
  const context=(minute,strong)=>({symbol:'TESTUSDT',analysisAt:at(minute),source:'OKX',timeframe:'1D',lastConfirmedAt:at(-60),
   structure:{bos:strong?'Bullish BOS':'Inside Range',choch:strong?'Bullish CHOCH':'No CHOCH',mss:strong?'Bullish MSS':'No MSS'},
   trend:{trend:strong?'Strong Bullish':'Neutral',ema20:strong?110:100,ema50:strong?105:100,ema100:100,ema200:strong?95:100},
@@ -234,11 +234,12 @@ test('origin evidence survives new-policy activation, TP1, HOLD, CLOSE and archi
   const row={...item(),price:999,researchProjectionJSON:JSON.stringify(c.projectOriginalResearch({...input(),originPrice:999}))};
   a=c.buildTrackedTradeSignal(row,at(k+1),a,{source:'OKX 1m candles',data:[bar]},context(k,strong));
   b=c.buildTrackedTradeSignal(row,at(k+1),b,{source:'OKX 1m candles',data:[bar]},context(k,strong));
-  assert.deepEqual(without(a),without(b));assert.equal(JSON.stringify(a.researchSnapshot),frozen);
+  assert.deepEqual(without(a),without(b));assert.equal(JSON.stringify(a.researchSnapshot),frozen);assert.equal(JSON.stringify(a.entryDecision),decision);
   if(k===1){assert.equal(a.outcome.remainingPosition,.5);assert.equal(a.outcome.status,'Active');}
   if(k===2)assert.equal(a.outcome.lastReanalysis.decision,'HOLD');
  }
  assert.equal(a.outcome.status,'Closed');assert.equal(a.outcome.resultR,1.5);
  assert.equal(JSON.stringify(c.hydrateValidationTrade(c.projectValidationTrade(a)).researchSnapshot),frozen);
+ assert.equal(JSON.stringify(c.hydrateValidationTrade(c.projectValidationTrade(a)).entryDecision),decision);
  assert.deepEqual(json(c.addTradeToPersistentStats(c.createEmptyPersistentTradeStats(),a)),json(c.addTradeToPersistentStats(c.createEmptyPersistentTradeStats(),b)));
 });
