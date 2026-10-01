@@ -6724,7 +6724,20 @@ function projectOriginalResearch(input) {
         bearish: v.filter(x => x.type === bearish).length };
     };
     const structureState = (v, available) => available && v !== "Unknown" ? str(v) : null;
+    // Same-analysis price only: never reconstruct from plan levels or later prices.
+    const originPrice = n(input.originPrice) > 0 ? input.originPrice : null;
+    const direction = p.aiAssessment?.direction || p.direction;
+    let e20 = null;
+    let e20Reason = originPrice === null ? "INVALID_PRICE"
+      : !(n(t.ema20) > 0) ? "INVALID_EMA20"
+      : !(n(t.atr14) > 0) ? "INVALID_ATR14"
+      : !["Long", "Short"].includes(direction) ? "INVALID_DIRECTION" : null;
+    if (!e20Reason) {
+      e20 = n((direction === "Long" ? 1 : -1) * (originPrice - t.ema20) / t.atr14);
+      if (e20 === null) e20Reason = "NON_FINITE_E20";
+    }
     const snapshot = {
+      originPrice, e20, ...(e20Reason ? { e20Reason } : {}),
       schemaVersion: RESEARCH_SCHEMA, telemetryStatus: "captured", capturedAt: null,
       analysisAt: str(input.analysisAt),
       instrument: { symbol: str(input.symbol), instrumentType: str(input.instrumentType) },
@@ -10701,7 +10714,7 @@ const marketSummary =
     let researchProjectionJSON;
     if (confirmedAPlus) try {
       researchProjectionJSON = JSON.stringify(projectOriginalResearch({
-      symbol, instrumentType, analysisAt: analysisTime, opportunity: liveOpportunity, dataSafety,
+      symbol, instrumentType, originPrice: coin.current_price, analysisAt: analysisTime, opportunity: liveOpportunity, dataSafety,
       confirmedOnly: true, confirmedCount: okxConfirmedDailyCandles.length,
       technical: { rsi14, ema20, ema50, ema100, ema200, trend, macd, atr14, volumeStats, swingLevels,
         bos, choch, liquiditySweep, fvg, orderBlocks, premiumDiscount, equalHighLow, imbalance, mss,

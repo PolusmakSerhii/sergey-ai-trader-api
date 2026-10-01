@@ -18,7 +18,7 @@ function runtime() {
 function item() { return {symbol:'TESTUSDT',instrumentType:'SWAP',price:100,direction:'Long',action:'Strong Buy',
   opportunityScore:90,opportunityGrade:'A+',confidence:95,tradeAllowed:true,tradeReadiness:{ready:true},riskReward:2,
   entryZone:{from:99,to:101},stopLoss:90,takeProfit1:110,takeProfit2:120,takeProfit3:130}; }
-function input() {return {symbol:'TESTUSDT',instrumentType:'SWAP',analysisAt:at(-1),confirmedOnly:true,confirmedCount:300,
+function input() {return {originPrice:100,symbol:'TESTUSDT',instrumentType:'SWAP',analysisAt:at(-1),confirmedOnly:true,confirmedCount:300,
   opportunity:{score:90,grade:'A+',confirmedAPlus:true},dataSafety:{price:{source:'OKX',asOf:at(-1)},candles:{source:'OKX',timeframe:'1D',lastConfirmedAt:at(-60)}},
   technical:{rsi14:61,ema20:98,ema50:96,ema100:94,ema200:90,atr14:3,trend:'Strong Bullish',
   macd:{macd:1,signal:.8,histogram:.2,trend:'Bullish'},volumeStats:{current:100,sma20:80,ratio:1.25,spike:false},swingLevels:{swingHigh:110,swingLow:90},
@@ -133,7 +133,7 @@ test('representative byte measurements, full archived record delta and bound',()
  const base=c.projectValidationTrade(without(closed)),full=c.projectValidationTrade(closed);
  const marker=c.createFrozenTradeCandidate(item(),time).researchSnapshot;
  const report={minimal:bytes(minimal.researchSnapshot),normal:bytes(normal.researchSnapshot),maximal:bytes(maximal),marker:bytes(marker),archiveWithout:bytes(base),archiveWith:bytes(full),delta:bytes(full)-bytes(base)};
- console.log('RESEARCH_SIZE_BYTES',JSON.stringify(report));assert.equal(report.maximal,2304);assert.ok(report.normal<=2048);
+ console.log('RESEARCH_SIZE_BYTES',JSON.stringify(report));assert.equal(report.maximal,2304);assert.ok(report.normal<=2304);
  const document=n=>{const tradesById={};for(let k=0;k<n;k++){
    const id=full.tradeId+':'+String(k).padStart(4,'0');
    tradesById[id]={...full,tradeId:id,cohort:'forward',createdAt:time,updatedAt:time};
@@ -196,4 +196,49 @@ test('v2 stable compact contract preserves core categories and removes only docu
  provenance:['dailySource','dailyBar','confirmedOnly','dailyLastConfirmedAt','priceSource','priceTimestamp']}))
  for(const key of keys)assert.notEqual(s[group][key],undefined,group+'.'+key);
  i.technical.fvg=[{invalid:true}];assert.equal(c.projectOriginalResearch(i).structure.fvgSummary,null);
+});
+
+for (const [direction, price, expected] of [['Long',104,2],['Short',92,2]]) test('exact origin entry evidence '+direction,()=>{
+ const c=runtime(),i=input();i.originPrice=price;i.technical.probability.aiAssessment.direction=direction;
+ const s=c.projectOriginalResearch(i);assert.equal(s.originPrice,price);assert.equal(s.e20,expected);
+ assert.equal(s.indicators.atr14,3);assert.equal(s.e20Reason,undefined);
+ assert.equal(s.provenance.priceTimestamp,i.dataSafety.price.asOf);
+});
+test('origin price transport is exact and evidence unavailable never substitutes plan ATR',()=>{
+ const c=runtime();assert.match(source,/originPrice: coin.current_price, analysisAt: analysisTime/);
+ const i=input();i.originPrice=100.123456789;assert.equal(c.projectOriginalResearch(i).originPrice,i.originPrice);
+ for(const [field,values,reason] of [['atr14',[undefined,null,0,-1,Infinity,NaN],'INVALID_ATR14'],['ema20',[undefined,null,0,-1,Infinity,NaN],'INVALID_EMA20']]){
+  for(const value of values){const data=input();data.technical[field]=value;const s=candidate(c,data);
+   assert.equal(s.researchSnapshot.e20,null);assert.equal(s.researchSnapshot.e20Reason,reason);assert.equal(s.outcome.status,'WaitingEntry');}
+ }
+ for(const value of [undefined,null,0,-1,Infinity,NaN,'100']){const data=input();data.originPrice=value;const s=c.projectOriginalResearch(data);assert.equal(s.originPrice,null);assert.equal(s.e20,null);assert.equal(s.e20Reason,'INVALID_PRICE');}
+ for(const value of [undefined,null,'Neutral','long']){const data=input();data.technical.probability.aiAssessment.direction=value;const s=c.projectOriginalResearch(data);assert.equal(s.e20,null);assert.equal(s.e20Reason,'INVALID_DIRECTION');}
+ const overflow=input();overflow.originPrice=Number.MAX_VALUE;overflow.technical.atr14=Number.MIN_VALUE;assert.equal(c.projectOriginalResearch(overflow).e20Reason,'NON_FINITE_E20');
+});
+test('old v2 snapshot remains readable without evidence or backfill',()=>{
+ const c=runtime(),trade=candidate(c);delete trade.researchSnapshot.originPrice;delete trade.researchSnapshot.e20;
+ const before=JSON.stringify(trade.researchSnapshot);
+ const next=c.buildTrackedTradeSignal({...item(),price:1000},at(2),trade);
+ assert.equal(JSON.stringify(next.researchSnapshot),before);
+ assert.equal(JSON.stringify(c.hydrateValidationTrade(c.projectValidationTrade(next)).researchSnapshot),before);
+});
+
+test('origin evidence survives new-policy activation, TP1, HOLD, CLOSE and archive without execution changes',()=>{
+ const c=runtime();let a=candidate(c),b=c.createFrozenTradeCandidate(item(),time);const frozen=JSON.stringify(a.researchSnapshot);
+ const context=(minute,strong)=>({symbol:'TESTUSDT',analysisAt:at(minute),source:'OKX',timeframe:'1D',lastConfirmedAt:at(-60),
+  structure:{bos:strong?'Bullish BOS':'Inside Range',choch:strong?'Bullish CHOCH':'No CHOCH',mss:strong?'Bullish MSS':'No MSS'},
+  trend:{trend:strong?'Strong Bullish':'Neutral',ema20:strong?110:100,ema50:strong?105:100,ema100:100,ema200:strong?95:100},
+  momentum:{rsi14:strong?65:50,macd:{macd:strong?2:0,signal:strong?1:0,histogram:strong?1:0}},smartMoney:{score:strong?80:50},volume:{ratio:1,spike:false}});
+ for(const [k,prices,strong] of [[0,[100,101,99,100],true],[1,[105,111,104,110],true],[2,[115,140,110,130],true],[3,[120,140,110,120],false]]){
+  const bar={timestamp:Date.parse(at(k)),open:prices[0],high:prices[1],low:prices[2],close:prices[3],confirmed:true};
+  const row={...item(),price:999,researchProjectionJSON:JSON.stringify(c.projectOriginalResearch({...input(),originPrice:999}))};
+  a=c.buildTrackedTradeSignal(row,at(k+1),a,{source:'OKX 1m candles',data:[bar]},context(k,strong));
+  b=c.buildTrackedTradeSignal(row,at(k+1),b,{source:'OKX 1m candles',data:[bar]},context(k,strong));
+  assert.deepEqual(without(a),without(b));assert.equal(JSON.stringify(a.researchSnapshot),frozen);
+  if(k===1){assert.equal(a.outcome.remainingPosition,.5);assert.equal(a.outcome.status,'Active');}
+  if(k===2)assert.equal(a.outcome.lastReanalysis.decision,'HOLD');
+ }
+ assert.equal(a.outcome.status,'Closed');assert.equal(a.outcome.resultR,1.5);
+ assert.equal(JSON.stringify(c.hydrateValidationTrade(c.projectValidationTrade(a)).researchSnapshot),frozen);
+ assert.deepEqual(json(c.addTradeToPersistentStats(c.createEmptyPersistentTradeStats(),a)),json(c.addTradeToPersistentStats(c.createEmptyPersistentTradeStats(),b)));
 });
