@@ -7705,6 +7705,44 @@ function summarizeValidationArchive(records) {
     profitFactor: stats.grossLossR > 0 ? stats.grossProfitR / stats.grossLossR : null };
 }
 
+const LIVE_START_UTC = "2026-10-11T21:00:00.000Z";
+function classifyLiveCohort(record) {
+  const instant = value => typeof value === "string" &&
+    /T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? Date.parse(value) : NaN;
+  const origin = instant(record?.origin?.detectedAt);
+  if (!Number.isFinite(origin)) return { cohort: "UNKNOWN", reason: "INVALID_OR_MISSING_ORIGIN" };
+  const frozen = record?.initialPlan?.createdAt;
+  if (frozen !== undefined && frozen !== null &&
+      (!Number.isFinite(instant(frozen)) || instant(frozen) !== origin))
+    return { cohort: "UNKNOWN", reason: "FROZEN_ORIGIN_CONFLICT" };
+  return { cohort: origin >= Date.parse(LIVE_START_UTC) ? "LIVE" : "PRE-LIVE", reason: null };
+}
+
+function summarizeLiveCohorts(records) {
+  const groups = { "PRE-LIVE": [], LIVE: [], UNKNOWN: [] };
+  for (const record of new Map(records.map(r => [r.tradeId, r])).values())
+    groups[classifyLiveCohort(record).cohort].push(record);
+  return Object.fromEntries(Object.entries(groups).map(([cohort, items]) => {
+    let stats = createEmptyPersistentTradeStats();
+    const completed = items.filter(r => classifyTradeResult({ tradeId: r.tradeId, outcome: r.outcome }) &&
+      typeof r.outcome.checkedAt === "string" && Number.isFinite(Date.parse(r.outcome.checkedAt)))
+      .sort((a,b) => Date.parse(a.outcome.checkedAt) - Date.parse(b.outcome.checkedAt) ||
+        (a.tradeId < b.tradeId ? -1 : a.tradeId > b.tradeId ? 1 : 0));
+    for (const r of completed) stats = addTradeToPersistentStats(stats, {
+      tradeId: r.tradeId, direction: r.origin?.direction, initialPlan: r.initialPlan, outcome: r.outcome });
+    const averageR = stats.completed ? stats.netR / stats.completed : null;
+    return [cohort, { ...stats, total: items.length,
+      active: items.filter(r => r.outcome?.status === "Active").length,
+      winRate: stats.completed ? 100 * stats.wins / stats.completed : null,
+      averageR, expectancy: averageR,
+      profitFactor: stats.grossLossR > 0 ? stats.grossProfitR / stats.grossLossR : null,
+      currentLossStreak: stats.currentStreak?.type === "Loss" ? stats.currentStreak.count : 0,
+      maxLossStreak: stats.maxConsecutiveLosses,
+      directions: stats.tradeAnalytics?.directions || { Long: {count:0,wins:0,netR:0}, Short: {count:0,wins:0,netR:0} }
+    }];
+  }));
+}
+
 async function readValidationArchive(query, execute = runRedisCommand) {
   if (!getRedisConfig()) throw new Error("Archive Redis unavailable");
   const raw = await execute(["GET", VALIDATION_ARCHIVE_KEY]);
@@ -7720,6 +7758,7 @@ async function readValidationArchive(query, execute = runRedisCommand) {
     validationStartAt: doc.validationStartAt, boundaryPolicy: doc.boundaryPolicy,
     summary: summarizeValidationArchive(records.filter(r => r.cohort === "forward")),
     legacySummary: summarizeValidationArchive(records.filter(r => r.cohort === "legacy")),
+    liveCohorts: { startAt: LIVE_START_UTC, basis: "canonical-modelled", coverage: "available-archive-records", summaries: summarizeLiveCohorts(records) },
     totalArchived: records.length, offset, limit, nextOffset: offset + limit < records.length ? offset + limit : null,
     records: records.slice(offset, offset + limit) };
 }
