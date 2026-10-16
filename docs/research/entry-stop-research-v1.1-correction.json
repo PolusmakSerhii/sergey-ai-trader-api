@@ -1,0 +1,448 @@
+{
+  "protocolVersion": "entry-stop-research-v1.1-correction",
+  "status": "PREREGISTERED CORRECTED REPLICATION; DOCUMENTATION ONLY; NOT EXECUTED",
+  "simulationAuthorized": false,
+  "disclosure": {
+    "independentConfirmation": false,
+    "resultsAlreadyInspected": true,
+    "expiryCorrectionIdentifiedAfterResults": true,
+    "primaryEstimandChangedAfterResults": true,
+    "approval": "Explicit user approval of both changes in R5-A",
+    "meaning": "Corrected replication, not an independent preregistered confirmation. Pairwise primary denominator is an intentional post-result methodology change, not merely a code fix."
+  },
+  "source": {
+    "protocolCommit": "3030f53eb70272e88c0ec7c668a8a2c549f6a447",
+    "simulatorCommit": "7db5d2d75986469aa4fee2714ffdeea55a2d5f7a",
+    "randomControlCommit": "ae8a698ae2310d80fdc39260edd45ee57d16d261",
+    "configCanonicalSha256": "0f14306352dd30abe08bbafc7b87058dd52dbb4b300faa5196d7146676c614c1",
+    "archiveSha256": "ab17a8429926a3cd6a21e96aa7883f2f64e0fdb4a45518de3309ce82cf28bac2",
+    "firstRunTimestamp": "2026-10-16T16:19:58.180Z",
+    "resultDirectory": "/Users/polusmak/analysis/validation/entry-stop-v1-results",
+    "aggregateReport": "/Users/polusmak/analysis/validation/entry-stop-v1-results/aggregate-report.md",
+    "forensics": "/Users/polusmak/analysis/validation/entry-stop-v1-results/attrition-forensics.md",
+    "preservedArtifactSha256": {
+      "bootstrap-results.json": "240cb7a5d5820daddd5ba196124d361cde2f21c4c7ab7a2fd3eaaf7933941171",
+      "attrition-forensics.md": "b8b0fb8aab1aae1b3fc8578fd5ea9ebd832dee6b5f65bd8c506289590529a6fc",
+      "runner.mjs": "07e5f3d6db1f8aadf02052cf1cc1a1903215e47144db68e64cafd9b703a843f9",
+      "aggregate-report.md": "75aa1f12bc5097b24024996ed3489b5bd98c1e5bfc634432d65bd23da12ea6e7",
+      "per-signal-results.json": "d03b1c87ff265e4398b542a69c4fae3f3c746d47d34e87aa4e93787f7ad3ba19",
+      "run-manifest.json": "ea437ca1c352037bc780b715e93ad6f4b059e0b9093ace867392d0b0fb672936",
+      "aggregate-results.json": "af8196d93d12e65699193775f01f1b2ea6fcc7529f9381991a7e7448cb63dd9d",
+      "random-control-results.json": "a96deb76f4640fd2eaf52d81213df87c44fa58bfe5acc7d0b01736ce66e757d7"
+    },
+    "frozenSourceSha256": {
+      "docs/research/entry-stop-research-v1.0.md": "0f665bd67fe57836e219b6bfed3afcdab68df865b7a35c1203f1db7db62d93b5",
+      "docs/research/entry-stop-research-v1.0.json": "1c91fba1be353acb4cabd2e7d5de6aeb6e3e90ac97ec2d53c74fe464b041ce5f",
+      "scripts/research/entry-stop-v1/simulator.mjs": "4afc8ff22339af8013cffad04ca832796211f9a3cee998291bd59d96efa33565",
+      "scripts/research/entry-stop-v1/random-control.mjs": "4b6cbfc042f123c421fa19fd50be5b93255036c544de4a64724d127cc6f58704"
+    }
+  },
+  "defect": {
+    "v1DataUnavailable": 25,
+    "reason": "PARTIAL_EXPIRY_MINUTE",
+    "missingCandleCoverage": false,
+    "attritionBiasRisk": "MATERIAL",
+    "suspectedSimulatorDefect": true,
+    "description": "Unfilled non-minute-aligned expiry returns DATA_UNAVAILABLE before the boundary candle lookup; v1.1 explicitly adopts closed-candle entry expiry."
+  },
+  "unchangedStrategyParameters": {
+    "archive": {
+      "path": "/Users/polusmak/analysis/validation/archive-export-20261008.json",
+      "sha256": "ab17a8429926a3cd6a21e96aa7883f2f64e0fdb4a45518de3309ce82cf28bac2",
+      "total": 97,
+      "completed": 91,
+      "nonterminal": 6,
+      "legacy": 69,
+      "new": 22,
+      "long": 84,
+      "short": 7,
+      "symbols": 42,
+      "signalRange": [
+        "2026-09-17T17:24:53.835Z",
+        "2026-10-08T13:24:52.767Z"
+      ],
+      "completedTradeIds": [
+        "AAPLUSDT:Long:2026-09-21T16:07:44.893Z",
+        "AAVEUSDT:Long:2026-10-01T14:36:43.982Z",
+        "AMDUSDT:Long:2026-09-27T08:00:47.942Z",
+        "AMDUSDT:Long:2026-10-02T13:06:50.410Z",
+        "AMDUSDT:Long:2026-10-06T16:18:57.250Z",
+        "AZTECUSDT:Long:2026-09-28T16:49:59.720Z",
+        "BTCUSDT:Long:2026-10-02T14:13:51.028Z",
+        "BTCUSDT:Long:2026-10-06T13:54:45.395Z",
+        "CRVUSDT:Long:2026-09-30T09:18:47.101Z",
+        "CVXUSDT:Long:2026-09-29T13:06:52.968Z",
+        "CVXUSDT:Long:2026-10-02T16:06:49.501Z",
+        "ETHUSDT:Long:2026-10-02T08:26:13.896Z",
+        "EWJUSDT:Long:2026-10-02T19:12:50.454Z",
+        "EWYUSDT:Long:2026-10-02T13:00:56.082Z",
+        "GMXUSDT:Long:2026-10-04T17:24:44.171Z",
+        "GRASSUSDT:Long:2026-09-26T16:06:46.594Z",
+        "GRASSUSDT:Long:2026-09-27T21:36:46.830Z",
+        "GRASSUSDT:Long:2026-09-28T05:36:46.531Z",
+        "HOODUSDT:Long:2026-09-21T18:12:47.284Z",
+        "HYPEUSDT:Long:2026-09-18T07:54:50.586Z",
+        "HYPEUSDT:Long:2026-10-05T22:13:51.972Z",
+        "INJUSDT:Long:2026-09-19T07:00:46.586Z",
+        "INTCUSDT:Long:2026-09-21T16:00:44.031Z",
+        "INTCUSDT:Long:2026-09-25T16:07:58.305Z",
+        "JUPUSDT:Long:2026-09-25T13:14:02.676Z",
+        "LINKUSDT:Long:2026-09-21T16:00:44.031Z",
+        "LINKUSDT:Long:2026-09-25T16:00:47.134Z",
+        "METAUSDT:Long:2026-09-21T16:00:44.031Z",
+        "METAUSDT:Long:2026-09-24T13:30:46.950Z",
+        "METUSDT:Long:2026-10-07T21:23:56.959Z",
+        "METUSDT:Long:2026-10-08T13:24:52.767Z",
+        "MORPHOUSDT:Long:2026-09-24T08:06:43.364Z",
+        "MSFTUSDT:Long:2026-09-25T16:07:58.305Z",
+        "MUUSDT:Long:2026-09-22T16:00:47.469Z",
+        "MUUSDT:Long:2026-10-01T19:54:54.468Z",
+        "MUUSDT:Long:2026-10-07T23:29:37.731Z",
+        "NEARUSDT:Long:2026-09-18T04:06:52.024Z",
+        "NFLXUSDT:Short:2026-09-28T18:35:25.858Z",
+        "NFLXUSDT:Short:2026-10-01T16:00:47.888Z",
+        "NMRUSDT:Long:2026-09-27T17:24:50.384Z",
+        "NMRUSDT:Long:2026-09-28T03:36:44.129Z",
+        "NMRUSDT:Long:2026-09-28T11:48:42.180Z",
+        "NMRUSDT:Long:2026-09-28T12:18:57.696Z",
+        "NMRUSDT:Long:2026-09-28T12:48:48.644Z",
+        "NMRUSDT:Long:2026-09-28T16:20:22.787Z",
+        "NMRUSDT:Long:2026-09-28T21:54:44.343Z",
+        "NMRUSDT:Long:2026-09-28T22:06:47.823Z",
+        "NMRUSDT:Long:2026-09-28T22:18:57.484Z",
+        "NMRUSDT:Long:2026-09-28T23:42:48.039Z",
+        "NMRUSDT:Long:2026-09-29T00:00:58.314Z",
+        "NMRUSDT:Long:2026-09-29T01:18:48.805Z",
+        "NMRUSDT:Long:2026-09-29T03:48:49.222Z",
+        "NMRUSDT:Long:2026-09-29T04:06:51.735Z",
+        "NMRUSDT:Long:2026-09-29T04:24:47.002Z",
+        "NMRUSDT:Long:2026-09-29T05:00:57.164Z",
+        "NMRUSDT:Long:2026-09-29T05:54:42.244Z",
+        "NMRUSDT:Long:2026-09-29T06:12:43.025Z",
+        "NMRUSDT:Long:2026-09-29T11:30:50.170Z",
+        "NMRUSDT:Long:2026-09-29T15:24:45.125Z",
+        "NVDAUSDT:Long:2026-09-29T13:31:57.328Z",
+        "NVDAUSDT:Long:2026-09-30T14:02:14.377Z",
+        "OKBUSDT:Long:2026-09-21T08:50:00.161Z",
+        "OKBUSDT:Long:2026-09-22T08:54:44.414Z",
+        "OKBUSDT:Long:2026-10-05T17:18:57.105Z",
+        "ONDOUSDT:Long:2026-09-21T16:00:44.031Z",
+        "ONDOUSDT:Long:2026-09-24T07:48:45.594Z",
+        "ONDOUSDT:Long:2026-09-25T02:42:57.566Z",
+        "ONDOUSDT:Long:2026-09-25T20:30:50.111Z",
+        "ORDIUSDT:Long:2026-09-18T14:48:46.157Z",
+        "ORDIUSDT:Long:2026-09-21T16:00:44.031Z",
+        "ORDIUSDT:Long:2026-09-26T16:00:50.253Z",
+        "ORDIUSDT:Long:2026-09-27T08:00:47.942Z",
+        "PENDLEUSDT:Long:2026-09-17T17:24:53.835Z",
+        "PLTRUSDT:Long:2026-09-23T16:06:53.530Z",
+        "QQQUSDT:Long:2026-09-21T16:07:44.893Z",
+        "QQQUSDT:Long:2026-09-25T06:12:59.222Z",
+        "QQQUSDT:Long:2026-10-01T03:54:48.123Z",
+        "SNDKUSDT:Long:2026-09-22T16:00:47.469Z",
+        "SOLUSDT:Long:2026-09-30T12:54:47.596Z",
+        "SPYUSDT:Long:2026-09-22T16:12:54.737Z",
+        "SPYUSDT:Long:2026-10-06T16:05:47.211Z",
+        "TRBUSDT:Long:2026-09-30T20:24:55.713Z",
+        "TRBUSDT:Long:2026-10-06T16:05:47.211Z",
+        "TSMUSDT:Long:2026-09-28T16:24:55.158Z",
+        "TSMUSDT:Long:2026-10-05T17:30:52.338Z",
+        "XAUUSDT:Short:2026-09-28T16:12:45.222Z",
+        "XAUUSDT:Short:2026-10-06T02:36:54.403Z",
+        "XCUUSDT:Long:2026-09-22T18:06:48.047Z",
+        "XPDUSDT:Short:2026-09-17T18:38:12.615Z",
+        "XPDUSDT:Short:2026-09-22T11:32:04.545Z",
+        "XPTUSDT:Short:2026-09-29T16:06:48.306Z"
+      ]
+    },
+    "cutoff": {
+      "field": "origin.detectedAt",
+      "requireEqual": "initialPlan.createdAt",
+      "invalid": "DATA_UNAVAILABLE",
+      "externalCloseTime": "<= cutoff"
+    },
+    "atr": {
+      "timeframe": "1D",
+      "bars": 14,
+      "formula": "mean(high-low)",
+      "session": "source OKX 1D, not 1Dutc; verify alignment before ingestion",
+      "continuous": true,
+      "rounding": "none in research arithmetic",
+      "fallback": null
+    },
+    "variants": {
+      "V0": {
+        "entry": "E0",
+        "stop": "S0"
+      },
+      "V1": {
+        "entry": "E0-d*0.25*abs(E0-S0)",
+        "stop": "S0"
+      },
+      "V2": {
+        "entry": "E0",
+        "stop": "Long:min(low12)-0.10*ATR; Short:max(high12)+0.10*ATR"
+      },
+      "V3": {
+        "entry": "V1.entry",
+        "stop": "V2.stop"
+      }
+    },
+    "geometry": {
+      "E0": "initialPlan.entryPrice",
+      "S0": "initialPlan.initialStopLoss",
+      "d": {
+        "Long": 1,
+        "Short": -1
+      },
+      "alpha": 0.25,
+      "structuralTimeframe": "1H",
+      "structuralBars": 12,
+      "bufferATR": 0.1,
+      "target": "variantEntry+d*1.075*ATR",
+      "targetATR": 1.075,
+      "preserveOriginalTP1": true,
+      "risk": "abs(variantEntry-variantStop)",
+      "require": "positive finite prices; d*(Entry-Stop)>0; d*(TP-Entry)>0; V3 independently validated",
+      "entryClamp": false,
+      "fallback": null
+    },
+    "fees": {
+      "rate": 0.0005,
+      "status": "FROZEN USER-APPROVED MODEL ASSUMPTION",
+      "unit": "fraction of executed notional per side",
+      "netR": "grossR-rate*(abs(entry)+abs(exit))/abs(entry-stop), normalized quantity=1",
+      "applicability": "Conservative research model only; verified current account fee UNKNOWN; not a verified universal Binance fee",
+      "priorScenarioRatesNotAdopted": [
+        0.08,
+        0.12,
+        0.16,
+        0.2
+      ],
+      "entryRate": 0.0005,
+      "exitRate": 0.0005,
+      "approval": "Phase R2.2 user instruction, 2026-10-15",
+      "discountsApplied": false,
+      "excludedAssumptions": [
+        "VIP discount",
+        "BNB discount",
+        "referral discount",
+        "maker execution",
+        "account-specific discount"
+      ],
+      "evidence": "Official Binance FAQ contains hypothetical maker 0.02% / taker 0.05% example; current fee table could not be reliably retrieved",
+      "source": "https://www.binance.com/en-PH/support/faq/detail/360033544231",
+      "sourceReviewedAt": "2026-10-15",
+      "feeUsdPerSide": "executedNotionalUsd * 0.0005",
+      "totalFeeUsd": "entryExecutedNotionalUsd * 0.0005 + exitExecutedNotionalUsd * 0.0005",
+      "feeR": "totalFeeUsd / initialRiskUsd",
+      "executionPrices": "actual MODEL execution prices; no extra leverage multiplier",
+      "unfilledFee": 0,
+      "invalidatedUnfilledFee": 0,
+      "incomplete": "AMBIGUOUS / DATA_UNAVAILABLE / UNRESOLVED_OPEN: no fabricated completed Net R"
+    },
+    "randomControl": {
+      "seed": 20261015,
+      "samplesPerEligibleSignal": 100,
+      "control": "V0 common EXIT B only",
+      "sampling": "uniform with replacement over scheduled minute opens from firstEligibleMinute through entry expiry; require minute close<=entry expiry; select before inspecting outcomes; unavailable draws stay unavailable, no replacement",
+      "entry": "selected candle open; market-style sanity control, no future price to select time",
+      "geometry": "preserve V0 absolute stop and TP distances translated to sampled open; same direction",
+      "horizon": "original cutoff+72h, not 72h after random entry",
+      "eligibility": "valid V0 presignal geometry and instrument mapping only",
+      "order": "tradeIds lexicographic then sample index",
+      "purpose": "sanity only; no 46% acceptance threshold"
+    },
+    "prng": {
+      "name": "LCG32",
+      "initialState": "seed unsigned32; independent reset for bootstrap and random control; reset bootstrap per policy",
+      "next": "state=(1664525*state+1013904223) mod 2^32; u=state/2^32",
+      "index": "floor(u*n)",
+      "bootstrapDayOrder": "ascending UTC date"
+    }
+  },
+  "execution": {
+    "exit": "B:100% TP1",
+    "timeframe": "1m",
+    "firstEligibleMinute": "floor(cutoffMs/60000)*60000+60000",
+    "entryExpiryHours": 12,
+    "horizonHours": 72,
+    "eligibleEntryCandle": "openTime>cutoff AND closeTime<=cutoff+12h",
+    "eligibleOutcomeCandle": "closeTime<=cutoff+72h",
+    "partialBoundaryCandles": "Entry expiry: partial candle excluded; valid still-waiting path becomes UNFILLED after eligible set exhausted. Outcome-horizon partial candle semantics unchanged; no lookahead or forced close.",
+    "fill": "all variants fixed level touch; low<=Entry<=high; no improvement",
+    "entryAtOpen": "open==Entry proves fill at open",
+    "entryCandleExit": "if open==Entry use active-position rules; otherwise any reachable SL or TP in fill candle is AMBIGUOUS",
+    "entryGap": "if favorable-side open and Entry not in range: AMBIGUOUS_ENTRY; if Entry in range use fixed-level fill subject to entryCandleExit",
+    "favorableSide": "Long open<Entry; Short open>Entry",
+    "stopBeforeFill": "without reachable Entry, proven Stop touch invalidates order; simultaneous levels unresolved; never presume continuous inter-candle path",
+    "postFill": "open beyond SL executes at open first; open at/beyond TP executes at TP; otherwise both SL/TP touched=AMBIGUOUS; single level=level price",
+    "unfilledGrossR": 0,
+    "invalidatedUnfilledGrossR": 0,
+    "unresolvedOpen": "not zero; no forced close",
+    "missingData": "no interpolation; duplicates/conflicts/disorder/unconfirmed/invalid OHLC/mapping/gaps => DATA_UNAVAILABLE if needed path affected",
+    "delisting": "DATA_UNAVAILABLE",
+    "feesOnUnfilled": 0,
+    "funding": "EXCLUDED",
+    "extraSlippage": null
+  },
+  "expiryCorrection": {
+    "appliesTo": [
+      "V0",
+      "V1",
+      "V2",
+      "V3"
+    ],
+    "closeTimeDefinition": "openTime + 60000 milliseconds, same simulator boundary convention",
+    "eligible": "openTime > original cutoff AND closeTime <= entryExpiry",
+    "entryExpiry": "original cutoff + 12 hours",
+    "equalBoundary": "ELIGIBLE",
+    "beforeBoundary": "ELIGIBLE",
+    "afterBoundary": "INELIGIBLE; never inspect to infer pre-expiry entry",
+    "exhaustedEligibleCandles": "If still waiting, all required eligible data valid, and no prior terminal/invalidation/ambiguity: UNFILLED",
+    "unfilled": {
+      "grossR": 0,
+      "netR": 0,
+      "entryFeeUsd": 0,
+      "exitFeeUsd": 0
+    },
+    "partialMinuteAlone": "Not DATA_UNAVAILABLE, AMBIGUOUS_ENTRY or UNRESOLVED_OPEN; outside admissible entry set",
+    "preserveEarlierStates": "Genuine missing/invalid required data and earlier ambiguity/invalidation are not converted to UNFILLED. Already-filled positions retain the original outcome horizon and rules."
+  },
+  "primary": {
+    "question": "Does frozen V1 improve model Net R relative to V0 under corrected expiry?",
+    "pairing": "Both V0 and V1 have finite numeric model netR; join by exact frozen tradeId; no sign/profit filter; no V2/V3 eligibility condition",
+    "numericUnfilled": true,
+    "effect": "mean(V1.netR - V0.netR) over paired-available signals",
+    "report": [
+      "paired N",
+      "excluded N",
+      "mean paired difference",
+      "median paired difference",
+      "95% day-cluster bootstrap CI for mean paired difference"
+    ],
+    "unknownStates": [
+      "DATA_UNAVAILABLE",
+      "AMBIGUOUS",
+      "AMBIGUOUS_ENTRY",
+      "UNRESOLVED_OPEN",
+      "GEOMETRY_UNAVAILABLE",
+      "ATR_UNAVAILABLE",
+      "STRUCTURE_UNAVAILABLE",
+      "any other genuinely unknown model netR"
+    ],
+    "unknownAsZero": false,
+    "emptyPair": "INVALID / NOT INTERPRETABLE; no fabricated estimate or CI"
+  },
+  "bootstrap": {
+    "cluster": "UTC date origin.detectedAt",
+    "repetitions": 10000,
+    "seed": 20261015,
+    "percentile": "Type 7",
+    "CI": [
+      0.025,
+      0.975
+    ],
+    "sampling": "D UTC signal-days of paired cohort with replacement; copy complete day clusters; sum paired differences / sampled trade count; same draws for V0 and V1; not equally weighted daily means",
+    "targets": [
+      "PRIMARY V1-V0 paired Net mean difference",
+      "SECONDARY v1.0 comparisons on all-four resolved intersection"
+    ],
+    "net": "Frozen fee model applied; primary Net comparison defined above",
+    "policySeparate": true
+  },
+  "decision": {
+    "precedence": [
+      "INVALID / NOT INTERPRETABLE",
+      "IMPROVED",
+      "NOT IMPROVED",
+      "INCONCLUSIVE"
+    ],
+    "invalid": "Material simulator/data integrity problem, or primary estimate/CI unavailable",
+    "improved": "mean paired Net R difference > 0 AND CI lower > 0",
+    "notImproved": "mean paired Net R difference <= 0 OR CI upper <= 0",
+    "inconclusive": "mean paired Net R difference > 0 AND CI lower <= 0 <= CI upper (unless prior rule applies)",
+    "changeAfterResults": false
+  },
+  "reporting": {
+    "attrition": [
+      "Original N",
+      "Numeric N",
+      "TP",
+      "STOP",
+      "UNFILLED",
+      "INVALIDATED_UNFILLED",
+      "AMBIGUOUS",
+      "AMBIGUOUS_ENTRY",
+      "DATA_UNAVAILABLE",
+      "UNRESOLVED_OPEN",
+      "other nonnumeric states",
+      "confirmed fill count",
+      "confirmed fill percent"
+    ],
+    "availabilityMatrix": "V0 numeric/nonnumeric x V1 numeric/nonnumeric; totals reconcile to 91; V1_V0_PAIR_AVAILABLE_N",
+    "remainingAsymmetry": "Explicit discussion required; no hidden attrition",
+    "policySeparate": true,
+    "secondary": "V2/V3 remain secondary; retain v1.0 all-four resolved intersection for secondary comparisons; never use it as primary V1/V0 denominator",
+    "noSearch": true
+  },
+  "randomControlDetermination": {
+    "affected": false,
+    "method": "Static code inspection only",
+    "evidence": [
+      "random-control.mjs prepare() constructs schedule with t+MINUTE<=expiry and horizon",
+      "execute() fills immediately at selected candle open; no waiting-limit expiry path",
+      "Uses buildPlans() and sampleControlTimes(), never simulator.simulate()"
+    ],
+    "action": "Preserve original v1.0 random-control results; no rerun or semantic changes",
+    "ifContraryEvidence": "STOP before corrected historical execution; report exact defect",
+    "originalReportedResults": {
+      "eligibleSignals": 91,
+      "expectedSamples": 9100,
+      "retainedSamples": 9100,
+      "resolvedNumeric": 7509,
+      "TP": 3271,
+      "STOP": 4238,
+      "UNRESOLVED_OPEN": 1591,
+      "meanGrossResolvedReported": -0.058156,
+      "meanNetResolvedReported": -0.089481
+    }
+  },
+  "regressionRequirements": [
+    "A: closeTime == expiry eligible",
+    "B: closeTime > expiry ineligible, including expiry inside candle",
+    "C: final fully eligible candle Entry touch fills under unchanged ambiguity rules",
+    "D: touch only on partial expiry candle yields UNFILLED if earlier path valid and still waiting",
+    "E: no eligible touch yields UNFILLED if no earlier invalidation/ambiguity/data defect",
+    "F: UNFILLED gross/net 0 and both fees 0",
+    "G: genuine missing/invalid required data remains DATA_UNAVAILABLE",
+    "H: outcomes not logically affected by expiry correction identical to v1.0",
+    "After corrected run list every changed historical tradeId/classification; unrelated change -> STOP, INVESTIGATE, DO NOT INTERPRET PERFORMANCE"
+  ],
+  "preservation": {
+    "v10Immutable": true,
+    "futureOutputDirectory": "/Users/polusmak/analysis/validation/entry-stop-v1.1-results/",
+    "overwrite": false,
+    "newExecutionRequiresSeparateApproval": true
+  },
+  "interpretation": {
+    "limitations": [
+      "historical",
+      "completion-selected",
+      "small",
+      "time-concentrated",
+      "strongly directionally imbalanced",
+      "already inspected during development"
+    ],
+    "positiveResult": "Only grounds to consider V1 as a frozen candidate for prospective validation on NEW signals, not live-money validation",
+    "coreChangeJustified": false,
+    "realMoneyActivationJustified": false
+  },
+  "state": {
+    "core": "FROZEN",
+    "realMoney": "HOLD",
+    "forward": "PAUSED",
+    "commit": "NOT AUTHORIZED",
+    "deploy": "NOT AUTHORIZED"
+  }
+}
