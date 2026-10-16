@@ -70,7 +70,8 @@ test('fractional cutoff advances to next minute',()=>{const f=fixture('Long',T+1
 test('exact minute cutoff also advances',()=>assert.equal(engine.buildPlans(fixture()).V0.bounds.firstEligibleMinute,T+M));
 test('fill candle closing exactly at expiry permitted',()=>{const cs=minutes(719,[105,106,104,105]);cs[718]=candle(T+719*M,100,111,99);assert.equal(run(cs).status,'TP');});
 test('minute after expiry cannot fill',()=>{const cs=minutes(720,[105,106,104,105]);cs[719]=candle(T+720*M,100,111,99);assert.equal(run(cs).status,'UNFILLED');});
-test('partial expiry minute does not fabricate unfilled zero',()=>{const f=fixture('Long',T+1000),r=run(minutes(719,[105,106,104,105]),f);assert.equal(r.status,'DATA_UNAVAILABLE');assert.equal(r.reason,'PARTIAL_EXPIRY_MINUTE');assert.equal(r.grossR,null);});
+// Updated solely for preregistered v1.1: partial expiry is ineligible, not missing data.
+test('partial expiry with exhausted valid entry candles is unfilled zero',()=>{const f=fixture('Long',T+1000),r=run(minutes(719,[105,106,104,105]),f);assert.equal(r.status,'UNFILLED');assert.equal(r.reason,null);assert.equal(r.grossR,0);assert.equal(r.netR,0);assert.equal(r.entryFeeUsd+r.exitFeeUsd,0);assert.equal(r.feeR,0);assert.equal(r.completedAt,T+1000+12*H);});
 test('exit at full horizon boundary permitted',()=>{const cs=minutes(4319);cs[4318]=candle(T+4319*M,100,111,99);assert.equal(run(cs).status,'TP');});
 test('open at horizon remains unresolved',()=>{const r=run(minutes(4319));assert.equal(r.status,'UNRESOLVED_OPEN');assert.equal(r.netR,null);});
 test('candle starting at horizon cannot exit position',()=>{const cs=minutes(4319);cs.push(candle(T+4320*M,100,900,1));assert.equal(run(cs).status,'UNRESOLVED_OPEN');});
@@ -124,3 +125,38 @@ test('random sample primitive receives no outcomes and cannot redraw losses',()=
 test('random empty availability returns no invented samples',()=>assert.equal(engine.sampleControlTimes([]).status,'DATA_UNAVAILABLE'));
 test('random invalid timestamp refused',()=>assert.throws(()=>engine.sampleControlTimes([T+1]),/INVALID_CANDIDATE_TIMES/));
 test('random duplicate candidate timestamps do not bias distribution',()=>assert.deepEqual(engine.sampleControlTimes([T+M,T+M,T+2*M]),engine.sampleControlTimes([T+M,T+2*M])));
+
+// Synthetic boundary regression only: all variants and both directions.
+for (const direction of ['Long','Short']) for (const variant of ['V0','V1','V2','V3']) {
+  const away=direction==='Long'?[105,106,104,105]:[95,96,94,95];
+  for (const offset of [0,1000]) test(`${direction} ${variant}: final eligible close at/before expiry (${offset}) fills`,()=>{
+    const f=fixture(direction,T+offset),p=engine.buildPlans(f)[variant];
+    const cs=minutes(719,away);
+    cs[718]=candle(T+719*M,p.entry,Math.max(p.entry,p.tp),Math.min(p.entry,p.tp),p.tp);
+    const r=run(cs,f,variant);
+    assert.equal(r.status,'TP');assert.equal(r.filledAt,T+719*M);
+    assert.equal(r.completedAt,T+720*M);
+  });
+  test(`${direction} ${variant}: touch only in partial expiry minute is excluded`,()=>{
+    const f=fixture(direction,T+1000),p=engine.buildPlans(f)[variant];
+    const cs=minutes(719,away);
+    const baseline=run(cs,f,variant);
+    cs.push(candle(T+720*M,p.entry,Math.max(p.entry,p.tp),Math.min(p.entry,p.tp),p.tp));
+    const r=run(cs,f,variant);
+    assert.deepEqual(r,baseline);assert.equal(r.status,'UNFILLED');
+    assert.equal(r.filledAt,null);assert.equal(r.grossR,0);assert.equal(r.netR,0);
+    assert.equal(r.entryFeeUsd+r.exitFeeUsd,0);assert.equal(r.feeR,0);
+    assert.equal(r.completedAt,T+1000+12*H);
+  });
+  test(`${direction} ${variant}: required pre-expiry missing/invalid candle remains unavailable`,()=>{
+    const f=fixture(direction,T+1000);
+    for (const invalid of [false,true]) {
+      const cs=minutes(719,away);
+      if(invalid) cs[718].confirmed=false; else cs.pop();
+      const r=run(cs,f,variant);
+      assert.equal(r.status,'DATA_UNAVAILABLE');
+      assert.equal(r.reason,'MISSING_DUPLICATE_DISORDERED_OR_INVALID_CANDLE');
+      assert.equal(r.netR,null);assert.equal(r.completedAt,null);
+    }
+  });
+}

@@ -134,8 +134,8 @@ export function createSimulator(suppliedConfig) {
     const d = plan.direction === 'Long' ? 1 : -1;
     for (let t = first; t + MINUTE <= horizon; t += MINUTE) {
       if (filledAt === null && t + MINUTE > expiry) {
-        return expiry % MINUTE === 0 ? result('UNFILLED', expiry)
-          : result('DATA_UNAVAILABLE', t, null, 'PARTIAL_EXPIRY_MINUTE');
+        // v1.1: the partial expiry candle is outside the eligible entry set.
+        return result('UNFILLED', expiry);
       }
       const c = idx.map.get(t), end = t + MINUTE;
       if (idx.bad.has(t) || !validCandle(c, MINUTE, 0, plan.instId)) {
