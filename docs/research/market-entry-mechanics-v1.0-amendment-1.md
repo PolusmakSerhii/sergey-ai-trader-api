@@ -1,8 +1,8 @@
-# Market Entry Mechanics v1.0 — Pre-outcome Amendment 1
+# Market Entry Mechanics v1.0 — Amendment 1 FINAL
 
-Revision 2 of the previously unfrozen amendment proposal. The previous attempt created no amendment files or commit.
+PRE_OUTCOME. Updates the amendment previously committed at `0d4e7a90c05d77d95008ff934def98b7d9e9e397`; previous content remains in git history. Base protocol files remain unchanged. Only the explicit execution clarifications below supersede conflicting base wording. All other parameters and gates remain frozen.
 
-Base protocol and its original hashes remain unchanged. This amendment explicitly supersedes only conflicting Alternative WAITING_ENTRY pre-fill priority/marketable-open semantics. It does not assert that cancellation is the worst realized outcome on every possible price path. All other base parameters and gates remain in force.
+No engine execution or historical dataset download is authorized by this document. Prior R7-A availability probes are distinct from collection of the research dataset; no historical outcomes were used for this amendment.
 
 ## Machine-readable contract
 
@@ -14,11 +14,12 @@ Base protocol and its original hashes remain unchanged. This amendment explicitl
   "baseMdSha256": "2306fb61299d8ec61fef8a22293c9c811e0f79d5dc2442d5b14c2a33d595d242",
   "baseJsonSha256": "76a1876bbc8a73178f2b6b77a41dfa7dd1e98f4878ad48353a5c94bbdea7c17c",
   "amendment": 1,
-  "draftRevision": 2,
+  "draftRevision": "FINAL",
   "amendmentTiming": "PRE_OUTCOME",
   "amendmentReason": [
     "Unknown WAITING_ENTRY intrabar ordering of EL and terminal barriers",
-    "Opening gap through EL inside barriers had no explicit marketability rule"
+    "Opening gap through EL inside barriers had no explicit marketability rule",
+    "Exact first execution candle and expiry equality previously unspecified"
   ],
   "historicalOutcomesInspected": false,
   "developmentOpened": false,
@@ -73,134 +74,429 @@ Base protocol and its original hashes remain unchanged. This amendment explicitl
     "laterIntrabarStopGap": false
   },
   "alreadyActive": "base ACTIVE rules; adverse opening stop gap at observed Open; target at T; no prefill cancellation",
-  "expiry": "fully eligible candle only; partial expiry candle excluded even when marketable at Open; remaining WAITING_ENTRY -> UNFILLED, 0R, zero fees",
+  "expiry": "Alternative fill/invalidation requires openTime >= observationAt AND closeTime <= entryExpiry and valid confirmed candle; exclude partial expiry candle even if marketable at Open; waiting after last eligible candle -> UNFILLED, 0R, zero fees",
   "modelLimitation": "EL execution at open event is deterministic no-price-improvement convention, not a claim of actual exchange fill",
   "normativeSections": [
     {
+      "section": 1,
+      "title": "PURPOSE",
+      "text": "Freeze three execution clarifications discovered BEFORE any historical\noutcomes were inspected:\n\nA. WAITING_ENTRY same-candle EL + terminal-barrier ambiguity.\n\nB. WAITING_ENTRY opening gap through EL while Open remains inside\n   frozen Stop/Target.\n\nC. Exact execution-window lower boundary and expiry inclusivity.\n\nAll other v1.0 parameters remain unchanged."
+    },
+    {
       "section": 2,
-      "title": "SCOPE OF AMENDMENT",
-      "text": "Clarify ONLY Alternative WAITING_ENTRY execution semantics.\n\nDo NOT change:\n\nuniverse\ncalendar\nobservation time\nP0\nATR\npullback 0.25A\nStop\nTarget\nexpiry\nhorizon\nfees\nprimary metric\nbootstrap\nDevelopment rule\nHoldout rule."
+      "title": "EXACT EXECUTION WINDOW START",
+      "text": "Observation:\n\nobservationAt = 17:00:00 UTC.\n\nP0 remains:\n\nclose of the final fully closed confirmed 1m candle with:\n\ncloseTime <= observationAt.\n\nFor normal 1m bars:\n\nP0 candle:\nopenTime  = 16:59:00\ncloseTime = 17:00:00\n\nFreeze the FIRST execution candle for BOTH Baseline and Alternative as:\n\nopenTime >= observationAt\n\nTherefore the first normal eligible execution candle is:\n\nopenTime  = 17:00:00\ncloseTime = 17:01:00\n\nThere is NO intentional one-minute gap.\n\nThe 17:00–17:01 candle may NOT define P0 or any frozen setup input.\n\nIts OHLC may be used only for post-cutoff execution/outcome modeling."
     },
     {
       "section": 3,
-      "title": "WAITING_ENTRY OPEN-EVENT PRIORITY",
-      "text": "For every eligible 1m candle while Alternative is WAITING_ENTRY:\n\nPROCESS CANDLE OPEN FIRST.\n\nLet:\n\nLONG:\nS < EL < T\n\nSHORT:\nT < EL < S\n\nFirst determine whether Open itself proves that a frozen terminal\nbarrier has already been reached/crossed before a valid new fill.\n\nBarrier invalidation has priority over opening limit fill.\n\nTherefore:\n\nLONG:\nif Open <= S OR Open >= T:\n    INVALIDATED_UNFILLED\n    Gross R = 0\n    Net R = 0\n    fees = 0\n\nSHORT:\nif Open >= S OR Open <= T:\n    INVALIDATED_UNFILLED\n    Gross R = 0\n    Net R = 0\n    fees = 0\n\nOnly if Open remains STRICTLY inside S/T may an opening limit fill be\nconsidered."
+      "title": "BASELINE FIRST CANDLE",
+      "text": "Baseline immediate model market entry uses:\n\nOpen of the first fully eligible confirmed 1m execution candle with:\n\nopenTime >= observationAt.\n\nUnder normal complete 1m data:\n\nEntry candle = 17:00–17:01\nEntry price = its Open at 17:00.\n\nExisting Baseline geometry rule remains:\n\nLONG:\nS < EB < T\n\nSHORT:\nT < EB < S\n\nOtherwise:\n\nINVALIDATED_UNFILLED\n0R\nfees 0."
     },
     {
       "section": 4,
-      "title": "MARKETABLE-AT-OPEN LIMIT",
-      "text": "If state is WAITING_ENTRY and Open remains strictly inside frozen\nbarriers:\n\nLONG buy-limit EL:\n\nif Open <= EL:\n    limit is considered FILLED at the OPEN event.\n\nSHORT sell-limit EL:\n\nif Open >= EL:\n    limit is considered FILLED at the OPEN event.\n\nIMPORTANT MODEL EXECUTION PRICE:\n\nEntry = frozen EL\n\nNOT candle Open.\n\nThere is NO favorable price improvement.\n\nExamples:\n\nLONG:\nS=96\nEL=99\nT=104\nOpen=98\n\n=> opening barrier invalidation: NO\n=> marketable limit: YES\n=> Entry=99\n=> state ACTIVE before intrabar high/low processing.\n\nSHORT:\nT=96\nEL=101\nS=104\nOpen=102\n\n=> opening barrier invalidation: NO\n=> marketable limit: YES\n=> Entry=101\n=> state ACTIVE before intrabar high/low processing.\n\nThis is a deterministic research execution convention.\nIt is NOT a claim about exact historical exchange fill price."
+      "title": "ALTERNATIVE FIRST CANDLE",
+      "text": "Alternative may begin evaluating EL on the same first execution\ncandle:\n\nopenTime >= observationAt.\n\nThus 17:00–17:01 is eligible for Alternative fill/invalidation.\n\nNo candle before observationAt may establish Alternative fill."
     },
     {
       "section": 5,
-      "title": "AFTER OPEN-EVENT FILL",
-      "text": "Once marketable-at-open fill is established:\n\nstate becomes ACTIVE immediately.\n\nThen process the SAME candle's remaining intrabar high/low under\nACTIVE rules.\n\nTherefore:\n\nStop only touched after open -> STOP\nTarget only -> TP\nStop + Target with unknown order -> STOP\n\nAdverse Stop gap cannot occur later inside that same candle because\nthe candle Open has already been processed; ordinary Stop touch uses\nfrozen Stop.\n\nNo favorable Target improvement."
+      "title": "EXPIRY INCLUSIVITY",
+      "text": "Alternative expiry:\n\nentryExpiry = observationAt + 4h.\n\nFreeze exact candle eligibility:\n\nA candle may establish Alternative fill/invalidation only if:\n\nopenTime >= observationAt\nAND\ncloseTime <= entryExpiry\nAND\nthe candle otherwise passes frozen validity/confirmation rules.\n\nTherefore for:\n\nobservationAt = 17:00\nentryExpiry = 21:00\n\nthe LAST eligible entry candle is:\n\nopenTime  = 20:59:00\ncloseTime = 21:00:00\n\nA candle:\n\n21:00–21:01\n\nis NOT entry-eligible.\n\nA candle crossing expiry is NOT partially evaluated for entry.\n\nIf still WAITING_ENTRY after processing the final eligible candle:\n\nUNFILLED\n0R\nfees 0."
     },
     {
       "section": 6,
-      "title": "WAITING_ENTRY INTRABAR RULES",
-      "text": "If Open:\n\n- does not invalidate the setup; AND\n- does not make the limit marketable;\n\nthen process intrabar ranges.\n\nFor unknown intrabar order:\n\nEL only:\n    fill at frozen EL -> ACTIVE\n\nS only:\n    INVALIDATED_UNFILLED\n\nT only:\n    INVALIDATED_UNFILLED\n\nEL + S:\n    INVALIDATED_UNFILLED\n\nEL + T:\n    INVALIDATED_UNFILLED\n\nEL + S + T:\n    INVALIDATED_UNFILLED\n\nPre-fill barrier invalidation has priority over a possible limit fill\nwhenever intrabar ordering cannot be established from OHLC.\n\nSymmetric LONG/SHORT.\n\nNo tick-path reconstruction.\n\nNo future candle may resolve prior ambiguity."
+      "title": "HORIZON — UNCHANGED",
+      "text": "Outcome horizon remains:\n\nobservationAt + 12h.\n\nExisting frozen rule remains:\n\ncloseTime <= horizon.\n\nFor observation 17:00:\n\nhorizon = 05:00 next day\n\nlast eligible outcome candle:\n\n04:59–05:00.\n\nDo not change this rule."
     },
     {
       "section": 7,
-      "title": "EXACT-LEVEL OPEN CASES",
-      "text": "Freeze boundary semantics explicitly.\n\nBarrier equality invalidates BEFORE fill:\n\nLONG:\nOpen == S -> INVALIDATED_UNFILLED\nOpen == T -> INVALIDATED_UNFILLED\n\nSHORT:\nOpen == S -> INVALIDATED_UNFILLED\nOpen == T -> INVALIDATED_UNFILLED\n\nLimit equality inside barriers fills:\n\nLONG:\nOpen == EL -> fill at EL -> ACTIVE\n\nSHORT:\nOpen == EL -> fill at EL -> ACTIVE\n\nThus ordering at OPEN is:\n\n1. terminal barrier invalidation\n2. marketable limit fill\n3. remaining intrabar processing"
+      "title": "WAITING_ENTRY OPEN PRIORITY",
+      "text": "For every eligible Alternative candle while WAITING_ENTRY:\n\nPROCESS OPEN EVENT FIRST.\n\nFrozen order:\n\n1. terminal-barrier invalidation\n2. marketable-at-open limit fill\n3. remaining intrabar processing."
     },
     {
       "section": 8,
-      "title": "ALREADY ACTIVE DISTINCTION",
-      "text": "These pre-fill rules apply ONLY to WAITING_ENTRY.\n\nFor a position proven ACTIVE in an earlier candle:\n\nexisting protocol rules remain:\n\n- adverse opening gap through Stop -> exit at observed adverse Open\n- Target favorable gap -> frozen Target\n- Stop + Target same candle unknown order -> STOP\n- Stop -> STOP\n- Target -> TP\n- horizon -> TIME_EXIT.\n\nDo NOT convert ACTIVE positions back into pre-fill invalidation."
+      "title": "OPEN BARRIER INVALIDATION",
+      "text": "LONG:\n\nif Open <= S OR Open >= T:\n    INVALIDATED_UNFILLED\n    Gross R = 0\n    Net R = 0\n    fees = 0\n\nSHORT:\n\nif Open >= S OR Open <= T:\n    INVALIDATED_UNFILLED\n    Gross R = 0\n    Net R = 0\n    fees = 0\n\nBarrier equality invalidates.\n\nNo position is opened."
     },
     {
       "section": 9,
-      "title": "EXPIRY INTERACTION",
-      "text": "A candle may establish a fill only if it is fully eligible under the\nfrozen expiry rule.\n\nA candle crossing the expiry boundary is excluded even if its Open\nwould otherwise make the limit marketable.\n\nAfter the last fully eligible entry candle:\n\nWAITING_ENTRY -> UNFILLED\n0R\n0 fees.\n\nDo not use a partial expiry candle."
+      "title": "MARKETABLE-AT-OPEN LIMIT",
+      "text": "Only if Open remains STRICTLY inside frozen S/T:\n\nLONG buy-limit EL:\n\nif Open <= EL:\n    FILLED at OPEN event\n    model Entry = frozen EL\n    state -> ACTIVE\n\nSHORT sell-limit EL:\n\nif Open >= EL:\n    FILLED at OPEN event\n    model Entry = frozen EL\n    state -> ACTIVE\n\nNo favorable price improvement.\n\nExamples:\n\nLONG:\nS=96\nEL=99\nT=104\nOpen=98\n\n=> Entry=99\n=> ACTIVE before intrabar processing.\n\nSHORT:\nT=96\nEL=101\nS=104\nOpen=102\n\n=> Entry=101\n=> ACTIVE before intrabar processing.\n\nOpen == EL:\n\nfill at EL -> ACTIVE."
     },
     {
       "section": 10,
-      "title": "WHY THIS AMENDMENT EXISTS",
-      "text": "Record both pre-outcome blockers:\n\nBLOCKER 1:\nWAITING_ENTRY candle containing EL together with Stop/Target without\nknown intrabar order.\n\nBLOCKER 2:\nWAITING_ENTRY candle opening through EL while remaining inside frozen\nbarriers.\n\nThe protocol previously did not define whether the second case was a\nfill or required later exact EL touch.\n\nRevision 2 freezes:\n\nmarketable-at-open -> fill,\nbut Entry price remains frozen EL,\nwith no favorable price improvement.\n\nAll decisions occurred BEFORE historical outcomes."
+      "title": "SAME-CANDLE AFTER OPEN FILL",
+      "text": "If marketable-at-open fill occurred:\n\nthe position is ACTIVE before processing that candle's High/Low.\n\nThen existing ACTIVE rules apply to the SAME candle:\n\nStop only -> STOP at frozen Stop\nTarget only -> TP at frozen Target\nStop + Target -> STOP\nneither -> remain ACTIVE.\n\nDo not apply WAITING_ENTRY invalidation after a proven opening fill."
+    },
+    {
+      "section": 11,
+      "title": "WAITING_ENTRY INTRABAR PRIORITY",
+      "text": "If Open:\n\n- did not invalidate setup;\n- did not establish marketable limit fill;\n\nthen evaluate intrabar range.\n\nWhen OHLC cannot establish intraminute ordering:\n\nEL only:\n    fill at EL -> ACTIVE\n\nS only:\n    INVALIDATED_UNFILLED\n\nT only:\n    INVALIDATED_UNFILLED\n\nEL + S:\n    INVALIDATED_UNFILLED\n\nEL + T:\n    INVALIDATED_UNFILLED\n\nEL + S + T:\n    INVALIDATED_UNFILLED\n\nThis applies symmetrically LONG and SHORT.\n\nPre-fill terminal-barrier invalidation has priority over possible limit\nfill when order is unknown.\n\nNo tick-path reconstruction.\n\nNo future candle may resolve previous intrabar ordering."
+    },
+    {
+      "section": 12,
+      "title": "ALREADY ACTIVE POSITIONS",
+      "text": "WAITING_ENTRY rules do NOT apply to a position already ACTIVE before\nthe candle.\n\nExisting frozen ACTIVE rules remain:\n\n- adverse opening gap through Stop:\n  exit at observed adverse Open;\n\n- favorable opening gap through Target:\n  exit at frozen Target;\n\n- Stop only:\n  STOP;\n\n- Target only:\n  TP;\n\n- Stop + Target with unknown order:\n  STOP;\n\n- no terminal event by horizon:\n  TIME_EXIT."
+    },
+    {
+      "section": 13,
+      "title": "EXACT BOUNDARY EXAMPLES",
+      "text": "Freeze explicitly:\n\nP0 candle:\n16:59–17:00\n\nFirst execution candle:\n17:00–17:01\n\nFirst execution open:\n17:00\n\nLast Alternative entry candle:\n20:59–21:00\n\n21:00–21:01:\nNOT entry eligible.\n\nLast outcome candle:\n04:59–05:00 next day.\n\nNo intentional one-minute delay after observationAt."
+    },
+    {
+      "section": 14,
+      "title": "PRE-OUTCOME STATUS",
+      "text": "Record explicitly:\n\nAll three clarifications were made BEFORE:\n\n- historical candle download for this experiment;\n- Development outcome inspection;\n- Holdout outcome inspection;\n- generic simulator historical execution.\n\nHistorical outcomes inspected = false\nDevelopment opened = false\nHoldout opened = false\n\nThis amendment does NOT claim the deterministic OHLC execution policy\nreconstructs actual tick-level historical order.\n\nIt defines the research model."
+    },
+    {
+      "section": 15,
+      "title": "NO OTHER PARAMETER CHANGES",
+      "text": "Do NOT change:\n\nUniverse:\nBTC-USDT-SWAP\nETH-USDT-SWAP\nSOL-USDT-SWAP\n\nObservation:\n17:00 UTC\n\nDevelopment:\n2024-11-01 through 2025-10-31 inclusive\n\nEmbargo:\n2025-11-01\n\nHoldout:\n2025-11-02 through 2026-04-30 inclusive\n\nATR:\nmean(high-low), last 14 fully closed confirmed OKX 1D candles,\n16:00 UTC alignment\n\nAlternative:\nP0 - d*0.25A\n\nStop:\nP0 - d*A\n\nTarget:\nP0 + d*A\n\nExpiry:\n4h\n\nHorizon:\n12h\n\nFee:\n0.0005 per executed side\n\nBootstrap:\n7-day moving blocks\n10,000 repetitions\nseed 20261016\nType-7 percentiles\n\nPrimary metric and advancement/holdout rules unchanged."
     }
   ],
   "designValidation": {
-    "method": "reasoned synthetic state cases only, no engine execution",
-    "directions": [
-      "LONG",
-      "SHORT"
-    ],
+    "method": "logical synthetic design review only; no engine or historical execution",
     "cases": [
-      "open beyond Stop",
-      "open exactly Stop",
-      "open beyond Target",
-      "open exactly Target",
-      "open through EL inside barriers",
-      "open exactly EL",
-      "nonmarketable open EL only",
-      "S only",
-      "T only",
-      "EL+S",
-      "EL+T",
-      "EL+S+T",
-      "expiry exclusion",
-      "already ACTIVE",
-      "open-fill then Stop",
-      "open-fill then Target",
-      "open-fill then both"
+      {
+        "id": 1,
+        "case": "Open beyond Stop",
+        "LONG": "INVALIDATED_UNFILLED",
+        "SHORT": "INVALIDATED_UNFILLED",
+        "status": "PASS"
+      },
+      {
+        "id": 2,
+        "case": "Open == Stop",
+        "LONG": "INVALIDATED_UNFILLED",
+        "SHORT": "INVALIDATED_UNFILLED",
+        "status": "PASS"
+      },
+      {
+        "id": 3,
+        "case": "Open beyond Target",
+        "LONG": "INVALIDATED_UNFILLED",
+        "SHORT": "INVALIDATED_UNFILLED",
+        "status": "PASS"
+      },
+      {
+        "id": 4,
+        "case": "Open == Target",
+        "LONG": "INVALIDATED_UNFILLED",
+        "SHORT": "INVALIDATED_UNFILLED",
+        "status": "PASS"
+      },
+      {
+        "id": 5,
+        "case": "Open through EL inside barriers",
+        "LONG": "fill at EL; ACTIVE before intrabar",
+        "SHORT": "fill at EL; ACTIVE before intrabar",
+        "status": "PASS"
+      },
+      {
+        "id": 6,
+        "case": "Open == EL",
+        "LONG": "fill at EL; ACTIVE before intrabar",
+        "SHORT": "fill at EL; ACTIVE before intrabar",
+        "status": "PASS"
+      },
+      {
+        "id": 7,
+        "case": "Nonmarketable Open + EL only",
+        "LONG": "fill at EL -> ACTIVE",
+        "SHORT": "fill at EL -> ACTIVE",
+        "status": "PASS"
+      },
+      {
+        "id": 8,
+        "case": "S only",
+        "LONG": "INVALIDATED_UNFILLED",
+        "SHORT": "INVALIDATED_UNFILLED",
+        "status": "PASS"
+      },
+      {
+        "id": 9,
+        "case": "T only",
+        "LONG": "INVALIDATED_UNFILLED",
+        "SHORT": "INVALIDATED_UNFILLED",
+        "status": "PASS"
+      },
+      {
+        "id": 10,
+        "case": "EL+S",
+        "LONG": "INVALIDATED_UNFILLED",
+        "SHORT": "INVALIDATED_UNFILLED",
+        "status": "PASS"
+      },
+      {
+        "id": 11,
+        "case": "EL+T",
+        "LONG": "INVALIDATED_UNFILLED",
+        "SHORT": "INVALIDATED_UNFILLED",
+        "status": "PASS"
+      },
+      {
+        "id": 12,
+        "case": "EL+S+T",
+        "LONG": "INVALIDATED_UNFILLED",
+        "SHORT": "INVALIDATED_UNFILLED",
+        "status": "PASS"
+      },
+      {
+        "id": 13,
+        "case": "Opening fill then Stop",
+        "LONG": "STOP at S",
+        "SHORT": "STOP at S",
+        "status": "PASS"
+      },
+      {
+        "id": 14,
+        "case": "Opening fill then Target",
+        "LONG": "TP at T",
+        "SHORT": "TP at T",
+        "status": "PASS"
+      },
+      {
+        "id": 15,
+        "case": "Opening fill then Stop+Target",
+        "LONG": "STOP at S",
+        "SHORT": "STOP at S",
+        "status": "PASS"
+      },
+      {
+        "id": 16,
+        "case": "Exact observation boundary",
+        "LONG": "17:00-17:01 eligible; P0 is 16:59-17:00",
+        "SHORT": "17:00-17:01 eligible; P0 is 16:59-17:00",
+        "status": "PASS"
+      },
+      {
+        "id": 17,
+        "case": "Exact expiry boundary",
+        "LONG": "20:59-21:00 entry eligible",
+        "SHORT": "20:59-21:00 entry eligible",
+        "status": "PASS"
+      },
+      {
+        "id": 18,
+        "case": "First candle after expiry",
+        "LONG": "21:00-21:01 not entry eligible",
+        "SHORT": "21:00-21:01 not entry eligible",
+        "status": "PASS"
+      },
+      {
+        "id": 19,
+        "case": "Exact horizon boundary",
+        "LONG": "04:59-05:00 eligible; TIME_EXIT if still ACTIVE without earlier terminal event",
+        "SHORT": "04:59-05:00 eligible; TIME_EXIT if still ACTIVE without earlier terminal event",
+        "status": "PASS"
+      }
     ],
-    "result": "PASS",
-    "note": "S-only intrabar after nonmarketable inside-barrier open is unreachable for valid ordered OHLC without EL crossing; prescribed defensive classification retained",
+    "note": "S-only after nonmarketable inside-barrier open cannot occur without EL crossing for valid OHLC; prescribed defensive classification retained. Baseline missing required first candle remains a data failure, not permission to skip it.",
     "anotherBlockerFound": false
   },
-  "noImplementation": true
+  "noImplementation": true,
+  "revisionHistory": {
+    "previousCommit": "0d4e7a90c05d77d95008ff934def98b7d9e9e397",
+    "previousHashes": {
+      "market-entry-mechanics-v1.0-amendment-1.json": "e5fd579473bc6135de09898de0d95cb69c30182f734a011384ac71ad52e41730",
+      "market-entry-mechanics-v1.0-amendment-1.md": "db23987d6a1bdb33fb3beb7722b0e52d190c4b4038ddb6963a69b64b4f116548"
+    },
+    "change": "Pre-outcome finalization: exact execution start and expiry inclusivity; prior open/intrabar rules preserved"
+  },
+  "executionWindow": {
+    "firstEligibleOpenTime": "openTime >= observationAt",
+    "entryEligibleCloseTime": "closeTime <= entryExpiry",
+    "outcomeEligibleCloseTime": "closeTime <= horizon",
+    "appliesTo": [
+      "Baseline",
+      "Alternative"
+    ],
+    "observationUTC": "17:00:00",
+    "P0Candle": {
+      "openUTC": "16:59:00",
+      "closeUTC": "17:00:00"
+    },
+    "firstExecutionCandle": {
+      "openUTC": "17:00:00",
+      "closeUTC": "17:01:00"
+    },
+    "lastEntryCandle": {
+      "openUTC": "20:59:00",
+      "closeUTC": "21:00:00"
+    },
+    "lastOutcomeCandle": {
+      "openUTC": "04:59:00 next day",
+      "closeUTC": "05:00:00 next day"
+    },
+    "intentionalOneMinuteGap": false,
+    "executionOHLCMayDefineSetup": false,
+    "validConfirmedCandlesRequired": true
+  }
 }
 ```
 
-## Normative clarification
+## Normative amendment
 
-### 2. SCOPE OF AMENDMENT
+### 1. PURPOSE
 
-Clarify ONLY Alternative WAITING_ENTRY execution semantics.
+Freeze three execution clarifications discovered BEFORE any historical
+outcomes were inspected:
 
-Do NOT change:
+A. WAITING_ENTRY same-candle EL + terminal-barrier ambiguity.
 
-universe
-calendar
-observation time
-P0
-ATR
-pullback 0.25A
-Stop
-Target
-expiry
-horizon
-fees
-primary metric
-bootstrap
-Development rule
-Holdout rule.
+B. WAITING_ENTRY opening gap through EL while Open remains inside
+   frozen Stop/Target.
 
-### 3. WAITING_ENTRY OPEN-EVENT PRIORITY
+C. Exact execution-window lower boundary and expiry inclusivity.
 
-For every eligible 1m candle while Alternative is WAITING_ENTRY:
+All other v1.0 parameters remain unchanged.
 
-PROCESS CANDLE OPEN FIRST.
+### 2. EXACT EXECUTION WINDOW START
 
-Let:
+Observation:
+
+observationAt = 17:00:00 UTC.
+
+P0 remains:
+
+close of the final fully closed confirmed 1m candle with:
+
+closeTime <= observationAt.
+
+For normal 1m bars:
+
+P0 candle:
+openTime  = 16:59:00
+closeTime = 17:00:00
+
+Freeze the FIRST execution candle for BOTH Baseline and Alternative as:
+
+openTime >= observationAt
+
+Therefore the first normal eligible execution candle is:
+
+openTime  = 17:00:00
+closeTime = 17:01:00
+
+There is NO intentional one-minute gap.
+
+The 17:00–17:01 candle may NOT define P0 or any frozen setup input.
+
+Its OHLC may be used only for post-cutoff execution/outcome modeling.
+
+### 3. BASELINE FIRST CANDLE
+
+Baseline immediate model market entry uses:
+
+Open of the first fully eligible confirmed 1m execution candle with:
+
+openTime >= observationAt.
+
+Under normal complete 1m data:
+
+Entry candle = 17:00–17:01
+Entry price = its Open at 17:00.
+
+Existing Baseline geometry rule remains:
 
 LONG:
-S < EL < T
+S < EB < T
 
 SHORT:
-T < EL < S
+T < EB < S
 
-First determine whether Open itself proves that a frozen terminal
-barrier has already been reached/crossed before a valid new fill.
+Otherwise:
 
-Barrier invalidation has priority over opening limit fill.
+INVALIDATED_UNFILLED
+0R
+fees 0.
 
-Therefore:
+### 4. ALTERNATIVE FIRST CANDLE
+
+Alternative may begin evaluating EL on the same first execution
+candle:
+
+openTime >= observationAt.
+
+Thus 17:00–17:01 is eligible for Alternative fill/invalidation.
+
+No candle before observationAt may establish Alternative fill.
+
+### 5. EXPIRY INCLUSIVITY
+
+Alternative expiry:
+
+entryExpiry = observationAt + 4h.
+
+Freeze exact candle eligibility:
+
+A candle may establish Alternative fill/invalidation only if:
+
+openTime >= observationAt
+AND
+closeTime <= entryExpiry
+AND
+the candle otherwise passes frozen validity/confirmation rules.
+
+Therefore for:
+
+observationAt = 17:00
+entryExpiry = 21:00
+
+the LAST eligible entry candle is:
+
+openTime  = 20:59:00
+closeTime = 21:00:00
+
+A candle:
+
+21:00–21:01
+
+is NOT entry-eligible.
+
+A candle crossing expiry is NOT partially evaluated for entry.
+
+If still WAITING_ENTRY after processing the final eligible candle:
+
+UNFILLED
+0R
+fees 0.
+
+### 6. HORIZON — UNCHANGED
+
+Outcome horizon remains:
+
+observationAt + 12h.
+
+Existing frozen rule remains:
+
+closeTime <= horizon.
+
+For observation 17:00:
+
+horizon = 05:00 next day
+
+last eligible outcome candle:
+
+04:59–05:00.
+
+Do not change this rule.
+
+### 7. WAITING_ENTRY OPEN PRIORITY
+
+For every eligible Alternative candle while WAITING_ENTRY:
+
+PROCESS OPEN EVENT FIRST.
+
+Frozen order:
+
+1. terminal-barrier invalidation
+2. marketable-at-open limit fill
+3. remaining intrabar processing.
+
+### 8. OPEN BARRIER INVALIDATION
 
 LONG:
+
 if Open <= S OR Open >= T:
     INVALIDATED_UNFILLED
     Gross R = 0
@@ -208,37 +504,36 @@ if Open <= S OR Open >= T:
     fees = 0
 
 SHORT:
+
 if Open >= S OR Open <= T:
     INVALIDATED_UNFILLED
     Gross R = 0
     Net R = 0
     fees = 0
 
-Only if Open remains STRICTLY inside S/T may an opening limit fill be
-considered.
+Barrier equality invalidates.
 
-### 4. MARKETABLE-AT-OPEN LIMIT
+No position is opened.
 
-If state is WAITING_ENTRY and Open remains strictly inside frozen
-barriers:
+### 9. MARKETABLE-AT-OPEN LIMIT
+
+Only if Open remains STRICTLY inside frozen S/T:
 
 LONG buy-limit EL:
 
 if Open <= EL:
-    limit is considered FILLED at the OPEN event.
+    FILLED at OPEN event
+    model Entry = frozen EL
+    state -> ACTIVE
 
 SHORT sell-limit EL:
 
 if Open >= EL:
-    limit is considered FILLED at the OPEN event.
+    FILLED at OPEN event
+    model Entry = frozen EL
+    state -> ACTIVE
 
-IMPORTANT MODEL EXECUTION PRICE:
-
-Entry = frozen EL
-
-NOT candle Open.
-
-There is NO favorable price improvement.
+No favorable price improvement.
 
 Examples:
 
@@ -248,10 +543,8 @@ EL=99
 T=104
 Open=98
 
-=> opening barrier invalidation: NO
-=> marketable limit: YES
 => Entry=99
-=> state ACTIVE before intrabar high/low processing.
+=> ACTIVE before intrabar processing.
 
 SHORT:
 T=96
@@ -259,48 +552,41 @@ EL=101
 S=104
 Open=102
 
-=> opening barrier invalidation: NO
-=> marketable limit: YES
 => Entry=101
-=> state ACTIVE before intrabar high/low processing.
+=> ACTIVE before intrabar processing.
 
-This is a deterministic research execution convention.
-It is NOT a claim about exact historical exchange fill price.
+Open == EL:
 
-### 5. AFTER OPEN-EVENT FILL
+fill at EL -> ACTIVE.
 
-Once marketable-at-open fill is established:
+### 10. SAME-CANDLE AFTER OPEN FILL
 
-state becomes ACTIVE immediately.
+If marketable-at-open fill occurred:
 
-Then process the SAME candle's remaining intrabar high/low under
-ACTIVE rules.
+the position is ACTIVE before processing that candle's High/Low.
 
-Therefore:
+Then existing ACTIVE rules apply to the SAME candle:
 
-Stop only touched after open -> STOP
-Target only -> TP
-Stop + Target with unknown order -> STOP
+Stop only -> STOP at frozen Stop
+Target only -> TP at frozen Target
+Stop + Target -> STOP
+neither -> remain ACTIVE.
 
-Adverse Stop gap cannot occur later inside that same candle because
-the candle Open has already been processed; ordinary Stop touch uses
-frozen Stop.
+Do not apply WAITING_ENTRY invalidation after a proven opening fill.
 
-No favorable Target improvement.
-
-### 6. WAITING_ENTRY INTRABAR RULES
+### 11. WAITING_ENTRY INTRABAR PRIORITY
 
 If Open:
 
-- does not invalidate the setup; AND
-- does not make the limit marketable;
+- did not invalidate setup;
+- did not establish marketable limit fill;
 
-then process intrabar ranges.
+then evaluate intrabar range.
 
-For unknown intrabar order:
+When OHLC cannot establish intraminute ordering:
 
 EL only:
-    fill at frozen EL -> ACTIVE
+    fill at EL -> ACTIVE
 
 S only:
     INVALIDATED_UNFILLED
@@ -317,106 +603,163 @@ EL + T:
 EL + S + T:
     INVALIDATED_UNFILLED
 
-Pre-fill barrier invalidation has priority over a possible limit fill
-whenever intrabar ordering cannot be established from OHLC.
+This applies symmetrically LONG and SHORT.
 
-Symmetric LONG/SHORT.
+Pre-fill terminal-barrier invalidation has priority over possible limit
+fill when order is unknown.
 
 No tick-path reconstruction.
 
-No future candle may resolve prior ambiguity.
+No future candle may resolve previous intrabar ordering.
 
-### 7. EXACT-LEVEL OPEN CASES
+### 12. ALREADY ACTIVE POSITIONS
 
-Freeze boundary semantics explicitly.
+WAITING_ENTRY rules do NOT apply to a position already ACTIVE before
+the candle.
 
-Barrier equality invalidates BEFORE fill:
+Existing frozen ACTIVE rules remain:
 
-LONG:
-Open == S -> INVALIDATED_UNFILLED
-Open == T -> INVALIDATED_UNFILLED
+- adverse opening gap through Stop:
+  exit at observed adverse Open;
 
-SHORT:
-Open == S -> INVALIDATED_UNFILLED
-Open == T -> INVALIDATED_UNFILLED
+- favorable opening gap through Target:
+  exit at frozen Target;
 
-Limit equality inside barriers fills:
+- Stop only:
+  STOP;
 
-LONG:
-Open == EL -> fill at EL -> ACTIVE
+- Target only:
+  TP;
 
-SHORT:
-Open == EL -> fill at EL -> ACTIVE
+- Stop + Target with unknown order:
+  STOP;
 
-Thus ordering at OPEN is:
+- no terminal event by horizon:
+  TIME_EXIT.
 
-1. terminal barrier invalidation
-2. marketable limit fill
-3. remaining intrabar processing
+### 13. EXACT BOUNDARY EXAMPLES
 
-### 8. ALREADY ACTIVE DISTINCTION
+Freeze explicitly:
 
-These pre-fill rules apply ONLY to WAITING_ENTRY.
+P0 candle:
+16:59–17:00
 
-For a position proven ACTIVE in an earlier candle:
+First execution candle:
+17:00–17:01
 
-existing protocol rules remain:
+First execution open:
+17:00
 
-- adverse opening gap through Stop -> exit at observed adverse Open
-- Target favorable gap -> frozen Target
-- Stop + Target same candle unknown order -> STOP
-- Stop -> STOP
-- Target -> TP
-- horizon -> TIME_EXIT.
+Last Alternative entry candle:
+20:59–21:00
 
-Do NOT convert ACTIVE positions back into pre-fill invalidation.
+21:00–21:01:
+NOT entry eligible.
 
-### 9. EXPIRY INTERACTION
+Last outcome candle:
+04:59–05:00 next day.
 
-A candle may establish a fill only if it is fully eligible under the
-frozen expiry rule.
+No intentional one-minute delay after observationAt.
 
-A candle crossing the expiry boundary is excluded even if its Open
-would otherwise make the limit marketable.
+### 14. PRE-OUTCOME STATUS
 
-After the last fully eligible entry candle:
+Record explicitly:
 
-WAITING_ENTRY -> UNFILLED
-0R
-0 fees.
+All three clarifications were made BEFORE:
 
-Do not use a partial expiry candle.
+- historical candle download for this experiment;
+- Development outcome inspection;
+- Holdout outcome inspection;
+- generic simulator historical execution.
 
-### 10. WHY THIS AMENDMENT EXISTS
+Historical outcomes inspected = false
+Development opened = false
+Holdout opened = false
 
-Record both pre-outcome blockers:
+This amendment does NOT claim the deterministic OHLC execution policy
+reconstructs actual tick-level historical order.
 
-BLOCKER 1:
-WAITING_ENTRY candle containing EL together with Stop/Target without
-known intrabar order.
+It defines the research model.
 
-BLOCKER 2:
-WAITING_ENTRY candle opening through EL while remaining inside frozen
-barriers.
+### 15. NO OTHER PARAMETER CHANGES
 
-The protocol previously did not define whether the second case was a
-fill or required later exact EL touch.
+Do NOT change:
 
-Revision 2 freezes:
+Universe:
+BTC-USDT-SWAP
+ETH-USDT-SWAP
+SOL-USDT-SWAP
 
-marketable-at-open -> fill,
-but Entry price remains frozen EL,
-with no favorable price improvement.
+Observation:
+17:00 UTC
 
-All decisions occurred BEFORE historical outcomes.
+Development:
+2024-11-01 through 2025-10-31 inclusive
 
-## Design validation
+Embargo:
+2025-11-01
 
-LONG and SHORT cases A–L reviewed without historical candles or execution. Open barrier equality invalidates first; inside-barrier limit equality fills; open-fill switches to ACTIVE for the same candle. Nonmarketable waiting intrabar barrier combinations invalidate; EL-only fills; no touch remains waiting. Partial expiry candles cannot fill. Already ACTIVE positions retain base gap and Stop-first rules. No further blocker found in this scope. Engine acceptance tests remain required in R7-C1.
+Holdout:
+2025-11-02 through 2026-04-30 inclusive
 
-HISTORICAL OUTCOMES INSPECTED: NO
-DEVELOPMENT OPENED: NO
-HOLDOUT OPENED: NO
+ATR:
+mean(high-low), last 14 fully closed confirmed OKX 1D candles,
+16:00 UTC alignment
+
+Alternative:
+P0 - d*0.25A
+
+Stop:
+P0 - d*A
+
+Target:
+P0 + d*A
+
+Expiry:
+4h
+
+Horizon:
+12h
+
+Fee:
+0.0005 per executed side
+
+Bootstrap:
+7-day moving blocks
+10,000 repetitions
+seed 20261016
+Type-7 percentiles
+
+Primary metric and advancement/holdout rules unchanged.
+
+## Synthetic design review (not executable tests)
+
+| Case | LONG | SHORT | Status |
+|---|---|---|---|
+| 1. Open beyond Stop | INVALIDATED_UNFILLED | INVALIDATED_UNFILLED | PASS |
+| 2. Open == Stop | INVALIDATED_UNFILLED | INVALIDATED_UNFILLED | PASS |
+| 3. Open beyond Target | INVALIDATED_UNFILLED | INVALIDATED_UNFILLED | PASS |
+| 4. Open == Target | INVALIDATED_UNFILLED | INVALIDATED_UNFILLED | PASS |
+| 5. Open through EL inside barriers | fill at EL; ACTIVE before intrabar | fill at EL; ACTIVE before intrabar | PASS |
+| 6. Open == EL | fill at EL; ACTIVE before intrabar | fill at EL; ACTIVE before intrabar | PASS |
+| 7. Nonmarketable Open + EL only | fill at EL -> ACTIVE | fill at EL -> ACTIVE | PASS |
+| 8. S only | INVALIDATED_UNFILLED | INVALIDATED_UNFILLED | PASS |
+| 9. T only | INVALIDATED_UNFILLED | INVALIDATED_UNFILLED | PASS |
+| 10. EL+S | INVALIDATED_UNFILLED | INVALIDATED_UNFILLED | PASS |
+| 11. EL+T | INVALIDATED_UNFILLED | INVALIDATED_UNFILLED | PASS |
+| 12. EL+S+T | INVALIDATED_UNFILLED | INVALIDATED_UNFILLED | PASS |
+| 13. Opening fill then Stop | STOP at S | STOP at S | PASS |
+| 14. Opening fill then Target | TP at T | TP at T | PASS |
+| 15. Opening fill then Stop+Target | STOP at S | STOP at S | PASS |
+| 16. Exact observation boundary | 17:00-17:01 eligible; P0 is 16:59-17:00 | 17:00-17:01 eligible; P0 is 16:59-17:00 | PASS |
+| 17. Exact expiry boundary | 20:59-21:00 entry eligible | 20:59-21:00 entry eligible | PASS |
+| 18. First candle after expiry | 21:00-21:01 not entry eligible | 21:00-21:01 not entry eligible | PASS |
+| 19. Exact horizon boundary | 04:59-05:00 eligible; TIME_EXIT if still ACTIVE without earlier terminal event | 04:59-05:00 eligible; TIME_EXIT if still ACTIVE without earlier terminal event | PASS |
+
+S-only after nonmarketable inside-barrier open cannot occur without EL crossing for valid OHLC; prescribed defensive classification retained. Baseline missing required first candle remains a data failure, not permission to skip it.
+
+No further blocker found in reviewed cases. Engine implementation and synthetic acceptance tests remain required in R7-C1.
+
 CORE: FROZEN
 REAL-MONEY: HOLD
 R6: PAUSED
