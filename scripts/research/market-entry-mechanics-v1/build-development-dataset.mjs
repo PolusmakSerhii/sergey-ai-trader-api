@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {readFile,writeFile,mkdir,readdir} from 'node:fs/promises';
+import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 export const M=60000,D=86400000;
@@ -32,33 +32,47 @@ export function validate(payload,w){
 }
 async function optional(path){try{return await readFile(path,'utf8');}catch(e){if(e.code==='ENOENT')return null;throw e;}}
 const json=x=>JSON.stringify(x,null,2)+'\n';
+const pageIdentity=w=>JSON.stringify([w.instrument,w.bar,w.lo,w.hi,w.step]);
+const developmentPages=new Set(windows().flatMap(pages).map(pageIdentity));
+const transportError=e=>['TimeoutError','AbortError'].includes(e?.name)||['fetch failed','The operation was aborted due to timeout'].includes(e?.message)||['ECONNRESET','ECONNREFUSED','ETIMEDOUT','ENOTFOUND','EAI_AGAIN','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT'].includes(e?.code??e?.cause?.code);
 export async function obtain(w,dir,request){
+ if(!developmentPages.has(pageIdentity(w)))throw Error('NOT_REQUIRED_DEVELOPMENT_PAGE');
  const id=`${w.instrument}_${w.bar}_${w.lo}_${w.hi}`,rawPath=join(dir,id+'.json'),logPath=join(dir,id+'.attempts.json');
  const cached=await optional(rawPath);
- if(cached!==null){const saved=JSON.parse(cached);return {...validate(saved.payload,w),cached:true,rawPath};}
+ if(cached!==null){const saved=JSON.parse(cached);if(pageIdentity(saved.window)!==pageIdentity(w))throw Error('CACHE_IDENTITY');return {...validate(saved.payload,w),cached:true,rawPath};}
+ const url=new URL('https://www.okx.com/api/v5/market/history-candles');url.search=new URLSearchParams({instId:w.instrument,bar:w.bar,limit:'300',after:String(w.hi+1),before:String(w.lo-1)});
  const history=JSON.parse(await optional(logPath)||'[]');
+ // Preserve prior entries verbatim as objects; ambiguous/incomplete histories fail closed.
+ if(!Array.isArray(history)||history.some((r,i)=>r.attempt!==i+1||r.url!==url.href||r.status!=='FAIL'||(r.classification?r.classification!=='TRANSPORT_FAILURE':!transportError({message:r.error})||'http' in r||'recordHashes' in r||r.conflict)))throw Error(id+':PRIOR_FAILURE_BLOCKS_RESUME');
  for(let attempt=history.length;attempt<3;attempt++){
-  const row={attempt:attempt+1,startedAt:new Date().toISOString(),status:'STARTED'};history.push(row);await writeFile(logPath,json(history));
+  const row={attempt:attempt+1,startedAt:new Date().toISOString(),status:'STARTED',url:url.href};history.push(row);await writeFile(logPath,json(history));
+  let response;
+  try{response=await request(url.href,row);}
+  catch(e){
+   row.status='FAIL';row.error=e.message;row.endedAt=new Date().toISOString();
+   row.classification=transportError(e)&&!row.responseBodyObtained?'TRANSPORT_FAILURE':'REQUEST_FAILURE_BLOCKED';
+   await writeFile(logPath,json(history));
+   if(row.classification!=='TRANSPORT_FAILURE')throw Error(id+':'+row.classification+':'+e.message);
+   if(attempt===2)throw Error(id+':RECOVERY_EXHAUSTED:'+e.message);
+   continue;
+  }
+  let payload,validated;
   try{
-   const url=new URL('https://www.okx.com/api/v5/market/history-candles');url.search=new URLSearchParams({instId:w.instrument,bar:w.bar,limit:'300',after:String(w.hi+1),before:String(w.lo-1)});
-   row.url=url.href;const response=await request(url.href);row.http=response.status;
+   row.http=response.status;row.responseBodyObtained=true;
    if(response.status!==200)throw Error('HTTP_'+response.status);
-   const payload=JSON.parse(response.text);
-   row.recordHashes={};
-   for(const a of Array.isArray(payload.data)?payload.data:[]){
-    const t=Number(a?.[0]);if(!Number.isSafeInteger(t)||t<w.lo||t>w.hi)continue;
-    try{validate({code:'0',data:[a]},{...w,lo:t,hi:t});}catch{continue;}
-    const h=sha(JSON.stringify(a));
-    if((row.recordHashes[t]&&row.recordHashes[t]!==h)||history.slice(0,-1).some(x=>x.recordHashes?.[t]&&x.recordHashes[t]!==h))row.conflict=true;
-    row.recordHashes[t]=h;
-   }
-   if(row.conflict||history.some(x=>x.conflict))throw Error('PERSISTENT_SOURCE_CONFLICT');
-   const validated=validate(payload,w);
-   row.status='PASS';row.clipped=validated.clipped;row.holdoutClipped=validated.holdoutClipped;
-   // Exact response text is kept only when wholly within scope. Extra rows are never persisted.
-   await writeFile(rawPath,json({window:w,request:row,rawText:validated.clipped?null:response.text,payload:{code:'0',data:validated.source},filtered:validated.clipped>0}),{flag:'wx'});
-   await writeFile(logPath,json(history));return {...validated,cached:false,rawPath};
-  }catch(e){row.status='FAIL';row.error=e.message;await writeFile(logPath,json(history));if(attempt===2)throw Error(`${id}:RECOVERY_EXHAUSTED:${e.message}`);}
+   payload=JSON.parse(response.text);
+   if((payload.instId!==undefined&&payload.instId!==w.instrument)||(payload.bar!==undefined&&payload.bar!==w.bar))throw Error('RESPONSE_IDENTITY');
+   validated=validate(payload,w);
+  }catch(e){
+   row.status='FAIL';row.classification='SUBSTANTIVE_DATA_FAILURE';row.error=e.message;row.endedAt=new Date().toISOString();
+   row.providerCode=payload?.code??null;row.responseSha256=sha(response.text??'');
+   await writeFile(logPath,json(history));throw Error(id+':SUBSTANTIVE_DATA_FAILURE:'+e.message);
+  }
+  // Persistence errors cannot consume transport retries or fabricate success.
+  row.clipped=validated.clipped;row.holdoutClipped=validated.holdoutClipped;
+  await writeFile(rawPath,json({window:w,request:{...row,status:'PASS',classification:'SUCCESS'},rawText:validated.clipped?null:response.text,payload:{code:'0',data:validated.source},filtered:validated.clipped>0}),{flag:'wx'});
+  row.status='PASS';row.classification='SUCCESS';row.endedAt=new Date().toISOString();
+  await writeFile(logPath,json(history));return {...validated,cached:false,rawPath};
  }
  throw Error(id+':RECOVERY_EXHAUSTED');
 }
@@ -68,15 +82,17 @@ const identities={
  'docs/research/market-entry-mechanics-v1.0-amendment-1.md':['b69c3612000a53468849094dd876d8c702485712','3d4e64c96a13caa13ad6ad7992016eac81f0c796d622453b4f7fa60e2f3b81f3'],
  'docs/research/market-entry-mechanics-v1.0-amendment-1.json':['b69c3612000a53468849094dd876d8c702485712','c6d4873b3d1de4b2ac1675126b591079d5b4cffd60f2284bb89b35fa0b09e11b'],
  'scripts/research/market-entry-mechanics-v1/engine.mjs':['635f661a2215bd3bc75513fd0ff8023bfd65588f','5c79833481e6333639ab24b42f2aff5a114a18c9dc00d752c38b3629020ee5e8']};
-export async function build(output,auditPath){
+export async function build(output,auditPath,{mode,request:mockRequest}={}){
+ if(mode!=='collection-only')throw Error('EXPLICIT_COLLECTION_ONLY_REQUIRED');
  const root=fileURLToPath(new URL('../../../',import.meta.url));
  for(const [file,[,hash]]of Object.entries(identities))if(sha(await readFile(join(root,file)))!==hash)throw Error('FROZEN_IDENTITY_MISMATCH:'+file);
  const audit=JSON.parse(await readFile(auditPath,'utf8'));if(audit.status!=='PASS'||!audit.scope)throw Error('CLEANLINESS_AUDIT_REQUIRED');
  if(await optional(join(output,'manifest.json')))throw Error('ALREADY_SEALED');
  const episodes=schedule();if(episodes.length!==1095||new Set(episodes.map(x=>x.episodeId)).size!==1095)throw Error('EPISODE_COUNT');
  await mkdir(join(output,'raw'),{recursive:true});await mkdir(join(output,'normalized'),{recursive:true});
- const fileList=[],counts={},list=windows().flatMap(pages);let calls=0,last=0,processed=0;
- const request=async url=>{await new Promise(r=>setTimeout(r,Math.max(0,300-(Date.now()-last))));last=Date.now();calls++;const response=await fetch(url,{signal:AbortSignal.timeout(30000)});return {status:response.status,text:await response.text()};};
+ const counts={},list=windows().flatMap(pages);let calls=0,last=0,processed=0;
+ const request=async (url,progress)=>{if(!mockRequest)await new Promise(r=>setTimeout(r,Math.max(0,300-(Date.now()-last))));last=Date.now();calls++;if(mockRequest)return mockRequest(url,progress);const response=await fetch(url,{redirect:'error',signal:AbortSignal.timeout(30000)});progress.http=response.status;const text=await response.text();progress.responseBodyObtained=true;return {status:response.status,text};};
+ try{
  for(const instrument of instruments){const all={'1m':[],'1D':[]};for(const w of list.filter(x=>x.instrument===instrument)){
   if(w.hi>=holdout)throw Error('HOLDOUT_WINDOW');
   const result=await obtain(w,join(output,'raw'),request);all[w.bar].push(...result.rows.map(c=>({...c,sourcePage:result.rawPath.split('/').at(-1)})));
@@ -86,16 +102,12 @@ export async function build(output,auditPath){
  const expected=bar==='1m'?365*721:378;if(rows.length!==expected)throw Error('GLOBAL_COVERAGE');
  const path=join(output,'normalized',instrument+'_'+bar+'.jsonl'),text=rows.map(JSON.stringify).join('\n')+'\n';const existing=await optional(path);if(existing!==null&&existing!==text)throw Error('NORMALIZED_CONFLICT');if(existing===null)await writeFile(path,text,{flag:'wx'});counts[instrument][bar]=rows.length;
  }}
- const epText=json(episodes),epPath=join(output,'episodes.json');const old=await optional(epPath);if(old!==null&&old!==epText)throw Error('EPISODE_CONFLICT');if(old===null)await writeFile(epPath,epText,{flag:'wx'});
- let totalRequests=0,retries=0,failedAttempts=0,incidentalHoldout=0,clipped=0;
- for(const name of (await readdir(join(output,'raw'))).sort()){const rel='raw/'+name,bytes=await readFile(join(output,rel));fileList.push({path:rel,sha256:sha(bytes)});if(name.endsWith('.attempts.json')){const a=JSON.parse(bytes);totalRequests+=a.length;retries+=Math.max(0,a.length-1);failedAttempts+=a.filter(x=>x.status!=='PASS').length;incidentalHoldout+=a.reduce((n,x)=>n+(x.holdoutClipped||0),0);clipped+=a.reduce((n,x)=>n+(x.clipped||0),0);}}
- for(const name of (await readdir(join(output,'normalized'))).sort()){const rel='normalized/'+name;fileList.push({path:rel,sha256:sha(await readFile(join(output,rel)))});}
- fileList.push({path:'episodes.json',sha256:sha(epText)});
- const manifest={protocol:'market-entry-mechanics-v1.0-amendment-1',datasetVersion:'development-v1',createdAt:new Date().toISOString(),source:'https://www.okx.com/api/v5/market/history-candles',identities,universe:instruments,calendar:{start:'2024-11-01',end:'2025-10-31',observation:'17:00:00 UTC'},episodeCount:1095,uniqueEpisodeCount:1095,episodeIdHash:sha(episodes.map(x=>x.episodeId).join('\n')),windows:windows(),counts,rawSourceRecords:counts,normalizedRecords:counts,missing:0,duplicates:0,conflicts:0,unconfirmed:0,invalid:0,validation:'PASS',totalRequests,retries,failedAttempts,clipped,incidentalHoldout,holdoutFirewall:'PASS: no out-of-scope rows persisted',cleanlinessAudit:audit,cleanlinessAuditSha256:sha(await readFile(auditPath)),builderSha256:sha(await readFile(fileURLToPath(import.meta.url))),files:fileList};
  for(const [file,[,hash]]of Object.entries(identities))if(sha(await readFile(join(root,file)))!==hash)throw Error('FROZEN_IDENTITY_CHANGED');
- await writeFile(join(output,'manifest.json'),json(manifest),{flag:'wx'});console.log(JSON.stringify({sealed:true,counts,totalRequests,retries,failedAttempts,incidentalHoldout,manifestSHA:sha(json(manifest))}));
+ const result={collectionComplete:true,sealed:false,counts,pages:processed,httpThisRun:calls};console.log(JSON.stringify(result));return result;
+ }catch(e){e.collectionStatus={collectionComplete:false,sealed:false,pages:processed,httpThisRun:calls};throw e;}
+
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
- if(process.argv.length!==4)throw Error('Usage: build-development-dataset.mjs OUTPUT_DIR CLEANLINESS_AUDIT_JSON');
- build(resolve(process.argv[2]),resolve(process.argv[3])).catch(e=>{console.error('DATASET SEALING: FAIL',e.message);process.exitCode=1;});
+ if(process.argv.length!==5||process.argv[2]!=='--collection-only')throw Error('Usage: build-development-dataset.mjs --collection-only OUTPUT_DIR CLEANLINESS_AUDIT_JSON');
+ build(resolve(process.argv[3]),resolve(process.argv[4]),{mode:'collection-only'}).catch(e=>{console.error(JSON.stringify(e.collectionStatus??{collectionComplete:false,sealed:false}),e.message);process.exitCode=1;});
 }
