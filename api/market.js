@@ -1,3 +1,4 @@
+import { prepareObservationCycle, persistObservationCycle } from "../lib/forward-validation/observation-store.js";
 import { requirePrivateApi, privateBackendOrigin, internalApiHeaders } from "../lib/private-access.js";
 import { randomUUID } from "node:crypto";
 import { Receiver } from "@upstash/qstash";
@@ -9367,6 +9368,9 @@ candidatePoolSize:
       globalRankingSnapshot, ownedCommand
     );
 
+  // Enumerate the immutable full snapshot before Core applies its tracking cap.
+  const forwardObservation = prepareObservationCycle(globalRankingSnapshot, isConfirmedAPlusTrade);
+
   const historySaved =
     await writeRankingHistory(
       globalRankingSnapshot, ownedCommand
@@ -9376,6 +9380,9 @@ candidatePoolSize:
     logRefresh("persist", "persist_error");
     return res.status(503).json({ ok: false, error: "Ranking refresh persistence incomplete" });
   }
+  // Observational only: one bounded Redis request, no retry and no lease/Core writes.
+  const forwardReceipt = await persistObservationCycle(forwardObservation, runRedisCommand);
+  console.log("[forward-observation]", JSON.stringify(forwardReceipt));
   return res.status(200).json({
     ...globalRankingSnapshot,
     cache: {

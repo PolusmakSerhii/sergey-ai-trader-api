@@ -3,11 +3,12 @@ import {readFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import vm from 'node:vm';
 import test from 'node:test';
+import {prepareObservationCycle,persistObservationCycle,OBSERVATION_KEY} from '../lib/forward-validation/observation-store.js';
 const source=(await readFile(new URL('../api/market.js',import.meta.url),'utf8'))
  .replace(/^import .*;\n/gm,'').replace('export default async function handler','async function handler');
 function harness(mode){
- const events=[],commands=[],releaseSignals=[],delays=[];let batches=0;
- const c=vm.createContext({process:{env:mode==='missing'?{}:{UPSTASH_REDIS_REST_URL:'https://redis.test',UPSTASH_REDIS_REST_TOKEN:'SECRET'}},URL,Date,AbortSignal,randomUUID,setTimeout(fn,ms){delays.push(ms);fn();},console:{log(prefix,event){if(prefix==='[ranking-refresh]')events.push(JSON.parse(event));},error(){}},
+ const events=[],commands=[],releaseSignals=[],delays=[],forward=[];let batches=0;
+ const c=vm.createContext({process:{env:mode==='missing'?{}:{UPSTASH_REDIS_REST_URL:'https://redis.test',UPSTASH_REDIS_REST_TOKEN:'SECRET'}},URL,Date,AbortSignal,randomUUID,setTimeout(fn,ms){delays.push(ms);fn();},console:{log(prefix,event){if(prefix==='[ranking-refresh]')events.push(JSON.parse(event));if(prefix==='[forward-observation]')forward.push(JSON.parse(event));},error(){}},
  fetch:async(url,options)=>{
   if(String(url)==='https://redis.test'){
    const cmd=JSON.parse(options.body);commands.push(cmd);
@@ -17,6 +18,11 @@ function harness(mode){
     if(mode==='invalid')return {ok:true,json:async()=>({unexpected:true})};
     if(mode==='payload_error')return {ok:true,json:async()=>({error:'SECRET'})};
     return {ok:true,json:async()=>({result:mode==='busy'?null:'OK'})};
+   }
+   if(cmd[0]==='EVAL' && cmd[3]===OBSERVATION_KEY){
+    if(mode==='forward_timeout')throw Object.assign(new Error('timeout'),{name:'TimeoutError'});
+    const result=mode==='forward_conflict'?['CONFLICT','CYCLE_CONTENT_CONFLICT']:mode==='forward_overflow'?['BLOCKED_STORAGE','BUDGET_EXCEEDED']:['COMPLETE',cmd[5]];
+    return {ok:true,json:async()=>({result})};
    }
    const release=cmd[1].includes("redis.call('DEL'");
    if(release){
@@ -34,11 +40,12 @@ function harness(mode){
   return {ok:true,json:async()=>({ok:true,totalBatches:1,failed:0,globalBatchResults:[{symbol:'BTCUSDT',opportunityScore:90}]})};
  }});
  vm.runInContext(source,c);
+ Object.assign(c,{prepareObservationCycle:(snapshot,gate)=>prepareObservationCycle(JSON.parse(JSON.stringify(snapshot)),gate),persistObservationCycle});
   // Domain tests use an authorized transport; real auth is covered in private-access tests.
   Object.assign(c, { requirePrivateApi: () => true, privateBackendOrigin: () => "https://sergey-ai-trader-api.vercel.app", internalApiHeaders: () => ({Authorization:"Bearer test-only"}) });c.verifyQStashRequest=async()=>true;
  c.writeGlobalRankingCache=async()=>mode!=='persist';c.writeRankingHistory=async()=>true;
  const res={headers:{},setHeader(k,v){this.headers[k]=v;},status(code){this.code=code;return this;},json(body){this.body=body;return this;}};
- return {events,commands,res,releaseSignals,delays,get batches(){return batches;},run:()=>c.handler({method:'POST',headers:{host:'api.test'},query:{mode:'scanner',globalRank:'true',refresh:'true'}},res)};
+ return {events,commands,res,releaseSignals,delays,forward,get batches(){return batches;},run:()=>c.handler({method:'POST',headers:{host:'api.test'},query:{mode:'scanner',globalRank:'true',refresh:'true'}},res)};
 }
 for(const [mode,result] of [['ok','acquired'],['busy','busy'],['missing','missing_config'],['exception','redis_error'],['http','redis_error'],['invalid','redis_error'],['payload_error','redis_error']])test(`acquire ${mode}`,async()=>{
  const h=harness(mode);await h.run();assert.equal(h.events[0].stage,'acquire');assert.equal(h.events[0].result,result);
@@ -74,4 +81,12 @@ for(const [mode,attempts,failed] of [['retry',2,false],['release',3,true],['mism
  // The unchanged Lua guard returns 0 before any delete for a different owner.
  assert.match(releases[0][1],/if redis.call\('GET', KEYS\[1\]\) == ARGV\[1\] then\s+return redis.call\('DEL', KEYS\[1\]\)\s+end\s+return 0/);
  assert.ok(!h.commands.some(c=>c[0]==='DEL'));
+});
+
+for(const [mode,status] of [['ok','COMPLETE'],['forward_timeout','UNRESOLVED'],['forward_conflict','CONFLICT'],['forward_overflow','BLOCKED_STORAGE']])test(`Forward ${status} leaves Core response unchanged`,async()=>{
+ const h=harness(mode);await h.run();assert.equal(h.res.code,200);assert.equal(h.res.body.ok,true);
+ assert.equal(h.forward.length,1);assert.equal(h.forward[0].status,status);
+ const calls=h.commands.filter(c=>c[0]==='EVAL'&&c[3]===OBSERVATION_KEY);assert.equal(calls.length,1);
+ assert.equal(h.res.body.globalRanking.length,1);assert.equal(h.res.body.globalRanking[0].symbol,'BTCUSDT');
+ assert.equal(h.res.body.cache.status,'stored');assert.equal(h.res.body.history.status,'stored');
 });
