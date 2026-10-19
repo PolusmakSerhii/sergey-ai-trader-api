@@ -1,4 +1,4 @@
-import { createSourceRegistry } from "../lib/forward-validation/source-registry.js";
+import { createSourceEpoch } from "../lib/forward-validation/source-epoch.js";
 import { prepareObservationCycle, persistObservationCycle } from "../lib/forward-validation/observation-store.js";
 import { requirePrivateApi, privateBackendOrigin, internalApiHeaders } from "../lib/private-access.js";
 import { randomUUID } from "node:crypto";
@@ -9317,8 +9317,8 @@ const globalTop10 =
 
   // Forward-only reservation: lease identity exists, snapshot timestamp/identity
   // does not yet exist. A failed write never changes Core's control flow.
-  const forwardRegistry = createSourceRegistry(runRedisCommand);
-  const forwardReservation = await forwardRegistry.reserve(refreshToken, new Date().toISOString());
+  const forwardRegistry = createSourceEpoch(runRedisCommand);
+  const forwardReservation = await forwardRegistry.reserve(refreshToken, new Date().toISOString(), new Date(refreshDiagnosticStartedAt).toISOString());
   const globalRankingSnapshot = {
     ok: true,
     version: "1.0",
