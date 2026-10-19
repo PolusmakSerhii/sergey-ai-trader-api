@@ -1,3 +1,4 @@
+import { prepareProspectiveObservation } from "../lib/forward-validation/prospective-source.js";
 import { createSourceEpoch } from "../lib/forward-validation/source-epoch.js";
 import { prepareObservationCycle, persistObservationCycle } from "../lib/forward-validation/observation-store.js";
 import { requirePrivateApi, privateBackendOrigin, internalApiHeaders } from "../lib/private-access.js";
@@ -6845,6 +6846,19 @@ function createObservationalEntryDecision(snapshot, plan) {
 }
 
 // Shared creation/update projection; only the existing lifecycle advances state.
+// Prospective Forward birth is explicitly defined at the original analysis event.
+// Core creation and its minute-aligned plannedAt remain unchanged.
+function createForwardFrozenCandidate(item, analysisTime) {
+  const candidate = createFrozenTradeCandidate(item, analysisTime);
+  const initialPlan = { ...candidate.initialPlan, createdAt: analysisTime,
+    plannedAt: analysisTime,
+    expiresAt: new Date(Date.parse(analysisTime) + CONFIRMED_TRADE_PLAN_TTL_MINUTES * 60000).toISOString() };
+  return { tradeId: candidate.tradeId, setupKey: candidate.setupKey,
+    symbol: candidate.symbol, direction: candidate.direction, instrumentType: "SWAP",
+    origin: { detectedAt: analysisTime }, initialPlan,
+    originalEligibility: { confirmedAPlus: true } };
+}
+
 function createFrozenTradeCandidate(item, capturedAt) {
   if (!item?.symbol || !Number.isFinite(Date.parse(capturedAt)) ||
       !isConfirmedAPlusTrade(item)) throw new Error("Canonical A+ candidate required");
@@ -9367,7 +9381,7 @@ candidatePoolSize:
   };
 
 
-  const forwardObservation = prepareObservationCycle(globalRankingSnapshot, isConfirmedAPlusTrade);
+  const forwardObservation = await prepareProspectiveObservation(globalRankingSnapshot, isConfirmedAPlusTrade, createForwardFrozenCandidate, runRedisCommand, forwardReservation);
   const forwardBinding = await forwardRegistry.bind(forwardReservation, globalRankingSnapshot, forwardObservation);
   await renewRefreshLease();
   refreshDiagnosticStage = "persist";
@@ -10935,3 +10949,6 @@ technical: {
     });
   }
 }
+
+// Share the existing pure evaluator without copying or changing trading rules.
+handler.forwardLifecycle = Object.freeze({ evaluateTradeLifecycle, getLifecycleCursor, isValidLifecycleCandle });

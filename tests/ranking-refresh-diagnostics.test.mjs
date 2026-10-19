@@ -1,3 +1,4 @@
+import {prepareProspectiveObservation} from '../lib/forward-validation/prospective-source.js';
 import {createSourceEpoch} from '../lib/forward-validation/source-epoch.js';
 import {REGISTRY_KEY} from '../lib/forward-validation/source-registry.js';
 import assert from 'node:assert/strict';
@@ -14,7 +15,7 @@ function harness(mode){
  fetch:async(url,options)=>{
   if(String(url)==='https://redis.test'){
    const cmd=JSON.parse(options.body);commands.push(cmd);
-   if(cmd[0]==='GET'&&cmd[1]===REGISTRY_KEY)return {ok:true,json:async()=>({result:null})};
+   if(cmd[0]==='GET'&&[REGISTRY_KEY,OBSERVATION_KEY].includes(cmd[1]))return {ok:true,json:async()=>({result:null})};
    if(cmd[0]==='SET'){
     if(mode==='exception')throw new Error('SECRET https://redis.test');
     if(mode==='http')return {ok:false,status:401};
@@ -44,7 +45,7 @@ function harness(mode){
   return {ok:true,json:async()=>({ok:true,totalBatches:1,failed:0,globalBatchResults:[{symbol:'BTCUSDT',opportunityScore:90}]})};
  }});
  vm.runInContext(source,c);
- Object.assign(c,{createSourceEpoch,prepareObservationCycle:(snapshot,gate)=>prepareObservationCycle(JSON.parse(JSON.stringify(snapshot)),gate),persistObservationCycle});
+ Object.assign(c,{prepareProspectiveObservation,createSourceEpoch,prepareObservationCycle:(snapshot,gate)=>prepareObservationCycle(JSON.parse(JSON.stringify(snapshot)),gate),persistObservationCycle});
   // Domain tests use an authorized transport; real auth is covered in private-access tests.
   Object.assign(c, { requirePrivateApi: () => true, privateBackendOrigin: () => "https://sergey-ai-trader-api.vercel.app", internalApiHeaders: () => ({Authorization:"Bearer test-only"}) });c.verifyQStashRequest=async()=>true;
  c.writeGlobalRankingCache=async()=>mode!=='persist';c.writeRankingHistory=async()=>true;
