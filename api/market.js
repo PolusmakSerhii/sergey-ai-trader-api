@@ -1,3 +1,4 @@
+import { createSourceRegistry } from "../lib/forward-validation/source-registry.js";
 import { prepareObservationCycle, persistObservationCycle } from "../lib/forward-validation/observation-store.js";
 import { requirePrivateApi, privateBackendOrigin, internalApiHeaders } from "../lib/private-access.js";
 import { randomUUID } from "node:crypto";
@@ -9302,6 +9303,22 @@ const averageBatchDurationMs =
 const globalTop10 =
   globalRanking.slice(0, 10);
     
+  // A partial refresh must not replace the last complete ranking or advance trades.
+  if (resultsFailed > 0 || combinedResults.length === 0 ||
+      batchResponses.some(batch => batch.ok !== true || !Array.isArray(batch.globalBatchResults))) {
+    logRefresh("batch", "batch_error");
+    return res.status(502).json({
+      ok: false,
+      error: "Incomplete global ranking refresh; previous snapshot preserved",
+      resultsCollected: combinedResults.length,
+      resultsFailed
+    });
+  }
+
+  // Forward-only reservation: lease identity exists, snapshot timestamp/identity
+  // does not yet exist. A failed write never changes Core's control flow.
+  const forwardRegistry = createSourceRegistry(runRedisCommand);
+  const forwardReservation = await forwardRegistry.reserve(refreshToken, new Date().toISOString());
   const globalRankingSnapshot = {
     ok: true,
     version: "1.0",
@@ -9349,27 +9366,15 @@ candidatePoolSize:
     globalTop10,
   };
 
-  // A partial refresh must not replace the last complete ranking or advance trades.
-  if (resultsFailed > 0 || combinedResults.length === 0 ||
-      batchResponses.some(batch => batch.ok !== true || !Array.isArray(batch.globalBatchResults))) {
-    logRefresh("batch", "batch_error");
-    return res.status(502).json({
-      ok: false,
-      error: "Incomplete global ranking refresh; previous snapshot preserved",
-      resultsCollected: combinedResults.length,
-      resultsFailed
-    });
-  }
 
+  const forwardObservation = prepareObservationCycle(globalRankingSnapshot, isConfirmedAPlusTrade);
+  const forwardBinding = await forwardRegistry.bind(forwardReservation, globalRankingSnapshot, forwardObservation);
   await renewRefreshLease();
   refreshDiagnosticStage = "persist";
   const cacheSaved =
     await writeGlobalRankingCache(
       globalRankingSnapshot, ownedCommand
     );
-
-  // Enumerate the immutable full snapshot before Core applies its tracking cap.
-  const forwardObservation = prepareObservationCycle(globalRankingSnapshot, isConfirmedAPlusTrade);
 
   const historySaved =
     await writeRankingHistory(
@@ -9383,6 +9388,8 @@ candidatePoolSize:
   // Observational only: one bounded Redis request, no retry and no lease/Core writes.
   const forwardReceipt = await persistObservationCycle(forwardObservation, runRedisCommand);
   console.log("[forward-observation]", JSON.stringify(forwardReceipt));
+  const registryReceipt = await forwardRegistry.observe(forwardBinding, forwardObservation, forwardReceipt);
+  console.log("[forward-registry]", JSON.stringify({reservation:forwardReservation.status, binding:forwardBinding.status, observation:registryReceipt.status}));
   return res.status(200).json({
     ...globalRankingSnapshot,
     cache: {

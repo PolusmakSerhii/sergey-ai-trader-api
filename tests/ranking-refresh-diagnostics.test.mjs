@@ -1,3 +1,4 @@
+import {createSourceRegistry,REGISTRY_KEY} from '../lib/forward-validation/source-registry.js';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
@@ -19,6 +20,7 @@ function harness(mode){
     if(mode==='payload_error')return {ok:true,json:async()=>({error:'SECRET'})};
     return {ok:true,json:async()=>({result:mode==='busy'?null:'OK'})};
    }
+   if(cmd[0]==='EVAL' && cmd[3]===REGISTRY_KEY){if(mode==='registry_timeout')throw Error('timeout');return {ok:true,json:async()=>({result:[mode==='registry_overflow'?'BLOCKED_STORAGE':'NOT_STARTED']})};}
    if(cmd[0]==='EVAL' && cmd[3]===OBSERVATION_KEY){
     if(mode==='forward_timeout')throw Object.assign(new Error('timeout'),{name:'TimeoutError'});
     const result=mode==='forward_conflict'?['CONFLICT','CYCLE_CONTENT_CONFLICT']:mode==='forward_overflow'?['BLOCKED_STORAGE','BUDGET_EXCEEDED']:['COMPLETE',cmd[5]];
@@ -40,7 +42,7 @@ function harness(mode){
   return {ok:true,json:async()=>({ok:true,totalBatches:1,failed:0,globalBatchResults:[{symbol:'BTCUSDT',opportunityScore:90}]})};
  }});
  vm.runInContext(source,c);
- Object.assign(c,{prepareObservationCycle:(snapshot,gate)=>prepareObservationCycle(JSON.parse(JSON.stringify(snapshot)),gate),persistObservationCycle});
+ Object.assign(c,{createSourceRegistry,prepareObservationCycle:(snapshot,gate)=>prepareObservationCycle(JSON.parse(JSON.stringify(snapshot)),gate),persistObservationCycle});
   // Domain tests use an authorized transport; real auth is covered in private-access tests.
   Object.assign(c, { requirePrivateApi: () => true, privateBackendOrigin: () => "https://sergey-ai-trader-api.vercel.app", internalApiHeaders: () => ({Authorization:"Bearer test-only"}) });c.verifyQStashRequest=async()=>true;
  c.writeGlobalRankingCache=async()=>mode!=='persist';c.writeRankingHistory=async()=>true;
@@ -90,3 +92,5 @@ for(const [mode,status] of [['ok','COMPLETE'],['forward_timeout','UNRESOLVED'],[
  assert.equal(h.res.body.globalRanking.length,1);assert.equal(h.res.body.globalRanking[0].symbol,'BTCUSDT');
  assert.equal(h.res.body.cache.status,'stored');assert.equal(h.res.body.history.status,'stored');
 });
+
+for(const mode of ['registry_timeout','registry_overflow'])test(`registry ${mode} preserves Core success`,async()=>{const h=harness(mode);await h.run();assert.equal(h.res.code,200);assert.equal(h.res.body.ok,true);assert.equal(h.res.body.history.status,'stored');assert.equal(h.commands.filter(c=>c[0]==='EVAL'&&c[3]===REGISTRY_KEY).length,1);});
