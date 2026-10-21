@@ -25,5 +25,10 @@
         }
       ]
     }
-  ]
+  ],
+  "functions": {
+    "api/forward-tick.js": {
+      "maxDuration": 120
+    }
+  }
 }
