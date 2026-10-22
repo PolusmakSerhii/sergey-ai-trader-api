@@ -1,3 +1,4 @@
+import {storageHealth,logStorageHealth} from '../lib/forward-validation/storage-health.js';
 import {randomUUID} from 'node:crypto';
 import {runWorker} from '../lib/forward-validation/worker.js';
 import {runLifecycle} from '../lib/forward-validation/lifecycle-worker.js';
@@ -16,6 +17,7 @@ export async function runTick({execute,worker=runWorker,lifecycle=runLifecycle,l
  const {default:market}=await import('./market.js');return market.forwardLifecycle;
 },now=Date.now,owner=randomUUID()}={}){
  const started=now();let releaseNeeded=false,output;
+ let storage=storageHealth(null);
  const io=async command=>{if(now()-started>DEADLINE_MS-5000)throw Error('TICK_DEADLINE');return execute(command);};
  try{
   releaseNeeded=true;
@@ -24,7 +26,7 @@ export async function runTick({execute,worker=runWorker,lifecycle=runLifecycle,l
   else if(lock!=='OK'){output={status:'UNRESOLVED',phase:'LOCK',reasonCode:'LOCK_UNCONFIRMED'};}
   else {
    output={status:'UNRESOLVED',phase:'WORKER'};
-   const w=safeStatus(await worker({execute:io}));
+   const w=safeStatus(await worker({execute:io,onStorage:metrics=>{storage=storageHealth(metrics,metrics?.blocked===true);}}));
    output={status:w,phase:'WORKER',workerStatus:w};
    if(['COMPLETE','IDLE'].includes(w)){
     // Leave a full lifecycle budget plus release/response margin.
@@ -45,7 +47,8 @@ export async function runTick({execute,worker=runWorker,lifecycle=runLifecycle,l
    if(await execute(['EVAL',RELEASE,'1',LOCK_KEY,owner])!==1)output={...output,status:'UNRESOLVED',reasonCode:'LOCK_RELEASE_UNCONFIRMED'};
   }catch{output={...output,status:'UNRESOLVED',reasonCode:'LOCK_RELEASE_UNCONFIRMED'};}
  }
- return output;
+ logStorageHealth(storage);
+ return {...output,storage};
 }
 
 async function fixedBody(req){
