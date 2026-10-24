@@ -2,7 +2,7 @@ import { prepareProspectiveObservation } from "../lib/forward-validation/prospec
 import { createSourceEpoch } from "../lib/forward-validation/source-epoch.js";
 import { prepareObservationCycle, persistObservationCycle } from "../lib/forward-validation/observation-store.js";
 import { requirePrivateApi, privateBackendOrigin, internalApiHeaders } from "../lib/private-access.js";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { Receiver } from "@upstash/qstash";
 
 const DEBUG_LOGS =
@@ -7270,14 +7270,32 @@ function parseOpenTrades(raw) {
   if (raw === null) return [];
   const trades = JSON.parse(raw);
   if (!Array.isArray(trades)) throw new Error("Invalid open trades state");
-  const ids = new Set(), setups = new Set();
-  for (const trade of trades) {
-    if (!trade?.tradeId || !trade.setupKey || !trade.initialPlan ||
-        !["WaitingEntry", "Pending", "Active"].includes(trade.outcome?.status) ||
-        ids.has(trade.tradeId) || setups.has(trade.setupKey)) {
+  const ids = new Map(), setups = new Map();
+  for (const [recordIndex, trade] of trades.entries()) {
+    const reasonCode = !trade?.tradeId ? "MISSING_TRADE_ID"
+      : !trade.setupKey ? "MISSING_SETUP_KEY"
+      : !trade.initialPlan ? "MISSING_INITIAL_PLAN"
+      : !["WaitingEntry", "Pending", "Active"].includes(trade.outcome?.status) ? "INVALID_OUTCOME_STATUS"
+      : ids.has(trade.tradeId) ? "DUPLICATE_TRADE_ID"
+      : setups.has(trade.setupKey) ? "DUPLICATE_SETUP_KEY" : null;
+    if (reasonCode) {
+      // Diagnostic failure must never replace the original validation error.
+      try {
+        const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+        const status = trade?.outcome?.status;
+        console.error("[open-trades-validation-failure]", JSON.stringify({
+          reasonCode, recordIndex,
+          ...(reasonCode === "DUPLICATE_TRADE_ID" ? { duplicateOfIndex: ids.get(trade.tradeId) }
+            : reasonCode === "DUPLICATE_SETUP_KEY" ? { duplicateOfIndex: setups.get(trade.setupKey) } : {}),
+          ...(trade?.tradeId != null ? { tradeIdHash: hash(trade.tradeId) } : {}),
+          ...(trade?.setupKey != null ? { setupKeyHash: hash(trade.setupKey) } : {}),
+          outcomeStatus: ["WaitingEntry", "Pending", "Active"].includes(status) ? status
+            : status == null ? "MISSING" : "OTHER"
+        }));
+      } catch {}
       throw new Error("Invalid or duplicate open trade");
     }
-    ids.add(trade.tradeId); setups.add(trade.setupKey);
+    ids.set(trade.tradeId, recordIndex); setups.set(trade.setupKey, recordIndex);
   }
   return trades;
 }

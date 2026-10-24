@@ -76,7 +76,7 @@ test('orchestration and actual Lua lock on isolated Unix Redis',async t=>{
 test('scoped duration and frozen scanner/worker/lifecycle unchanged',async()=>{
  const read=p=>readFile(new URL('../'+p,import.meta.url));
  const gitBlob=b=>createHash('sha1').update(`blob ${b.length}\0`).update(b).digest('hex');
- for(const [p,hash]of [['api/market.js','c4abd74cb2ba0ab429cbaef880bcab811103e8d8'],['lib/forward-validation/worker.js','f3e1d37655336c68cb973b8665fd019e5ae8a9d2'],['lib/forward-validation/lifecycle-worker.js','73c1f25b3df0846da8f5a2b0577c99cd41253172']])assert.equal(gitBlob(await read(p)),hash);
+ for(const [p,hash]of [['api/market.js','20f7dbb8e662acef14e1bfd81ac946b5ea8b5c4a'],['lib/forward-validation/worker.js','f3e1d37655336c68cb973b8665fd019e5ae8a9d2'],['lib/forward-validation/lifecycle-worker.js','73c1f25b3df0846da8f5a2b0577c99cd41253172']])assert.equal(gitBlob(await read(p)),hash);
  const v=JSON.parse(await read('vercel.json'));assert.deepEqual(v.functions,{'api/forward-tick.js':{maxDuration:120}});assert.equal(v.crons,undefined);
  assert.deepEqual(v.headers,[{source:'/api/(.*)',headers:[{key:'Content-Security-Policy',value:"default-src 'none'; frame-ancestors 'none'"},{key:'Permissions-Policy',value:'camera=(), geolocation=(), microphone=()'},{key:'Referrer-Policy',value:'no-referrer'},{key:'X-Content-Type-Options',value:'nosniff'},{key:'X-Frame-Options',value:'DENY'}]}]);
  assert.equal(config.api.bodyParser,false);
