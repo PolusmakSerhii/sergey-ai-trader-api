@@ -81,3 +81,37 @@ test('scoped duration and frozen scanner/worker/lifecycle unchanged',async()=>{
  assert.deepEqual(v.headers,[{source:'/api/(.*)',headers:[{key:'Content-Security-Policy',value:"default-src 'none'; frame-ancestors 'none'"},{key:'Permissions-Policy',value:'camera=(), geolocation=(), microphone=()'},{key:'Referrer-Policy',value:'no-referrer'},{key:'X-Content-Type-Options',value:'nosniff'},{key:'X-Frame-Options',value:'DENY'}]}]);
  assert.equal(config.api.bodyParser,false);
 });
+
+
+test('safe worker diagnostics preserve HTTP and lifecycle gating',async t=>{
+ const old={...process.env},info=console.info,fetch=global.fetch;
+ Object.assign(process.env,{QSTASH_CURRENT_SIGNING_KEY:key,QSTASH_NEXT_SIGNING_KEY:next,UPSTASH_REDIS_REST_URL:'https://redis.invalid',UPSTASH_REDIS_REST_TOKEN:secret});
+ global.fetch=async()=>assert.fail('no network');
+ try{
+  for(const status of ['BLOCKED_MAPPING','COMPLETE','IDLE','BUSY','UNRESOLVED'])await t.test(status,async()=>{
+   const logs=[],order=[];console.info=(...args)=>logs.push(args);
+   const h=createHandler({receiverClass:async()=>Receiver,tick:()=>runTick({
+    execute:async c=>c[0]==='SET'?'OK':1,
+    worker:async()=>{order.push('worker');return {status,reasonCodes:['INVALID_GEOMETRY',secret,'INVALID_GEOMETRY',{},'UNEXPECTED'],reasonCode:'PROCESSING_INCOMPLETE',
+     sourceCycleId:secret,payload:{secret},observation:{secret},frozenCandidate:{secret},analysisContext:{secret},message:secret};},
+    loadLifecycle:async()=>({}),lifecycle:async()=>{order.push('lifecycle');return {status:'IDLE'};}
+   })});
+   const r=res();await h(req(),r);
+   assert.equal(r.code,['COMPLETE','IDLE','BUSY'].includes(status)?200:503);
+   assert.equal(r.body.workerStatus,status);
+   assert.deepEqual(r.body.workerReasonCodes,['INVALID_GEOMETRY','PROCESSING_INCOMPLETE']);
+   assert.equal(r.body.workerSourceCycleHash,null);
+   assert.deepEqual(order,['COMPLETE','IDLE'].includes(status)?['worker','lifecycle']:['worker']);
+   const diagnostic=logs.filter(x=>x[0]==='[forward-worker-result]');
+   assert.equal(diagnostic.length,['COMPLETE','IDLE'].includes(status)?0:1);
+   if(diagnostic.length)assert.deepEqual(JSON.parse(diagnostic[0][1]),{status,reasonCodes:['INVALID_GEOMETRY','PROCESSING_INCOMPLETE'],sourceCycleHash:null});
+   const printed=JSON.stringify([r.body,logs]);
+   for(const forbidden of [secret,'UNEXPECTED','frozenCandidate','analysisContext','observation','sourceCycleId'])assert.ok(!printed.includes(forbidden));
+  });
+  await t.test('diagnostic logging failure cannot change worker result',async()=>{
+   console.info=()=>{throw Error(secret);};
+   const result=await runTick({execute:async c=>c[0]==='SET'?'OK':1,worker:async()=>({status:'BLOCKED_MAPPING',reasonCodes:['MISSING_FROZEN_PLAN']})});
+   assert.equal(result.status,'BLOCKED_MAPPING');assert.deepEqual(result.workerReasonCodes,['MISSING_FROZEN_PLAN']);
+  });
+ }finally{console.info=info;global.fetch=fetch;for(const k of Object.keys(process.env))if(!(k in old))delete process.env[k];Object.assign(process.env,old);}
+});
