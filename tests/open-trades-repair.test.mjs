@@ -12,7 +12,7 @@ const rows = () => { const r=Array.from({length:12},(_,i)=>({tradeId:`test-${i}`
 async function fixture(records=rows(),recordHash=hash(canonical(records[6]))) {
   const raw=JSON.stringify(records);
   const code=source.replace("'../lib/private-access.js'",JSON.stringify(new URL('../lib/private-access.js',import.meta.url).href))
-    .replace('7c0c60ad8e577b4ac527111ce3ed0920b3eb0dcda5c752c2d9a17242a0d750a9',hash(raw))
+    .replace('df4846a7a65455d772d82c09f6c0da674dd71f469198450b5243d4d0892eff96',hash(raw))
     .replace('505800de226d1b229c4a66ce0e9c4a282f7a600e2641cb08022b87e2ffd107c5',recordHash);
   return {raw,module:await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)};
 }
@@ -34,7 +34,7 @@ async function invoke(f,options={}) {
 }
 test('production incident constants fixed; arbitrary raw rejected',()=>{
   assert.throws(()=>prepareRepair(JSON.stringify(rows())),/SOURCE_CHANGED/);
-  assert.match(source,/7c0c60ad8e577b4ac527111ce3ed0920b3eb0dcda5c752c2d9a17242a0d750a9/);
+  assert.match(source,/df4846a7a65455d772d82c09f6c0da674dd71f469198450b5243d4d0892eff96/);
   assert.match(source,/505800de226d1b229c4a66ce0e9c4a282f7a600e2641cb08022b87e2ffd107c5/);
 });
 test('auth and method reject before storage',async()=>{const f=await fixture();for(const o of [{badAuth:true},{method:'GET'}]){const r=await invoke(f,o);assert.equal(r.calls.length,0);assert.ok([401,405].includes(r.res.code));}});

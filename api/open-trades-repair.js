@@ -3,7 +3,7 @@ import { requirePrivateApi } from '../lib/private-access.js';
 
 // Temporary, incident-specific repair. No caller-selected key, hashes, indexes or payload.
 const KEY = 'sergey-ai:open-trades:v1';
-const SOURCE_SHA = '7c0c60ad8e577b4ac527111ce3ed0920b3eb0dcda5c752c2d9a17242a0d750a9';
+const SOURCE_SHA = 'df4846a7a65455d772d82c09f6c0da674dd71f469198450b5243d4d0892eff96';
 const RECORD_SHA = '505800de226d1b229c4a66ce0e9c4a282f7a600e2641cb08022b87e2ffd107c5';
 const sha = value => createHash('sha256').update(value).digest('hex');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
