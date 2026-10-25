@@ -60,9 +60,17 @@ export function diagnose(raw) {
   if (typeof raw !== 'string') throw Error('INVALID');
   const records = JSON.parse(raw);
   if (!Array.isArray(records) || !object(records[6]) || !object(records[7])) throw Error('INVALID');
-  const pair = [project(records[6], 6), project(records[7], 7)];
+  if (records.some(record => !object(record) || typeof record.tradeId !== 'string' || !record.tradeId)) throw Error('INVALID');
+  const canonicalRecords = records.map(canonical);
+  const recordFingerprints = records.map((record, index) => ({
+    index, canonicalSha256: sha(canonicalRecords[index]), tradeIdSha256: sha(record.tradeId)
+  }));
+  const pair = [6, 7].map(index => ({ ...project(records[index], index),
+    canonicalSha256: recordFingerprints[index].canonicalSha256 }));
   const same = (a,b) => canonical(a ?? null) === canonical(b ?? null) ? 'SAME' : 'DIFFERENT';
   return { rawByteLength: Buffer.byteLength(raw, 'utf8'), rawSha256: sha(raw),
+    recordCount: records.length, recordFingerprints,
+    records6And7CanonicalEqual: canonicalRecords[6] === canonicalRecords[7],
     initialPlanHashFormat: 'SHA-256 recursively key-sorted JSON', records: pair,
     comparison: { tradeId: same(records[6].tradeId, records[7].tradeId), setupKey: same(records[6].setupKey, records[7].setupKey),
       initialPlan: same(pair[0].initialPlanHash, pair[1].initialPlanHash),

@@ -7,7 +7,7 @@ const record = () => ({tradeId:'PRIVATE_ID',setupKey:'PRIVATE_SETUP',symbol:'PRI
   initialPlan:{entryPrice:987654,createdAt:'2026-10-22T00:00:00Z',exitStrategy:{version:'tp1-50-reanalyse-v1'}},
   outcome:{status:'Active',lastPriceCheckedAt:'2026-10-23T00:00:00Z',reanalysisPending:true,
     exits:[{price:876543,checkedAt:'2026-10-22T01:00:00Z',evidence:{candle:{timestamp:1792627200000,close:765432}}}]}});
-const raw = () => JSON.stringify([...Array.from({length:6},()=>({secret:'OTHER_RECORD_SECRET'})),record(),record(),{secret:'NINTH_SECRET'}]);
+const raw = () => JSON.stringify([...Array.from({length:6},(_,i)=>({tradeId:`PRIVATE_OTHER_ID_${i}`,secret:'OTHER_RECORD_SECRET'})),record(),record(),{tradeId:'PRIVATE_NINTH_ID',secret:'NINTH_SECRET'}]);
 async function invoke({method='GET',auth=`Bearer ${secret}`,result=raw(),failure=false,configured=true}={}) {
   const saved = {...process.env}, fetchBefore=globalThis.fetch, calls=[];
   process.env.SM1M_API_SECRET=secret;
@@ -55,4 +55,51 @@ test('malformed JSON, ledger, missing indexes and transport fail closed with no 
     const {res,calls}=await invoke({result});assert.equal(res.code,503);assert.deepEqual(res.body,{error:'DIAGNOSTIC_UNAVAILABLE'});assert.equal(calls.length,1);
   }
   const {res,calls}=await invoke({failure:true});assert.equal(res.code,503);assert.equal(calls.length,1);assert.ok(!JSON.stringify(res.body).includes('SECRET_TRANSPORT'));
+});
+
+test('all-record fingerprint count, exact fields, full hashes and duplicate multiplicity',()=>{
+ const input=raw(),rows=JSON.parse(input),out=diagnose(input);
+ assert.equal(out.recordCount,9);assert.equal(out.recordFingerprints.length,9);
+ for(const [i,f]of out.recordFingerprints.entries()){
+  assert.deepEqual(Object.keys(f).sort(),['canonicalSha256','index','tradeIdSha256']);assert.equal(f.index,i);
+  assert.match(f.canonicalSha256,/^[a-f0-9]{64}$/);assert.match(f.tradeIdSha256,/^[a-f0-9]{64}$/);
+  assert.equal(f.tradeIdSha256,createHash('sha256').update(rows[i].tradeId).digest('hex'));
+  assert.ok(!JSON.stringify(out).includes(rows[i].tradeId));
+ }
+ assert.equal(out.recordFingerprints[6].canonicalSha256,out.recordFingerprints[7].canonicalSha256);
+ assert.equal(out.records6And7CanonicalEqual,true);
+ assert.deepEqual(out.records.map(r=>r.canonicalSha256),[out.recordFingerprints[6].canonicalSha256,out.recordFingerprints[7].canonicalSha256]);
+ assert.equal(Object.hasOwn(out,'raw'),false);assert.equal(Object.hasOwn(out,'ledger'),false);assert.equal(out.records.length,2);
+});
+test('canonical algorithm recursively sorts keys but preserves array order and all values',()=>{
+ const rows=JSON.parse(raw());
+ rows[6]={tradeId:'PRIVATE_CANONICAL',nested:{z:2,a:[{y:3,x:4},5]},outcome:{status:'Active'}};
+ rows[7]={outcome:{status:'Active'},nested:{a:[{x:4,y:3},5],z:2},tradeId:'PRIVATE_CANONICAL'};
+ const out=diagnose(JSON.stringify(rows));
+ const expected='{"nested":{"a":[{"x":4,"y":3},5],"z":2},"outcome":{"status":"Active"},"tradeId":"PRIVATE_CANONICAL"}';
+ assert.equal(out.records[0].canonicalSha256,createHash('sha256').update(expected).digest('hex'));
+ assert.equal(out.records[0].canonicalSha256,out.records[1].canonicalSha256);assert.equal(out.records6And7CanonicalEqual,true);
+ rows[7].nested.a.reverse();const changed=diagnose(JSON.stringify(rows));
+ assert.notEqual(changed.records[0].canonicalSha256,changed.records[1].canonicalSha256);assert.equal(changed.records6And7CanonicalEqual,false);
+});
+test('full record hashes detect fields omitted from safe summaries without exposing values',()=>{
+ const baseline=diagnose(raw());
+ for(const change of [r=>r.price=123456789,r=>r.initialPlan.entryPrice++,r=>r.outcome.exits[0].price++,
+  r=>r.outcome.extra={privateValue:'DO_NOT_RETURN'},r=>delete r.direction]){
+  const rows=JSON.parse(raw());change(rows[7]);const out=diagnose(JSON.stringify(rows));
+  assert.equal(out.records[0].canonicalSha256,baseline.records[0].canonicalSha256);
+  assert.notEqual(out.records[1].canonicalSha256,baseline.records[1].canonicalSha256);
+  assert.equal(out.records6And7CanonicalEqual,false);
+  assert.equal(out.recordFingerprints[7].tradeIdSha256,baseline.recordFingerprints[7].tradeIdSha256);
+  const fingerprints=JSON.stringify(out.recordFingerprints);
+  for(const value of ['PRIVATE_ID','PRIVATE_SETUP','entryPrice','123456789','DO_NOT_RETURN'])assert.ok(!fingerprints.includes(value));
+  assert.ok(!JSON.stringify(out).includes('DO_NOT_RETURN'));
+ }
+});
+test('invalid all-record identities fail closed without partial output or extra Redis calls',async()=>{
+ for(const bad of [null,{}, {tradeId:null},{tradeId:123},{tradeId:''}]){
+  const rows=JSON.parse(raw());rows[0]=bad;const {res,calls}=await invoke({result:JSON.stringify(rows)});
+  assert.equal(res.code,503);assert.deepEqual(res.body,{error:'DIAGNOSTIC_UNAVAILABLE'});
+  assert.equal(calls.length,1);assert.deepEqual(JSON.parse(calls[0].body),['GET','sergey-ai:open-trades:v1']);
+ }
 });
