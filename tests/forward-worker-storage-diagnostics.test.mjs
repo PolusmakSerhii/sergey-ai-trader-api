@@ -59,10 +59,11 @@ test('diagnostic parity against unchanged worker on isolated Redis only',async t
  async function run(source,scenario){await seed(scenario);const events=[],commands=[];const worker=await load(source,events,scenario);
   const prior=console.info;console.info=(name,raw)=>{events.push({name,data:JSON.parse(raw)});if(scenario.loggerThrows)throw Error('LOGGER_SECRET');};
   try{const result=await worker({execute:async c=>{commands.push(structuredClone(c));return redis(c);},now:()=>Date.parse(W),owner:'PRIVATE_OWNER'});
-   return {result:JSON.parse(JSON.stringify(result)),events:events.filter(e=>e.name==='[forward-worker-storage-failure]'),saveEvents:events.filter(e=>e.name==='[forward-worker-save]'),commands,state:await redis(['GET',WORKER_KEY])};
+   return {result:JSON.parse(JSON.stringify(result)),events:events.filter(e=>e.name==='[forward-worker-storage-failure]'),saveEvents:events.filter(e=>e.name==='[forward-worker-save]'),finalizeEvents:events.filter(e=>e.name==='[forward-worker-finalize]'),commands,state:await redis(['GET',WORKER_KEY])};
   }finally{console.info=prior;}
  }
- async function compare(scenario){const before=await run(baseline,scenario),after=await run(current,scenario);assert.deepEqual(after.result,before.result);assert.deepEqual(after.commands,before.commands);return after;}
+ async function compare(scenario){const before=await run(baseline,scenario),after=await run(current,scenario);assert.deepEqual(after.result,before.result);const beforeFinal=c=>!(c[0]==='EVAL'&&(c[4]==='FINALIZE_COMPLETE'||(c[4]==='SAVE'&&JSON.parse(c[7]).status==='COMPLETE')));
+  assert.deepEqual(after.commands.filter(beforeFinal),before.commands.filter(beforeFinal));return after;}
  try{
   let ready=false;for(let i=0;i<100;i++){try{await redis(['PING']);ready=true;break;}catch{await new Promise(r=>setTimeout(r,20));}}assert.ok(ready);
   for(const [name,scenario,operation,phase]of [
@@ -71,7 +72,6 @@ test('diagnostic parity against unchanged worker on isolated Redis only',async t
    ['action result save',{component:'WORKER_STATE',method:'save',when:a=>Object.keys(a[2].done).length===1,result:{status:'BLOCKED_STORAGE'}},'SAVE','ACTION_RESULT'],
    ['check',{component:'WORKER_STATE',method:'check',result:{status:'BLOCKED_STORAGE'}},'CHECK',null],
    ['mapping result save',{invalidMapping:true,component:'WORKER_STATE',method:'save',when:a=>a[2].status==='BLOCKED_MAPPING',result:{status:'BLOCKED_STORAGE'}},'SAVE','MAPPING_RESULT'],
-   ['complete save',{component:'WORKER_STATE',method:'save',when:a=>a[2].status==='COMPLETE',result:{status:'BLOCKED_STORAGE'}},'SAVE','COMPLETE'],
    ['producer read',{component:'PRODUCER_LEDGER',method:'read'},'READ',null],
    ['producer manifest',{component:'PRODUCER_LEDGER',method:'freezeManifest'},'FREEZE_MANIFEST',null],
    ['producer generation',{component:'PRODUCER_LEDGER',method:'getOrCreateGeneration'},'GET_OR_CREATE_GENERATION',null],
@@ -92,20 +92,29 @@ test('diagnostic parity against unchanged worker on isolated Redis only',async t
    const serialized=JSON.stringify(r.events);for(const privateValue of ['PRIVATE_',e.sourceCycleId,'payload','message','initialPlan','Authorization'])assert.ok(!serialized.includes(privateValue),privateValue);
    assert.match(ev.data.sourceCycleHash,/^[a-f0-9]{64}$/);
   });
-  await t.test('legacy 32038 intent crosses old limit and retains full COMPLETE',async()=>{
-   const r=await compare({padded:true});assert.equal(r.result.status,'COMPLETE');assert.equal(r.events.length,0);
-   assert.equal(r.saveEvents.length,2);assert.equal(r.saveEvents[0].data.savePhase,'PREPARED_ACTION');
-   assert.equal(r.saveEvents[1].data.savePhase,'COMPLETE');
-   const i=JSON.parse(Object.values(JSON.parse(r.state).intents)[0]);assert.equal(i.status,'COMPLETE');
-   assert.ok(i.actions.padding);assert.ok(Object.keys(i.done).length);assert.ok(i.frozen);assert.equal(i.receiptVersion,undefined);
-   for(const {data:d} of r.saveEvents){assert.equal(d.configuredLimitBytes,1048576);assert.ok(d.canonicalIntentBytes>32768);
-    assert.equal(d.serializedGrowthBytes,d.prospectiveSerializedBytes-d.previousSerializedBytes);
-    assert.equal(d.wholeStateLimitBytes,4194304);assert.equal(d.status,'OK');assert.equal(d.reasonCode,'SAVED');}
-   assert.ok(!JSON.stringify(r.saveEvents).includes('PRIVATE_'));
+  await t.test('FINALIZE failure reports store and safe metrics without payload',async()=>{
+   const r=await run(current,{component:'WORKER_STATE',method:'finalize',result:{status:'BLOCKED_STORAGE'}});
+   assert.deepEqual(r.result,{status:'BLOCKED_STORAGE',reasonCode:'PROCESSING_INCOMPLETE'});
+   assert.equal(r.events.length,1);assert.equal(r.events[0].data.operation,'FINALIZE_COMPLETE');
+   assert.equal(r.finalizeEvents.length,1);assert.equal(r.finalizeEvents[0].data.status,'BLOCKED_STORAGE');
+   assert.ok(!JSON.stringify(r.finalizeEvents).includes('PRIVATE_'));
   });
-  await t.test('larger result crosses old limit without changing worker decisions',async()=>{
-   const r=await compare({padded:true,component:'PRODUCER_LEDGER',method:'createRun',largeResult:true});
-   assert.equal(r.result.status,'COMPLETE');assert.equal(r.events.length,0);assert.equal(r.saveEvents.at(-1).data.savePhase,'COMPLETE');
+  await t.test('unexpected padding action is rejected by exact FINALIZE completeness',async()=>{
+   const r=await run(current,{padded:true});assert.equal(r.result.status,'CONFLICT');
+   assert.equal(JSON.parse(Object.values(JSON.parse(r.state).intents)[0]).status,'RUNNING');
+  });
+  await t.test('success compacts and logs only safe FINALIZE metrics',async()=>{
+   const r=await compare({});const i=JSON.parse(Object.values(JSON.parse(r.state).intents)[0]);
+   assert.equal(i.receiptVersion,'forward-worker-complete-v1');assert.equal(i.actions,undefined);assert.equal(i.done,undefined);
+   assert.equal(r.finalizeEvents.length,1);const d=r.finalizeEvents[0].data;
+   assert.deepEqual(Object.keys(d).sort(),['sourceCycleHash','operation','status','reasonCode','fullIntentCanonicalBytes','compactReceiptCanonicalBytes','previousSerializedBytes','prospectiveSerializedBytes','serializedReductionBytes','wholeStateLimitBytes'].sort());
+   assert.equal(d.status,'OK');assert.equal(d.reasonCode,'FINALIZED');assert.equal(d.wholeStateLimitBytes,4194304);
+   assert.equal(d.serializedReductionBytes,d.previousSerializedBytes-d.prospectiveSerializedBytes);assert.ok(d.serializedReductionBytes>0);
+   assert.ok(d.fullIntentCanonicalBytes>d.compactReceiptCanonicalBytes);assert.ok(!JSON.stringify(r.finalizeEvents).includes('PRIVATE_'));
+  });
+  await t.test('larger successful result preserves decisions and is hashed before compaction',async()=>{
+   const r=await compare({component:'PRODUCER_LEDGER',method:'createRun',largeResult:true});
+   assert.equal(r.result.status,'COMPLETE');assert.equal(r.events.length,0);assert.equal(r.finalizeEvents[0].data.status,'OK');
   });
   await t.test('capture observes original status before normalization',async()=>{
    const r=await compare({component:'SHADOW_LEDGER',method:'commit',result:{status:'STORAGE_ERROR',reason:'SECRET_REASON'}});
@@ -116,6 +125,7 @@ test('diagnostic parity against unchanged worker on isolated Redis only',async t
   await t.test('acquire rejection has one safe event and unchanged early return',async()=>{const r=await compare({component:'WORKER_STATE',method:'acquire',result:{status:'BUSY'}});assert.deepEqual(r.result,{status:'BUSY'});assert.equal(r.events.length,1);assert.equal(r.events[0].data.operation,'ACQUIRE');assert.equal(r.events[0].data.sourceCycleHash,null);});
   await t.test('read exception retains result without leaking exception message',async()=>{const r=await compare({component:'WORKER_STATE',method:'read',throwError:true});assert.equal(r.events.length,1);assert.equal(r.events[0].data.operation,'READ');assert.equal(r.events[0].data.originalStatus,'UNKNOWN');assert.ok(!JSON.stringify(r.events).includes('ARBITRARY'));});
   await t.test('cleanup failure is not a processing event',async()=>{const r=await compare({component:'WORKER_STATE',method:'release',throwError:true});assert.equal(r.result.status,'COMPLETE');assert.equal(r.events.length,0);});
-  await t.test('success has no event and identical commands',async()=>{const r=await compare({});assert.equal(r.result.status,'COMPLETE');assert.equal(r.events.length,0);});
+  await t.test('FINALIZE throwing logger does not change result or command sequence',async()=>{const r=await compare({loggerThrows:true});assert.equal(r.result.status,'COMPLETE');assert.equal(r.finalizeEvents.length,1);});
+  await t.test('success has no failure event and unchanged pre-FINALIZE commands',async()=>{const r=await compare({});assert.equal(r.result.status,'COMPLETE');assert.equal(r.events.length,0);});
  }finally{try{await redis(['SHUTDOWN','NOSAVE']);}catch{}server.kill();await rm(dir,{recursive:true,force:true});}
 });

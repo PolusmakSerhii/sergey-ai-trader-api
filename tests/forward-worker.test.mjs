@@ -139,12 +139,15 @@ test('local Unix-socket worker integration and crash recovery',async t=>{
      if(Object.keys(i.actions).length===10&&Object.keys(i.done).length===10){cut=true;throw Error('crash after action 10');}}
     return r;});
    assert.equal(cut,true);const before=(await createWorkerStore(redis).read()).intents[c.envelope.sourceCycleId];
-   assert.equal(before.status,'RUNNING');await expire();const result=await run();assert.equal(result.status,'COMPLETE');
+   assert.equal(before.status,'RUNNING');await expire();let finalized;const result=await run(async command=>{
+    if(command[0]==='EVAL'&&command[4]==='FINALIZE_COMPLETE')finalized=JSON.parse(JSON.parse(command[7]).expectedPreimage);return redis(command);});assert.equal(result.status,'COMPLETE');
    const state=await createWorkerStore(redis).read(),after=state.intents[c.envelope.sourceCycleId];
    assert.equal(Object.keys(state.intents).length,1);assert.equal(after.status,'COMPLETE');assert.equal(after.frozen,before.frozen);
-   for(const [key,value]of Object.entries(before.actions))assert.equal(after.actions[key],value);
-   for(const [key,value]of Object.entries(before.done))assert.equal(after.done[key],value);
-   assert.equal(Object.keys(after.actions).length,12);assert.equal(Object.keys(after.done).length,12);assert.equal(after.receiptVersion,undefined);
+   for(const [key,value]of Object.entries(before.actions))assert.equal(finalized.actions[key],value);
+   for(const [key,value]of Object.entries(before.done))assert.equal(finalized.done[key],value);
+   assert.equal(Object.keys(finalized.actions).length,12);assert.equal(Object.keys(finalized.done).length,12);
+   assert.equal(after.receiptVersion,'forward-worker-complete-v1');assert.equal(after.fullIntentSha256,digest({...finalized,status:'COMPLETE'}));
+   assert.equal(after.actions,undefined);assert.equal(after.done,undefined);
    const p=await createProducerStore(redis).read(RUN_ID);assert.equal(p.state.generations.length,2);assert.equal(p.state.captures.length,2);
    assert.equal((await read(shadowKey(RUN_ID))).records.length,2);assert.equal((await run()).status,'COMPLETE');
   });

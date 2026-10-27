@@ -10,6 +10,7 @@ import {createSourceRegistry,RUN_ID,REGISTRY_KEY,VERSION as RV} from '../lib/for
 import {createSourceEpoch,VERSION as EV} from '../lib/forward-validation/source-epoch.js';
 import {prepareProspectiveObservation} from '../lib/forward-validation/prospective-source.js';
 import {persistObservationCycle} from '../lib/forward-validation/observation-store.js';
+import {WORKER_KEY} from '../lib/forward-validation/worker-store.js';
 import {runWorker} from '../lib/forward-validation/worker.js';
 import {runLifecycle} from '../lib/forward-validation/lifecycle-worker.js';
 import {createLifecycleStore,KEY} from '../lib/forward-validation/lifecycle-store.js';
@@ -47,6 +48,8 @@ test('F4 real durable pipeline with isolated Unix Redis and injected candles onl
   assert.equal(prepared.status,'PREPARED');const binding=await epoch.bind(membership,snapshot,prepared);assert.equal(binding.status,'BOUND');
   const receipt=await persistObservationCycle(prepared,io);assert.equal(receipt.status,'COMPLETE');assert.equal((await epoch.observe(binding,prepared,receipt)).status,'OBSERVED');
   const r=await runWorker({execute:io,now:()=>base+(minute+2)*M});assert.equal(r.status,'COMPLETE',JSON.stringify(r));
+  const worker=JSON.parse(await io(['GET',WORKER_KEY]));
+  for(const raw of Object.values(worker.intents)){const intent=JSON.parse(raw);if(intent.status==='COMPLETE')assert.equal(intent.receiptVersion,'forward-worker-complete-v1');}
  };
  const provider=(fn=()=>({}))=>async({from,to})=>({source:'OKX 1m candles',data:Array.from({length:(to-from)/M},(_,i)=>({timestamp:from+i*M,open:100,high:102,low:98,close:100,confirmed:true,...fn((from+i*M-base)/M)}))});
  const run=(p=provider(),minutes=5,execute=io)=>runLifecycle({execute,lifecycle:core.handler.forwardLifecycle,provider:p,now:()=>base+minutes*M});
