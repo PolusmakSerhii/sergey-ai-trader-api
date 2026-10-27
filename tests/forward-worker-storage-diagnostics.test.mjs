@@ -59,7 +59,7 @@ test('diagnostic parity against unchanged worker on isolated Redis only',async t
  async function run(source,scenario){await seed(scenario);const events=[],commands=[];const worker=await load(source,events,scenario);
   const prior=console.info;console.info=(name,raw)=>{events.push({name,data:JSON.parse(raw)});if(scenario.loggerThrows)throw Error('LOGGER_SECRET');};
   try{const result=await worker({execute:async c=>{commands.push(structuredClone(c));return redis(c);},now:()=>Date.parse(W),owner:'PRIVATE_OWNER'});
-   return {result:JSON.parse(JSON.stringify(result)),events,commands,state:await redis(['GET',WORKER_KEY])};
+   return {result:JSON.parse(JSON.stringify(result)),events:events.filter(e=>e.name==='[forward-worker-storage-failure]'),saveEvents:events.filter(e=>e.name==='[forward-worker-save]'),commands,state:await redis(['GET',WORKER_KEY])};
   }finally{console.info=prior;}
  }
  async function compare(scenario){const before=await run(baseline,scenario),after=await run(current,scenario);assert.deepEqual(after.result,before.result);assert.deepEqual(after.commands,before.commands);return after;}
@@ -92,16 +92,20 @@ test('diagnostic parity against unchanged worker on isolated Redis only',async t
    const serialized=JSON.stringify(r.events);for(const privateValue of ['PRIVATE_',e.sourceCycleId,'payload','message','initialPlan','Authorization'])assert.ok(!serialized.includes(privateValue),privateValue);
    assert.match(ev.data.sourceCycleHash,/^[a-f0-9]{64}$/);
   });
-  await t.test('32038 saved bytes can overflow on next prepared action without changing behavior',async()=>{
-   const r=await compare({padded:true});assert.equal(r.result.status,'BLOCKED_STORAGE');assert.equal(r.events.length,1);const d=r.events[0].data;
-   assert.equal(d.operation,'SAVE');assert.equal(d.savePhase,'PREPARED_ACTION');assert.equal(d.originalReasonCode,'NOT_PROVIDED');assert.equal(d.preparedIntentOverLimit,true);
-   const command=r.commands.findLast(c=>c[0]==='EVAL'&&c[4]==='SAVE');assert.equal(d.preparedIntentBytes,Buffer.byteLength(command[7]));
-   const persisted=Object.values(JSON.parse(r.state).intents)[0];assert.ok(Buffer.byteLength(persisted)<=32768);assert.ok(d.preparedIntentBytes>32768);
+  await t.test('legacy 32038 intent crosses old limit and retains full COMPLETE',async()=>{
+   const r=await compare({padded:true});assert.equal(r.result.status,'COMPLETE');assert.equal(r.events.length,0);
+   assert.equal(r.saveEvents.length,2);assert.equal(r.saveEvents[0].data.savePhase,'PREPARED_ACTION');
+   assert.equal(r.saveEvents[1].data.savePhase,'COMPLETE');
+   const i=JSON.parse(Object.values(JSON.parse(r.state).intents)[0]);assert.equal(i.status,'COMPLETE');
+   assert.ok(i.actions.padding);assert.ok(Object.keys(i.done).length);assert.ok(i.frozen);assert.equal(i.receiptVersion,undefined);
+   for(const {data:d} of r.saveEvents){assert.equal(d.configuredLimitBytes,1048576);assert.ok(d.canonicalIntentBytes>32768);
+    assert.equal(d.serializedGrowthBytes,d.prospectiveSerializedBytes-d.previousSerializedBytes);
+    assert.equal(d.wholeStateLimitBytes,4194304);assert.equal(d.status,'OK');assert.equal(d.reasonCode,'SAVED');}
+   assert.ok(!JSON.stringify(r.saveEvents).includes('PRIVATE_'));
   });
-  await t.test('next result can overflow intent; diagnostic includes exact argument bytes',async()=>{
-   const r=await compare({padded:true,component:'PRODUCER_LEDGER',method:'createRun',largeResult:true});const d=r.events[0].data;
-   assert.equal(r.result.status,'BLOCKED_STORAGE');assert.equal(d.savePhase,'ACTION_RESULT');assert.equal(d.preparedIntentOverLimit,true);
-   assert.equal(d.preparedIntentBytes,Buffer.byteLength(r.commands.findLast(c=>c[0]==='EVAL'&&c[4]==='SAVE')[7]));
+  await t.test('larger result crosses old limit without changing worker decisions',async()=>{
+   const r=await compare({padded:true,component:'PRODUCER_LEDGER',method:'createRun',largeResult:true});
+   assert.equal(r.result.status,'COMPLETE');assert.equal(r.events.length,0);assert.equal(r.saveEvents.at(-1).data.savePhase,'COMPLETE');
   });
   await t.test('capture observes original status before normalization',async()=>{
    const r=await compare({component:'SHADOW_LEDGER',method:'commit',result:{status:'STORAGE_ERROR',reason:'SECRET_REASON'}});

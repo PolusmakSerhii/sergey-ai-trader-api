@@ -55,7 +55,7 @@ test('worker running limit: at boundary PASS, over boundary FAIL',async()=>{
  raws[0]=worker(101);const d=await diagnose(raws);assert.equal(d.workerState.budgetChecks.runningIntents,'FAIL');assert.equal(d.blockingStore,'WORKER_STATE');
 });
 test('worker saved payload limit independently detected without raw action exposure',async()=>{
- const raws=await fixtures(),s=JSON.parse(raws[0]),i=JSON.parse(Object.values(s.intents)[0]);i.actions={private:'X'.repeat(33000)};s.intents[i.id]=JSON.stringify(i);raws[0]=JSON.stringify(s);
+ const raws=await fixtures(),s=JSON.parse(raws[0]),i=JSON.parse(Object.values(s.intents)[0]);i.actions={private:'X'.repeat(1048577)};s.intents[i.id]=JSON.stringify(i);raws[0]=JSON.stringify(s);
  const d=await diagnose(raws);assert.equal(d.workerState.payloadsOverLimit,1);assert.equal(d.workerState.budgetChecks.intentPayloadBytes,'FAIL');assert.equal(d.blockingStore,'WORKER_STATE');assert.ok(!JSON.stringify(d).includes('XXXXX'));
 });
 test('worker intents count and exact raw total byte budgets',async()=>{

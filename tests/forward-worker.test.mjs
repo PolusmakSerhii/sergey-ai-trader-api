@@ -128,9 +128,25 @@ test('local Unix-socket worker integration and crash recovery',async t=>{
    await fresh([cycle()]);let time=Date.parse(W),calls=0;const r=await runWorker({now:()=>time,execute:async c=>{calls++;const x=await redis(c);time+=10000;return x;}});
    assert.equal(r.status,'UNRESOLVED');assert.equal(r.reasonCode,'DEADLINE');assert.ok(calls<=4);
   });
-  await t.test('worker payload overflow preserves state',async()=>{
+  await t.test('legacy 32KiB threshold is no longer worker rejection',async()=>{
    await fresh([]);const s=createWorkerStore(redis),lease=await s.acquire('x'),before=await redis(['GET',WORKER_KEY]);
-   assert.equal((await s.save('x',lease.fence,{id:'a',frozen:'x'.repeat(32769),actions:{},done:{},status:'RUNNING'})).status,'BLOCKED_STORAGE');assert.equal(await redis(['GET',WORKER_KEY]),before);
+   assert.equal((await s.save('x',lease.fence,{id:'a',frozen:'x'.repeat(32769),actions:{},done:{},status:'RUNNING'})).status,'OK');assert.notEqual(await redis(['GET',WORKER_KEY]),before);
+  });
+  await t.test('resume real N2 action prefix before next cycle, preserving done and side effects',async()=>{
+   const c=cycle(2),later=cycle(0,'2026-10-18T10:02:00.000Z');await fresh([c,later]);let cut=false;
+   await run(async command=>{if(cut)throw Error('crash');const r=await redis(command);
+    if(command[0]==='EVAL'&&command[4]==='SAVE'){const i=JSON.parse(command[7]);
+     if(Object.keys(i.actions).length===10&&Object.keys(i.done).length===10){cut=true;throw Error('crash after action 10');}}
+    return r;});
+   assert.equal(cut,true);const before=(await createWorkerStore(redis).read()).intents[c.envelope.sourceCycleId];
+   assert.equal(before.status,'RUNNING');await expire();const result=await run();assert.equal(result.status,'COMPLETE');
+   const state=await createWorkerStore(redis).read(),after=state.intents[c.envelope.sourceCycleId];
+   assert.equal(Object.keys(state.intents).length,1);assert.equal(after.status,'COMPLETE');assert.equal(after.frozen,before.frozen);
+   for(const [key,value]of Object.entries(before.actions))assert.equal(after.actions[key],value);
+   for(const [key,value]of Object.entries(before.done))assert.equal(after.done[key],value);
+   assert.equal(Object.keys(after.actions).length,12);assert.equal(Object.keys(after.done).length,12);assert.equal(after.receiptVersion,undefined);
+   const p=await createProducerStore(redis).read(RUN_ID);assert.equal(p.state.generations.length,2);assert.equal(p.state.captures.length,2);
+   assert.equal((await read(shadowKey(RUN_ID))).records.length,2);assert.equal((await run()).status,'COMPLETE');
   });
   await t.test('crash after each durable write resumes identical intent, single generation/capture',async()=>{
    await fresh([cycle()]);let writes=0;const spy=async c=>{const r=await redis(c);if(c[0]==='EVAL'&&String(c[1]).includes("redis.call('SET'"))writes++;return r;};assert.equal((await run(spy)).status,'COMPLETE');
