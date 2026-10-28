@@ -1,81 +1,118 @@
 import { createHash } from 'node:crypto';
 import { requirePrivateApi } from '../lib/private-access.js';
+import market from './market.js';
 
-// Temporary incident diagnostic: fixed key, fixed indexes, read-only transport.
+// Incident diagnostic only: fixed key, one logical read, no caller-selected command.
 const KEY = 'sergey-ai:open-trades:v1';
-const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
-const sha = v => createHash('sha256').update(v).digest('hex');
-const identityHash = v => v == null ? null : sha(JSON.stringify(v)).slice(0, 16);
-const canonical = v => Array.isArray(v) ? `[${v.map(canonical).join(',')}]`
-  : object(v) ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}` : JSON.stringify(v);
-const TIMES = new Set(['capturedAt','createdAt','updatedAt','detectedAt','plannedAt','expiresAt','activatedAt',
-  'checkedAt','verificationBoundaryAt','lastPriceCheckedAt','analysisAt','decidedAt','executedAt',
-  'verifiedAt','fromTime','toTime','timestamp','closeTime','openTime','completedAt']);
-const CONTAINERS = new Set(['origin','initialPlan','exitStrategy','outcome','priceCheck','entryCheck','exitCheck',
-  'managementPending','candle','lastReanalysis','evidence','executions','exits','events']);
-const VERSIONS = new Set(['version','revision','schemaVersion','rulesRevision','lifecycleVersion']);
-const KNOWN_VERSIONS = new Set(['closed-candles-v2','tp1-reanalysis-candles-v1','partial-candles-v1',
-  'tp1-50-reanalyse-v1','partial-25-25-50-be-v1']);
-function time(v) {
-  if (v === null) return null;
-  if (!(typeof v === 'number' && Number.isFinite(v)) &&
-      !(typeof v === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(v))) return 'INVALID';
-  const n = typeof v === 'number' ? v : Date.parse(v);
-  return Number.isFinite(new Date(n).getTime()) ? new Date(n).toISOString() : 'INVALID';
+const sha = value => createHash('sha256').update(value).digest('hex');
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
+  : object(value) ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`
+  : JSON.stringify(value);
+const type = value => value === null ? 'null' : Array.isArray(value) ? 'array'
+  : ['string', 'number', 'boolean', 'object', 'undefined'].includes(typeof value) ? typeof value : 'other';
+const missing = value => value == null || value === '';
+// Recovery protection, including lifecycle evidence that the application itself advances.
+const FROZEN = new Set(['tradeId','setupKey','setupId','symbol','direction','initialPlan','entryZone',
+  'stopLoss','takeProfit1','takeProfit2','takeProfit3','outcome','action','tradeAllowed','tradeReadiness',
+  'opportunityScore','opportunityGrade','confidence','grade','riskReward','researchSnapshot','entryDecision']);
+const MUTABLE = new Set(['capturedAt','signalId','price']);
+
+function parseStatus(raw, validation) {
+  try { validation.parseOpenTrades(raw); return { status: 'PASS', reason: null }; }
+  catch (error) {
+    if (error instanceof SyntaxError) return { status: 'REJECT', reason: 'INVALID_JSON' };
+    if (error?.message === 'Invalid open trades state') return { status: 'REJECT', reason: 'INVALID_ROOT' };
+    if (error?.message === 'Invalid or duplicate open trade') return { status: 'REJECT', reason: 'INVALID_OR_DUPLICATE_OPEN_TRADE' };
+    return { status: 'EXECUTION_ERROR', reason: 'VALIDATOR_EXECUTION_ERROR' };
+  }
 }
-function project(record, index) {
-  const timestamps = {}, versions = {}, structures = {}, arrayCounts = {};
-  function visit(v, path = '', depth = 0) {
-    if (depth > 16) throw Error('INVALID');
-    for (const [key, value] of Object.entries(v)) {
-      const p = path ? `${path}.${key}` : key;
-      if (TIMES.has(key)) timestamps[p] = time(value);
-      if (VERSIONS.has(key)) versions[p] = KNOWN_VERSIONS.has(value) ? value
-        : { valueHash: identityHash(value) }; // Unknown version strings never leak arbitrary content.
-      if (CONTAINERS.has(key)) {
-        structures[p] = value == null ? 'MISSING' : Array.isArray(value) ? 'ARRAY' : object(value) ? 'OBJECT' : 'INVALID';
-        if (Array.isArray(value)) {
-          arrayCounts[p] = value.length;
-          value.forEach((entry, i) => { if (object(entry)) visit(entry, `${p}[${i}]`, depth + 1); });
-        } else if (object(value)) visit(value, p, depth + 1);
-      }
+function jsStatus(records, validation) {
+  try { validation.validateProposedTradeSignals(records, true); return { status: 'PASS', reason: null }; }
+  catch (error) {
+    if (error?.message === 'Invalid proposed trade signals') return { status: 'REJECT', reason: 'INVALID_ROOT' };
+    if (error?.message === 'Invalid or duplicate proposed trade signal') return { status: 'REJECT', reason: 'INVALID_OR_DUPLICATE_PROPOSED_TRADE_SIGNAL' };
+    return { status: 'EXECUTION_ERROR', reason: 'VALIDATOR_EXECUTION_ERROR' };
+  }
+}
+function groups(records, field) {
+  const identities = new Map();
+  records.forEach((record, index) => {
+    const identity = record?.[field];
+    if (missing(identity)) return;
+    const encoded = canonical(identity), key = `${type(identity)}:${encoded}`;
+    if (!identities.has(key)) identities.set(key, { encoded, identityType: type(identity), indexes: [] });
+    identities.get(key).indexes.push(index);
+  });
+  return [...identities.values()].filter(group => group.indexes.length > 1).map(group => {
+    const rows = group.indexes.map(index => records[index]);
+    const fields = [...new Set(rows.flatMap(row => Object.keys(row)))].sort();
+    const differing = fields.filter(field => rows.some(row =>
+      Object.hasOwn(row, field) !== Object.hasOwn(rows[0], field) || canonical(row[field]) !== canonical(rows[0][field])));
+    return {
+      identityType: group.identityType, identitySha256: sha(group.encoded), indexes: group.indexes,
+      count: rows.length, allCanonicalEqual: rows.every(row => canonical(row) === canonical(rows[0])),
+      canonicalSha256ByIndex: group.indexes.map(index => ({ index, sha256: sha(canonical(records[index])) })),
+      frozenDifferingFieldNames: differing.filter(field => FROZEN.has(field)),
+      mutableDifferingFieldNames: differing.filter(field => MUTABLE.has(field)),
+      unknownDifferingFieldNames: differing.filter(field => !FROZEN.has(field) && !MUTABLE.has(field))
+    };
+  });
+}
+// Pure hypothetical only. Original object references and first-occurrence order survive.
+// This function never persists, changes records, or chooses between differing records.
+export function buildHypothetical(records) {
+  const ids = new Map(), setups = new Map(), result = [];
+  for (const record of records) {
+    if (typeof record?.tradeId !== 'string' || !record.tradeId ||
+        typeof record.setupKey !== 'string' || !record.setupKey) throw Error('CANDIDATE_UNAVAILABLE');
+    const previous = ids.get(record.tradeId) || setups.get(record.setupKey);
+    if (previous) {
+      if (canonical(previous) !== canonical(record)) throw Error('CANDIDATE_UNAVAILABLE');
+      continue;
     }
+    ids.set(record.tradeId, record); setups.set(record.setupKey, record); result.push(record);
   }
-  visit(record);
-  for (const key of ['initialPlan','outcome','outcome.entryCheck','outcome.exitCheck','outcome.priceCheck',
-    'outcome.managementPending','outcome.lastReanalysis','outcome.exits','outcome.executions','outcome.events']) {
-    structures[key] ??= 'MISSING';
-  }
-  const status = record.outcome?.status;
-  return { index, tradeIdHash: identityHash(record.tradeId), setupKeyHash: identityHash(record.setupKey),
-    outcome: { status: ['WaitingEntry','Pending','Active','Stopped','Closed','Expired','TP1Hit','TP3Hit'].includes(status)
-      ? status : status == null ? 'MISSING' : 'OTHER' },
-    timestamps, versions, structures, arrayCounts,
-    // Boolean pending flags distinguish deferred management from verified progress, without prices.
-    progress: { reanalysisPending: typeof record.outcome?.reanalysisPending === 'boolean' ? record.outcome.reanalysisPending : null },
-    initialPlanHash: object(record.initialPlan) ? sha(canonical(record.initialPlan)) : null,
-    topLevelFieldNames: Object.keys(record).sort() };
+  return result;
 }
-export function diagnose(raw) {
+export function diagnose(raw, validation = market.openTradesValidation) {
   if (typeof raw !== 'string') throw Error('INVALID');
-  const records = JSON.parse(raw);
-  if (!Array.isArray(records) || !object(records[6]) || !object(records[7])) throw Error('INVALID');
-  if (records.some(record => !object(record) || typeof record.tradeId !== 'string' || !record.tradeId)) throw Error('INVALID');
-  const canonicalRecords = records.map(canonical);
-  const recordFingerprints = records.map((record, index) => ({
-    index, canonicalSha256: sha(canonicalRecords[index]), tradeIdSha256: sha(record.tradeId)
-  }));
-  const pair = [6, 7].map(index => ({ ...project(records[index], index),
-    canonicalSha256: recordFingerprints[index].canonicalSha256 }));
-  const same = (a,b) => canonical(a ?? null) === canonical(b ?? null) ? 'SAME' : 'DIFFERENT';
-  return { rawByteLength: Buffer.byteLength(raw, 'utf8'), rawSha256: sha(raw),
-    recordCount: records.length, recordFingerprints,
-    records6And7CanonicalEqual: canonicalRecords[6] === canonicalRecords[7],
-    initialPlanHashFormat: 'SHA-256 recursively key-sorted JSON', records: pair,
-    comparison: { tradeId: same(records[6].tradeId, records[7].tradeId), setupKey: same(records[6].setupKey, records[7].setupKey),
-      initialPlan: same(pair[0].initialPlanHash, pair[1].initialPlanHash),
-      onlyIn6: pair[0].topLevelFieldNames.filter(k => !Object.hasOwn(records[7], k)),
-      onlyIn7: pair[1].topLevelFieldNames.filter(k => !Object.hasOwn(records[6], k)) } };
+  const parsed = parseStatus(raw, validation);
+  let records, jsonValid = true;
+  try { records = JSON.parse(raw); } catch { jsonValid = false; }
+  const analyzable = jsonValid && Array.isArray(records);
+  const js = jsonValid ? jsStatus(records, validation) : { status: 'REJECT', reason: 'INVALID_JSON' };
+  const nonString = field => analyzable ? records.flatMap((record, index) =>
+    typeof record?.[field] === 'string' ? [] : [{ index, type: type(record?.[field]) }]) : [];
+  const missingIndexes = field => analyzable ? records.flatMap((record, index) => missing(record?.[field]) ? [index] : []) : [];
+  const ids = nonString('tradeId'), setups = nonString('setupKey');
+  const missingIds = missingIndexes('tradeId'), missingSetups = missingIndexes('setupKey');
+  const idGroups = analyzable ? groups(records, 'tradeId') : [];
+  const setupGroups = analyzable ? groups(records, 'setupKey') : [];
+  const duplicates = [...idGroups, ...setupGroups];
+  let candidate = false;
+  if (analyzable && parsed.status !== 'EXECUTION_ERROR' && js.status !== 'EXECUTION_ERROR' &&
+      !ids.length && !setups.length && !missingIds.length && !missingSetups.length && duplicates.length &&
+      duplicates.every(group => group.allCanonicalEqual && !group.frozenDifferingFieldNames.length &&
+        !group.mutableDifferingFieldNames.length && !group.unknownDifferingFieldNames.length)) {
+    try {
+      const hypothetical = buildHypothetical(records);
+      candidate = parseStatus(JSON.stringify(hypothetical), validation).status === 'PASS' &&
+        jsStatus(hypothetical, validation).status === 'PASS';
+    } catch { candidate = false; }
+  }
+  return {
+    rawSha256: sha(raw), rawByteLength: Buffer.byteLength(raw, 'utf8'), recordCount: analyzable ? records.length : null,
+    nonStringTradeIdCount: analyzable ? ids.length : null, nonStringTradeIdEntries: ids,
+    nonStringSetupKeyCount: analyzable ? setups.length : null, nonStringSetupKeyEntries: setups,
+    missingTradeIdCount: analyzable ? missingIds.length : null, missingTradeIdIndexes: missingIds,
+    missingSetupKeyCount: analyzable ? missingSetups.length : null, missingSetupKeyIndexes: missingSetups,
+    duplicateTradeIdGroupCount: analyzable ? idGroups.length : null,
+    duplicateSetupKeyGroupCount: analyzable ? setupGroups.length : null,
+    duplicateTradeIdGroups: idGroups, duplicateSetupKeyGroups: setupGroups,
+    parseOpenTradesStatus: parsed.status, parseOpenTradesReason: parsed.reason,
+    jsValidatorStatus: js.status, jsValidatorReason: js.reason, automaticRepairCandidate: Boolean(candidate)
+  };
 }
 export default async function handler(req, res) {
   if (!requirePrivateApi(req, res)) return;
@@ -88,7 +125,7 @@ export default async function handler(req, res) {
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(['GET', KEY]) });
     if (!response.ok) throw Error('UNAVAILABLE');
     const data = await response.json();
-    if (!object(data) || data.error) throw Error('UNAVAILABLE');
+    if (!object(data) || data.error || typeof data.result !== 'string') throw Error('UNAVAILABLE');
     return res.status(200).json(diagnose(data.result));
   } catch {
     return res.status(503).json({ error: 'DIAGNOSTIC_UNAVAILABLE' });

@@ -8,6 +8,8 @@ const fn=source.slice(source.indexOf('function parseOpenTrades(raw)'),source.ind
 const valid=(id='private-id',setup='private-setup',status='Active')=>({tradeId:id,setupKey:setup,initialPlan:{price:123},outcome:{status}});
 function parser(logs,throws=false){const c=vm.createContext({createHash,console:{error:(...args)=>{if(throws)throw Error('logger');logs.push(args);}}});vm.runInContext(fn,c);return c.parseOpenTrades;}
 const cases=[
+ ['numeric tradeId',[{...valid(),tradeId:123}],'INVALID_TRADE_ID_TYPE',0],
+ ['numeric setupKey',[{...valid(),setupKey:123}],'INVALID_SETUP_KEY_TYPE',0],
  ['duplicate tradeId',[valid(),valid('private-id','other-setup')],'DUPLICATE_TRADE_ID',1,0],
  ['duplicate setupKey',[valid(),valid('other-id')],'DUPLICATE_SETUP_KEY',1,0],
  ['missing tradeId',[{...valid(),tradeId:''}],'MISSING_TRADE_ID',0],

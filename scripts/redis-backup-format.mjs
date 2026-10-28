@@ -38,6 +38,14 @@ export function createRestoreCommands(backup) {
       typeof signal?.tradeId === "string" && openStatuses.has(signal?.outcome?.status))) {
     throw new Error("Invalid open trade backup data");
   }
+  const ids = new Set(), setups = new Set();
+  for (const signal of openTrades) {
+    if (!signal.tradeId || typeof signal.setupKey !== "string" || !signal.setupKey ||
+        !signal.initialPlan || ids.has(signal.tradeId) || setups.has(signal.setupKey)) {
+      throw new Error("Invalid or duplicate open trade backup data");
+    }
+    ids.add(signal.tradeId); setups.add(signal.setupKey);
+  }
   const commands = [
     ["SET", BACKUP_KEYS.ranking, JSON.stringify(backup.ranking)],
     ["DEL", BACKUP_KEYS.history],

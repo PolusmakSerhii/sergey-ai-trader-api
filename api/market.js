@@ -7246,7 +7246,68 @@ async function createRankingHistoryEntry(
   };
 }
 
+// Page precedence is independent of scores and completion timing.
+function aggregateScannerBatches(batches) {
+  const ordered = batches.map((batch, index) => ({ batch, index,
+    page: Number.isInteger(batch.batch) && batch.batch > 0 ? batch.batch
+      : Number.isInteger(batch.page) && batch.page > 0 ? batch.page : index + 1
+  })).sort((a, b) => a.page - b.page || a.index - b.index);
+  const rows = [], symbols = new Set();
+  let rawRowsCount = 0;
+  for (const { batch } of ordered) {
+    for (const row of Array.isArray(batch.globalBatchResults) ? batch.globalBatchResults : []) {
+      rawRowsCount += 1;
+      if (symbols.has(row.symbol)) continue;
+      symbols.add(row.symbol); rows.push(row);
+    }
+  }
+  const total = ordered[0]?.batch.totalAvailableSymbols;
+  const expectedSymbols = Number.isSafeInteger(total) && total >= 0 ? total : null;
+  return { rows, coverage: {
+    rawRowsCount, uniqueSymbolsCount: symbols.size,
+    duplicateRowsRemoved: rawRowsCount - rows.length, totalAvailableSymbols: expectedSymbols,
+    // Ranked rows exclude insufficient/filtered data: this delta is not scan completeness.
+    coverageDelta: expectedSymbols === null ? null : symbols.size - expectedSymbols
+  } };
+}
+
 const WRITE_OPEN_TRADES_SCRIPT = `
+local function validTrades(trades, openOnly)
+  if type(trades) ~= 'table' or trades == cjson.null then return false end
+  local count = 0
+  for index, _ in pairs(trades) do
+    if type(index) ~= 'number' or index < 1 or index % 1 ~= 0 then return false end
+    count = count + 1
+  end
+  if count ~= #trades then return false end
+  local ids, setups = {}, {}
+  for _, trade in ipairs(trades) do
+    if type(trade) ~= 'table' or trade == cjson.null or
+       type(trade.tradeId) ~= 'string' or trade.tradeId == '' or
+       type(trade.setupKey) ~= 'string' or trade.setupKey == '' or
+       trade.initialPlan == nil or trade.initialPlan == false or trade.initialPlan == cjson.null or
+       trade.initialPlan == '' or trade.initialPlan == 0 or
+       type(trade.outcome) ~= 'table' or trade.outcome == cjson.null then return false end
+    local status = trade.outcome.status
+    local open = status == 'WaitingEntry' or status == 'Pending' or status == 'Active'
+    local terminal = status == 'TP1Hit' or status == 'TP3Hit' or status == 'Stopped' or status == 'Closed' or status == 'Expired'
+    if not open and (openOnly or not terminal) then return false end
+    if ids[trade.tradeId] or setups[trade.setupKey] then return false end
+    ids[trade.tradeId], setups[trade.setupKey] = true, true
+  end
+  return true
+end
+local decoded, trades = pcall(cjson.decode, ARGV[2])
+if not decoded or not string.match(ARGV[2], '^%s*%[') or not validTrades(trades, true) then
+  return redis.error_reply('Invalid proposed open trades')
+end
+if ARGV[4] ~= '' then
+  local parsed, history = pcall(cjson.decode, ARGV[4])
+  if not parsed or type(history) ~= 'table' or history == cjson.null or
+     not validTrades(history.readySignals, false) then
+    return redis.error_reply('Invalid proposed ready signals')
+  end
+end
 local current = redis.call('GET', KEYS[1]) or ''
 if current ~= ARGV[1] then return 0 end
 if ARGV[3] ~= '' and redis.call('SISMEMBER', KEYS[3], ARGV[3]) == 1 then
@@ -7272,8 +7333,10 @@ function parseOpenTrades(raw) {
   if (!Array.isArray(trades)) throw new Error("Invalid open trades state");
   const ids = new Map(), setups = new Map();
   for (const [recordIndex, trade] of trades.entries()) {
-    const reasonCode = !trade?.tradeId ? "MISSING_TRADE_ID"
-      : !trade.setupKey ? "MISSING_SETUP_KEY"
+    const reasonCode = trade?.tradeId == null || trade.tradeId === "" ? "MISSING_TRADE_ID"
+      : typeof trade.tradeId !== "string" ? "INVALID_TRADE_ID_TYPE"
+      : trade.setupKey == null || trade.setupKey === "" ? "MISSING_SETUP_KEY"
+      : typeof trade.setupKey !== "string" ? "INVALID_SETUP_KEY_TYPE"
       : !trade.initialPlan ? "MISSING_INITIAL_PLAN"
       : !["WaitingEntry", "Pending", "Active"].includes(trade.outcome?.status) ? "INVALID_OUTCOME_STATUS"
       : ids.has(trade.tradeId) ? "DUPLICATE_TRADE_ID"
@@ -7300,7 +7363,26 @@ function parseOpenTrades(raw) {
   return trades;
 }
 
+// Validate the proposal before completed accounting or any persistence mutation.
+function validateProposedTradeSignals(signals, openOnly = false) {
+  if (!Array.isArray(signals)) throw new Error("Invalid proposed trade signals");
+  const ids = new Set(), setups = new Set();
+  const statuses = openOnly ? ["WaitingEntry", "Pending", "Active"]
+    : ["WaitingEntry", "Pending", "Active", "TP1Hit", "TP3Hit", "Stopped", "Closed", "Expired"];
+  for (const signal of signals) {
+    if (typeof signal?.tradeId !== "string" || !signal.tradeId ||
+        typeof signal.setupKey !== "string" || !signal.setupKey || !signal.initialPlan ||
+        !statuses.includes(signal.outcome?.status) ||
+        ids.has(signal.tradeId) || setups.has(signal.setupKey)) {
+      throw new Error("Invalid or duplicate proposed trade signal");
+    }
+    ids.add(signal.tradeId); setups.add(signal.setupKey);
+  }
+}
+
 function writeOpenTradesCAS(raw, trades, execute, { registrationId = "", history = null } = {}) {
+  validateProposedTradeSignals(trades, true);
+  if (history) validateProposedTradeSignals(history.readySignals);
   return execute(["EVAL", WRITE_OPEN_TRADES_SCRIPT, "3",
     OPEN_TRADES_KEY, GLOBAL_RANKING_HISTORY_KEY, COMPLETED_TRADE_IDS_KEY,
     raw ?? "", JSON.stringify(trades), registrationId,
@@ -7400,7 +7482,7 @@ async function writeRankingHistory(snapshot, execute = runRedisCommand) {
           previousEntry
         );
 
-      await recordCompletedTradeSignals(historyEntry.readySignals || [], execute);
+      validateProposedTradeSignals(historyEntry.readySignals);
 
       const openTrades = (historyEntry.readySignals || [])
         .filter(signal =>
@@ -7408,6 +7490,9 @@ async function writeRankingHistory(snapshot, execute = runRedisCommand) {
           signal?.outcome?.status === "Pending" ||
           signal?.outcome?.status === "Active"
         );
+
+      validateProposedTradeSignals(openTrades, true);
+      await recordCompletedTradeSignals(historyEntry.readySignals, execute);
 
       if (Number(await writeOpenTradesCAS(openTradesRaw, openTrades, execute,
         { history: historyEntry })) === 1) {
@@ -9276,15 +9361,8 @@ for (
   );
 }
     
-  const combinedResults =
-    batchResponses.flatMap(
-      batch =>
-        Array.isArray(
-          batch.globalBatchResults
-        )
-          ? batch.globalBatchResults
-          : []
-    );
+  const { rows: combinedResults, coverage } = aggregateScannerBatches(batchResponses);
+  console.log("[scanner-batch-coverage]", JSON.stringify(coverage));
 
 const batchDurationsMs =
   batchResponses
@@ -10970,3 +11048,9 @@ technical: {
 
 // Share the existing pure evaluator without copying or changing trading rules.
 handler.forwardLifecycle = Object.freeze({ evaluateTradeLifecycle, getLifecycleCursor, isValidLifecycleCandle });
+
+// Expose the exact existing validators without invoking the market handler.
+handler.openTradesValidation = Object.freeze({
+  parseOpenTrades,
+  validateProposedTradeSignals
+});

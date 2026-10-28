@@ -19,7 +19,7 @@ function runtime() {
 }
 function signal(id='TEST', status='WaitingEntry', direction='Long', minute=1) {
   const long=direction==='Long';
-  return {tradeId:id, symbol:id+'USDT', direction, opportunityGrade:"A+", opportunityScore:90, confidence:95,
+  return {tradeId:id, setupKey:id+"USDT:"+direction, symbol:id+'USDT', direction, opportunityGrade:"A+", opportunityScore:90, confidence:95,
     action:long?'Strong Buy':'Strong Sell', tradeAllowed:true, tradeReadiness:{ready:true}, riskReward:2,
     initialPlan:{createdAt:at(1),plannedAt:at(2),expiresAt:at(60),entryPrice:100,
       entryZone:{from:99,to:101},stopLoss:long?90:110, initialStopLoss:long?90:110,

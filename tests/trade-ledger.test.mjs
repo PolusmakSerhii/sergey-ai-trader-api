@@ -15,7 +15,7 @@ const source = (await readFile(new URL("../api/market.js", import.meta.url), "ut
   .replace(/^import .*;\n/gm, "")
   .replace("export default async function handler", "async function handler");
 const signal = (id, resultR = 1) => ({
-  tradeId: id, symbol: "TESTUSDT", direction: "Long", opportunityGrade: "A+",
+  tradeId: id, setupKey: `setup-${id}`, symbol: "TESTUSDT", direction: "Long", opportunityGrade: "A+",
   opportunityScore: 90, confidence: 90, riskReward: 2, action: "Strong Buy",
   tradeAllowed: true, tradeReadiness: { ready: true },
   initialPlan: { entryPrice: 100, entryZone: { from: 99, to: 101 }, stopLoss: 90,
