@@ -62,3 +62,33 @@ test('late provider acknowledgement cannot overwrite UNKNOWN or resend',async()=
 test('canonical proposal stays byte-identical under success and failures',async()=>{for(const kind of ['success','redis','provider']){const h=harness(),before=JSON.stringify(h.options.committedTrade);if(kind==='redis')h.options.storage.claim=async()=>{throw Error('synthetic');};if(kind==='provider')h.options.provider.send=async()=>{throw Error('synthetic');};await notifyReadyTrade(h.options);assert.equal(JSON.stringify(h.options.committedTrade),before);}});
 
 test('provider receives only Telegram configuration allowlist',async()=>{const h=harness();h.options.config.SM1M_API_SECRET='PRIVATE_UNRELATED';h.options.config.redisToken='PRIVATE_REDIS';await notifyReadyTrade(h.options);assert.deepEqual(Object.keys(h.calls[0].config).sort(),['TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID']);assert(!JSON.stringify(h.calls[0]).includes('PRIVATE_UNRELATED'));assert(!JSON.stringify(h.calls[0]).includes('PRIVATE_REDIS'));});
+
+const format=notification.formatReadyTradeTelegramMessage;
+function expectedMessage(t,{zone=true,link=true}={}){const p=t.initialPlan;return `🟢 НОВЫЙ SETUP · A+
+
+${t.symbol} · ${t.direction.toUpperCase()}
+
+${zone?`Entry Zone: ${p.entryZone.from} – ${p.entryZone.to}\n`:''}Planned Entry: ${p.entryPrice}
+Initial SL: ${p.initialStopLoss}
+TP1: ${p.takeProfit1}
+Opportunity Score: ${t.opportunityScore}
+
+Обнаружено: 2026-11-04 12:00:00.000 UTC
+Статус при проверке: ${t.outcome.status==='WaitingEntry'?'Ожидает входа (WaitingEntry)':'Ожидание (Pending)'}
+
+⚠️ Состояние могло измениться.
+Проверь текущий Trade Plan перед ручным входом.${link?'\n\nОткрыть Dashboard: https://sergey-ai-dashboard.vercel.app/':''}`;}
+test('formatter LONG WaitingEntry exact snapshot',()=>assert.equal(format(trade()),expectedMessage(trade())));
+test('formatter SHORT Pending exact snapshot',()=>{const t=trade();t.direction='Short';t.outcome.status='Pending';Object.assign(t.initialPlan,{initialStopLoss:110,takeProfit1:90});assert.equal(format(t),expectedMessage(t));});
+for(const [value,text] of [[531.65,'531.65'],[0.000012345,'0.000012345'],[1e-8,'0.00000001'],[1e21,'1000000000000000000000'],[123456.789,'123456.789']])test('formatter price '+String(value),()=>{const t=trade();t.initialPlan.entryPrice=value;assert(format(t).includes('Planned Entry: '+text+'\n'));assert.equal(t.initialPlan.entryPrice,value);});
+for(const zone of [undefined,null,[],{}, {from:'99',to:101},{from:102,to:101},{from:0,to:1},{from:NaN,to:1}])test('formatter malformed/missing zone omitted '+JSON.stringify(zone),()=>{const t=trade();t.initialPlan.entryZone=zone;assert.equal(format(t),expectedMessage(t,{zone:false}));assert.equal(eligible(t).allowed,false);});
+for(const field of ['entryPrice','initialStopLoss','takeProfit1'])for(const value of [undefined,'100',NaN,Infinity,0,-1])test('formatter rejects '+field+' '+String(value),()=>{const t=trade();t.initialPlan[field]=value;assert.throws(()=>format(t),/^Error: MESSAGE_INVALID$/);});
+for(const score of [undefined,'89',NaN,Infinity,-1,101])test('formatter rejects score '+String(score),()=>{const t=trade();t.opportunityScore=score;assert.throws(()=>format(t),/^Error: MESSAGE_INVALID$/);});
+for(const [field,value] of [['opportunityGrade','A'],['direction','LONG'],['symbol','<b>BTCUSDT</b>'],['symbol','BTC\nUSDT'],['symbol','A'.repeat(25)+'USDT'],['symbol',undefined]])test('formatter rejects '+field+' '+String(value),()=>{const t=trade();t[field]=value;assert.throws(()=>format(t),/^Error: MESSAGE_INVALID$/);});
+for(const status of ['Active','Closed','Expired',undefined])test('formatter rejects status '+status,()=>{const t=trade();t.outcome.status=status;assert.throws(()=>format(t),/^Error: MESSAGE_INVALID$/);});
+for(const timestamp of ['2026-02-30T00:00:00.000Z','2026-11-04','garbage',undefined])test('formatter rejects timestamp '+timestamp,()=>{const t=trade();t.initialPlan.createdAt=timestamp;assert.throws(()=>format(t),/^Error: MESSAGE_INVALID$/);});
+test('formatter UTC independent of timezone, deterministic, immutable',()=>{const t=trade(),before=JSON.stringify(t),old=process.env.TZ;try{process.env.TZ='Pacific/Honolulu';const a=format(t);process.env.TZ='Asia/Tokyo';assert.equal(format(t),a);assert.equal(format(t),format(t));assert.equal(JSON.stringify(t),before);}finally{if(old===undefined)delete process.env.TZ;else process.env.TZ=old;}});
+test('formatter fixed URL only, explicit false omits link',()=>{const t=trade();t.url='https://untrusted.invalid/secret';assert.equal(format(t),expectedMessage(t));assert.equal(format(t,{includeDashboardLink:false}),expectedMessage(t,{link:false}));for(const options of [{url:t.url},{includeDashboardLink:'false'},null])assert.throws(()=>format(t,options),/^Error: MESSAGE_INVALID$/);});
+test('formatter plain text, no env/network/clock reads and unknown secrets ignored',()=>{const t=trade();for(const k of ['token','env','providerText','parse_mode','entities'])Object.defineProperty(t,k,{get(){throw Error('SECRET');}});const old=Date.now;Date.now=()=>{throw Error('CLOCK_READ');};try{assert.equal(typeof format(t),'string');assert.equal(format(t),expectedMessage(t));}finally{Date.now=old;}const s=readFileSync(new URL('../lib/ready-trade-notifications.js',import.meta.url),'utf8');const body=s.slice(s.indexOf('function displayPrice'),s.indexOf('export function projectMessage'));assert.doesNotMatch(body,/process\.env|\bfetch\s*\(|Date\.now|parse_mode|entities|toFixed/);});
+test('formatter never propagates arbitrary getter exception',()=>{const t=trade();Object.defineProperty(t,'symbol',{get(){throw Error('SECRET');}});assert.throws(()=>format(t),/^Error: MESSAGE_INVALID$/);});
+test('formatter rejects oversized expanded decimal message without truncation',()=>{const t=trade();t.symbol='A'.repeat(24)+'USDT';const tiny=Number.MIN_VALUE;t.opportunityScore=99.99999999999999;Object.assign(t.initialPlan,{entryPrice:tiny,initialStopLoss:tiny,takeProfit1:tiny,entryZone:{from:tiny,to:tiny}});assert.throws(()=>format(t),/^Error: MESSAGE_TOO_LONG$/);});
