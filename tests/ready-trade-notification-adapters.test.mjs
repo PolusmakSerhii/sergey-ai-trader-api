@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 import http from 'node:http';import https from 'node:https';import net from 'node:net';
 import {createCanonicalReader,createNotificationStorage,createTelegramProvider,runNotifier,OPEN_KEY,ARCHIVE_KEY,BASELINE_KEY} from '../lib/ready-trade-notification-adapters.js';
 import {KEY_PREFIX,notificationKey} from '../lib/ready-trade-notifications.js';
-import defaultHandler,{createHandler,DESTINATION} from '../api/ready-trade-notifications.js';
+import defaultHandler,{createHandler,createProductionHandler,DESTINATION} from '../api/ready-trade-notifications.js';
 let network=0;const undo=[];for(const [obj,key] of [[globalThis,'fetch'],[http,'request'],[https,'request'],[net.Socket.prototype,'connect']]){const old=obj[key];obj[key]=()=>{network++;throw Error('NETWORK_FORBIDDEN');};undo.push(()=>obj[key]=old);}after(()=>{undo.forEach(f=>f());assert.equal(network,0);});
 const start=Date.parse('2026-11-04T12:00:00Z');
 function trade(id='synthetic-id',time=start+1000){return {tradeId:id,setupKey:'setup-'+id,symbol:'TESTUSDT',direction:'Long',grade:'A+',opportunityGrade:'A+',opportunityScore:89,initialPlan:{createdAt:new Date(time).toISOString(),plannedAt:new Date(time).toISOString(),expiresAt:new Date(start+3600000).toISOString(),entryZone:{from:99,to:101},entryPrice:100,initialStopLoss:90,stopLoss:90,takeProfit1:110},outcome:{status:'WaitingEntry',activatedAt:null,entryPrice:null,exits:[],remainingPosition:1,initialPositionSize:1,realizedR:0,reanalysisPending:false}};}
@@ -37,10 +37,10 @@ test('storage failure isolated, no raw exceptions returned or logged',async()=>{
 test('bounded initial read cannot start delayed sends after deadline',async()=>{const h=await ready();let timer,resolve;h.reader.current=()=>new Promise(r=>resolve=r);const clock={now:()=>h.now,setTimeout:f=>{timer=f;return 1;},clearTimeout:()=>{}};const p=runNotifier({...h.options(),clock});await Promise.resolve();await Promise.resolve();h.now+=5000;timer();assert.equal((await p).status,'BUDGET_EXHAUSTED');resolve?.(h.current);await Promise.resolve();assert.equal(h.sends.length,0);});
 function response(){return {setHeader(){},status(n){this.code=n;return this;},json(body){this.body=body;return this;}};}
 async function request(handler,{method='POST',url='/api/ready-trade-notifications',body='{}',signature='synthetic-signature'}={}){const req={method,url,headers:{'upstash-signature':signature},async *[Symbol.asyncIterator](){yield Buffer.from(body);}};const res=response();await handler(req,res);return res;}
-test('default handler is inert',async()=>assert.equal((await request(defaultHandler)).body.status,'DISABLED'));
+test('default handler is inert without activation',async()=>assert.equal((await request(createProductionHandler({getEnv:()=>({})}))).body.status,'DISABLED'));
 test('signed handler verifies exact body and destination; response is allowlisted',async()=>{let ran=0;const handler=createHandler({enabled:true,signingKeys:{QSTASH_CURRENT_SIGNING_KEY:'fake',QSTASH_NEXT_SIGNING_KEY:'fake-next'},receiverClass:async()=>class{async verify(x){assert.equal(x.url,DESTINATION);assert.equal(x.body,'{}');return true;}},run:async()=>{ran++;return {status:'COMPLETE',secret:'HIDDEN'};}});assert.deepEqual((await request(handler)).body,{status:'COMPLETE'});for(const overrides of [{method:'GET'},{url:'/api/market'},{body:'{"x":1}'},{signature:null}])await request(handler,overrides);assert.equal(ran,1);});
 test('invalid signature never calls worker',async()=>{let calls=0;const handler=createHandler({enabled:true,signingKeys:{QSTASH_CURRENT_SIGNING_KEY:'fake',QSTASH_NEXT_SIGNING_KEY:'fake'},receiverClass:async()=>class{async verify(){return false;}},run:async()=>calls++});assert.equal((await request(handler)).code,401);assert.equal(calls,0);});
-test('frozen market bytes and isolated imports; no real transport or trading calls',()=>{const hash=createHash('sha256').update(readFileSync(new URL('../api/market.js',import.meta.url))).digest('hex');assert.equal(hash,'992e1ffd1fb51cd55a597723977aea20bd3e242e9e3f51f74cf2c058b0563d41');for(const path of ['../lib/ready-trade-notification-adapters.js','../api/ready-trade-notifications.js']){const s=readFileSync(new URL(path,import.meta.url),'utf8');assert.doesNotMatch(s,/process\.env|\bfetch\s*\(|import.*market\.js|evaluateTradeLifecycle|registerTrade|mode=scanner/);}assert.equal(network,0);});
+test('frozen market bytes and isolated imports; no real transport or trading calls',()=>{const hash=createHash('sha256').update(readFileSync(new URL('../api/market.js',import.meta.url))).digest('hex');assert.equal(hash,'992e1ffd1fb51cd55a597723977aea20bd3e242e9e3f51f74cf2c058b0563d41');for(const path of ['../lib/ready-trade-notification-adapters.js','../api/ready-trade-notifications.js']){const s=readFileSync(new URL(path,import.meta.url),'utf8');assert.doesNotMatch(s,/import.*market\.js|evaluateTradeLifecycle|registerTrade|mode=scanner/);}assert.equal(network,0);});
 
 test('ineligible candidates do not starve later valid identities',async()=>{const h=await ready();h.current=[];h.archive={};for(let i=0;i<25;i++){const t=trade('expired-'+i);t.initialPlan.expiresAt=new Date(start+1500).toISOString();h.add(t);}h.add(trade('valid'));assert.equal((await h.run()).sent,1);assert.equal(h.sends.length,1);});
 test('concurrent first starts only baseline, never send',async()=>{const h=harness();h.add(trade());const r=await Promise.all([h.run(),h.run()]);assert(r.every(x=>['BASELINED','BASELINE_RACE'].includes(x.status)));assert.equal(h.sends.length,0);});
@@ -108,3 +108,80 @@ test('E2E all writes isolated and stored metadata excludes secrets and message',
 test('E2E provider timeout UNKNOWN, abort and no retry within total budget',async()=>{const h=await e2eReady();const timers=new Map();let serial=0;h.clock={now:()=>h.now,setTimeout:(fn,ms)=>{const id=++serial;timers.set(id,{fn,at:h.now+ms});return id;},clearTimeout:id=>timers.delete(id)};let signal;h.http=async(_u,o)=>{signal=o.signal;return new Promise(()=>{});};const p=h.run();for(let i=0;i<150;i++)await Promise.resolve();assert.equal(h.calls.length,1);const end=h.now+3000;while(true){const t=[...timers].filter(([,v])=>v.at<=end).sort((a,b)=>a[1].at-b[1].at)[0];if(!t)break;h.now=t[1].at;timers.delete(t[0]);t[1].fn();for(let i=0;i<150;i++)await Promise.resolve();}h.now=end;await p;assert(signal.aborted);assert.equal(h.state('synthetic-id').status,'UNKNOWN');await h.run();assert.equal(h.calls.length,1);});
 test('E2E claim storage error prevents any Telegram request',async()=>{const h=await e2eReady();const execute=h.execute;h.execute=async(c,o)=>{if(c[0]==='SET')throw Error('CLAIM_ERROR');return execute(c,o);};await h.run();assert.equal(h.calls.length,0);});
 test('E2E final CAS false after delivery reports FINALIZE_FAILED without resend',async()=>{const h=await e2eReady();const execute=h.execute;h.execute=async(c,o)=>c[0]==='EVAL'?0:execute(c,o);assert.equal((await h.run()).status,'FINALIZE_FAILED');assert.equal(h.state('synthetic-id').status,'CLAIMED');await h.run();assert.equal(h.calls.length,1);});
+
+const {createProductionRedisIO}=await import('../lib/ready-trade-notification-adapters.js');
+function syntheticEnv(){return {READY_TRADE_NOTIFICATIONS_ENABLED:'true',TELEGRAM_BOT_TOKEN:'SYNTHETIC_TOKEN_ONLY',TELEGRAM_CHAT_ID:'-987654321',QSTASH_CURRENT_SIGNING_KEY:'SYNTHETIC_SIGNING_CURRENT',QSTASH_NEXT_SIGNING_KEY:'SYNTHETIC_SIGNING_NEXT',UPSTASH_REDIS_REST_URL:'https://synthetic-only.upstash.io',UPSTASH_REDIS_REST_TOKEN:'SYNTHETIC_REDIS_TOKEN'};}
+function productionHarness(){
+ const env=syntheticEnv(),f=redisFake();let now=start;const current=[],archive={};const calls=[],sends=[],verified=[];
+ const fetchImpl=async(url,opts)=>{
+  calls.push({url,opts});assert.equal(opts.method,'POST');assert.equal(opts.redirect,'error');
+  if(url==='https://api.telegram.org/bot'+env.TELEGRAM_BOT_TOKEN+'/sendMessage'){
+   sends.push(JSON.parse(opts.body));return new Response(JSON.stringify({ok:true}),{status:200});
+  }
+  assert.equal(url,env.UPSTASH_REDIS_REST_URL);assert.equal(opts.headers.Authorization,'Bearer '+env.UPSTASH_REDIS_REST_TOKEN);
+  const c=JSON.parse(opts.body);let result;
+  if(c[0]==='GET'&&c[1]===OPEN_KEY)result=JSON.stringify(current);
+  else if(c[0]==='GET'&&c[1]===ARCHIVE_KEY)result=JSON.stringify({schemaVersion:1,tradesById:archive});
+  else result=await f.execute(c);
+  return new Response(JSON.stringify({result}),{status:200});
+ };
+ const h={env,f,current,archive,calls,sends,verified,valid:true,fetchImpl,
+  clock:{now:()=>now,setTimeout,clearTimeout},add(t){current.push(t);archive[t.tradeId]=archived(t);},advance(){now+=2000;}};
+ h.handler=()=>createProductionHandler({getEnv:()=>env,fetchImpl:h.fetchImpl,clock:h.clock,receiverClass:async()=>class{
+  constructor(keys){assert.deepEqual(keys,{currentSigningKey:env.QSTASH_CURRENT_SIGNING_KEY,nextSigningKey:env.QSTASH_NEXT_SIGNING_KEY});}
+  async verify(x){verified.push(x);assert.equal(x.body,'{}');assert.equal(x.url,DESTINATION);return h.valid;}
+ }});
+ h.run=opts=>request(h.handler(),opts);return h;
+}
+for(const flag of [undefined,'false','TRUE','1','',' true','true ','true\n',false,true])test('production flag disabled '+JSON.stringify(flag),async()=>{
+ let otherReads=0;const env=new Proxy({READY_TRADE_NOTIFICATIONS_ENABLED:flag},{get(t,k){if(k!=='READY_TRADE_NOTIFICATIONS_ENABLED')otherReads++;return t[k];}});
+ const r=await request(createProductionHandler({getEnv:()=>env,fetchImpl:()=>assert.fail('I/O'),receiverClass:()=>assert.fail('auth work')}));
+ assert.equal(r.body.status,'DISABLED');assert.equal(otherReads,0);
+});
+for(const signature of [null,'', 'bad'])test('production unauthorized signature '+String(signature),async()=>{
+ const h=productionHarness();h.valid=false;const r=await h.run({signature});assert.equal(r.code,401);assert.equal(h.calls.length,0);assert.equal(h.f.data.size,0);
+});
+test('valid signature with flag OFF performs no downstream work',async()=>{const h=productionHarness();h.env.READY_TRADE_NOTIFICATIONS_ENABLED='false';assert.equal((await h.run()).body.status,'DISABLED');assert.equal(h.calls.length,0);assert.equal(h.f.data.size,0);});
+for(const key of ['TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID','UPSTASH_REDIS_REST_URL','UPSTASH_REDIS_REST_TOKEN','QSTASH_CURRENT_SIGNING_KEY','QSTASH_NEXT_SIGNING_KEY'])for(const value of [undefined,'','\nSECRET'])test('production config rejects '+key+' '+String(value?.length),async()=>{
+ const h=productionHarness();h.env[key]=value;const r=await h.run();assert.equal(r.body.status,'CONFIG_INVALID');assert.equal(h.calls.length,0);assert.equal(h.f.data.size,0);
+});
+for(const url of ['http://synthetic-only.upstash.io','https://user:pass@synthetic-only.upstash.io','https://evil.invalid','https://synthetic-only.upstash.io/path','https://synthetic-only.upstash.io/?token=SECRET'])test('production Redis URL fail closed '+url.split(':')[0]+url.length,async()=>{const h=productionHarness();h.env.UPSTASH_REDIS_REST_URL=url;assert.equal((await h.run()).body.status,'CONFIG_INVALID');assert.equal(h.calls.length,0);});
+test('production exact true baselines only, then sends a new identity once through full mocked pipeline',async()=>{
+ const h=productionHarness();h.add(trade('historical',start-1000));h.add(trade('historical-future',start+1000));
+ assert.equal((await h.run()).body.status,'BASELINED');assert.equal(h.sends.length,0);assert.equal(h.f.data.size,1);
+ h.advance();h.add(trade('new'));const before=JSON.stringify([h.current,h.archive]);
+ assert.equal((await h.run()).body.status,'COMPLETE');assert.equal(h.sends.length,1);
+ assert.equal((await h.run()).body.status,'COMPLETE');assert.equal(h.sends.length,1);
+ assert.equal(JSON.stringify([h.current,h.archive]),before);
+ assert(h.f.commands.every(c=>(c[0]==='EVAL'?c[3]:c[1]).startsWith(KEY_PREFIX)));
+ assert(h.calls.every(c=>c.url===h.env.UPSTASH_REDIS_REST_URL||c.url.startsWith('https://api.telegram.org/')));
+ const record=JSON.parse(h.f.data.get(notificationKey('new')));assert.equal(record.status,'SENT');assert.equal(record.expiresAt,null);
+});
+for(const key of [OPEN_KEY,ARCHIVE_KEY,'sergey-ai:ranking','sergey-ai:history','sergey-ai:statistics','sergey-ai:lifecycle'])test('production transport rejects writes and arbitrary notification reads '+key,async()=>{
+ const h=productionHarness(),io=createProductionRedisIO({env:h.env,fetchImpl:h.fetchImpl});
+ for(const c of [['SET',key,'{}','NX'],['EVAL',NOTIFICATION_CAS_SCRIPT,'1',key,'{}','{}'],['GET',key]])await assert.rejects(io.executeNotification(c),/^Error: COMMAND_REJECTED$/);
+ if(![OPEN_KEY,ARCHIVE_KEY].includes(key))await assert.rejects(io.readCanonical(key),/^Error: COMMAND_REJECTED$/);
+ assert.equal(h.calls.length,0);
+});
+for(const c of [['DEL',persistentKey],['SET',persistentKey,'{}'],['SET',persistentKey,'{}','EX','30'],['EVAL','return 1','1',persistentKey,'a','b'],['SCAN','0'],['GET',KEY_PREFIX+'raw-id']])test('production command allowlist '+c[0]+c.length,async()=>{const h=productionHarness(),io=createProductionRedisIO({env:h.env,fetchImpl:h.fetchImpl});await assert.rejects(io.executeNotification(c));assert.equal(h.calls.length,0);});
+for(const mode of ['throw','http','json','envelope','utf8','size','missing'])test('production REST failure '+mode+' is sanitized with no retry',async()=>{
+ const h=productionHarness();let attempts=0;h.fetchImpl=async()=>{attempts++;if(mode==='throw')throw Error(Object.values(h.env).join(' '));if(mode==='http')return new Response('SECRET',{status:401});if(mode==='json')return new Response('{');if(mode==='envelope')return new Response(JSON.stringify({error:'SECRET'}));if(mode==='utf8')return new Response(new Uint8Array([255]));if(mode==='size')return new Response(new Uint8Array(64*1024*1024+1));return {ok:true};};
+ const logs=[];const old={log:console.log,error:console.error,warn:console.warn};for(const k of Object.keys(old))console[k]=(...x)=>logs.push(x);
+ try{const r=await h.run();assert.equal(r.body.status,'UNAVAILABLE');assert.equal(attempts,1);const output=JSON.stringify([r.body,logs]);for(const secret of Object.values(h.env))assert(!output.includes(secret));assert.equal(h.sends.length,0);}finally{Object.assign(console,old);}
+});
+test('production bounded body timeout cancels stream and does not retry',async()=>{
+ const h=productionHarness();let callback,aborted=false,attempts=0;
+ const clock={setTimeout:fn=>{callback=fn;return 1;},clearTimeout(){}};
+ const io=createProductionRedisIO({env:h.env,clock,fetchImpl:async(u,o)=>{attempts++;o.signal.addEventListener('abort',()=>aborted=true);return new Response(new ReadableStream({pull(){return new Promise(()=>{});}}));}});
+ const p=io.readCanonical(OPEN_KEY);await Promise.resolve();callback();await assert.rejects(p,/REDIS_UNAVAILABLE/);assert.equal(aborted,true);assert.equal(attempts,1);
+});
+test('production source has lazy disabled composition and no trading imports or scheduling',()=>{
+ const api=readFileSync(new URL('../api/ready-trade-notifications.js',import.meta.url),'utf8');
+ assert.match(api,/export default createProductionHandler\(\)/);assert.match(api,/env.READY_TRADE_NOTIFICATIONS_ENABLED!=='true'/);
+ for(const file of ['../api/ready-trade-notifications.js','../lib/ready-trade-notification-adapters.js'])assert.doesNotMatch(readFileSync(new URL(file,import.meta.url),'utf8'),/import.*market\.js|evaluateTradeLifecycle|registerTrade|mode=scanner|schedules\.create/);
+});
+test('production timeout remains bounded when stream cancellation never resolves',async()=>{
+ let timeout;const io=createProductionRedisIO({env:syntheticEnv(),clock:{setTimeout:f=>{timeout=f;return 1;},clearTimeout(){}},fetchImpl:async()=>({ok:true,body:{getReader:()=>({read:()=>new Promise(()=>{}),cancel:()=>new Promise(()=>{})})}})});
+ const p=io.readCanonical(OPEN_KEY);await Promise.resolve();timeout();await assert.rejects(p,/REDIS_UNAVAILABLE/);
+});
+test('default production handler import does not read environment or dispatch',()=>{assert.equal(typeof defaultHandler,'function');assert.equal(network,0);});

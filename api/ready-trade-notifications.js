@@ -1,10 +1,8 @@
-// Deliberately inert default. Activation requires a separately reviewed composition.
-// Configuration names: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
-// QSTASH_CURRENT_SIGNING_KEY, QSTASH_NEXT_SIGNING_KEY. No environment values read here.
+import {createProductionNotificationWorker,validNotificationSigningKeys} from '../lib/ready-trade-notification-adapters.js';
 export const config={api:{bodyParser:false}};
 export const DESTINATION='https://sergey-ai-trader-api.vercel.app/api/ready-trade-notifications';
 export const SIGNED_BODY='{}';
-export function createHandler({enabled=false,receiverClass,signingKeys,run}={}){
+export function createHandler({enabled=false,receiverClass,signingKeys,run,prepare}={}){
  return async(req,res)=>{
  res.setHeader('Cache-Control','private, no-store');
  const reply=(code,status)=>res.status(code).json({status});
@@ -21,8 +19,26 @@ export function createHandler({enabled=false,receiverClass,signingKeys,run}={}){
  const verified=await new Receiver({currentSigningKey:signingKeys.QSTASH_CURRENT_SIGNING_KEY,nextSigningKey:signingKeys.QSTASH_NEXT_SIGNING_KEY}).verify({signature,body:SIGNED_BODY,url:DESTINATION});
  if(verified!==true)return reply(401,'AUTH_REJECTED');
  }catch{return reply(401,'AUTH_REJECTED');}
- try{const result=await run();const allowed=['BASELINED','BASELINE_RACE','COMPLETE','UNAVAILABLE','BUDGET_EXHAUSTED'];return reply(result?.status==='COMPLETE'||result?.status==='BASELINED'?200:503,allowed.includes(result?.status)?result.status:'UNAVAILABLE');}
+ let worker=run;
+ if(prepare)try{worker=prepare();}catch{return reply(503,'CONFIG_INVALID');}
+ try{const result=await worker();const allowed=['BASELINED','BASELINE_RACE','COMPLETE','UNAVAILABLE','BUDGET_EXHAUSTED'];return reply(result?.status==='COMPLETE'||result?.status==='BASELINED'?200:503,allowed.includes(result?.status)?result.status:'UNAVAILABLE');}
  catch{return reply(503,'UNAVAILABLE');}
  };
 }
-export default createHandler();
+// OFF returns before reading credentials or constructing any I/O capability.
+// Same QStash Receiver/body/destination verification as the project's signed handlers.
+export function createProductionHandler({getEnv=()=>process.env,fetchImpl=(...args)=>globalThis.fetch(...args),
+ receiverClass=async()=>{const {Receiver}=await import('@upstash/qstash');return Receiver;},clock}={}){
+ return async(req,res)=>{
+  res.setHeader('Cache-Control','private, no-store');
+  try{
+   const env=getEnv();
+   if(env.READY_TRADE_NOTIFICATIONS_ENABLED!=='true')return res.status(503).json({status:'DISABLED'});
+   const signingKeys={QSTASH_CURRENT_SIGNING_KEY:env.QSTASH_CURRENT_SIGNING_KEY,QSTASH_NEXT_SIGNING_KEY:env.QSTASH_NEXT_SIGNING_KEY};
+   if(!validNotificationSigningKeys(signingKeys))return res.status(503).json({status:'CONFIG_INVALID'});
+   return await createHandler({enabled:true,signingKeys,receiverClass,
+    prepare:()=>createProductionNotificationWorker({env,fetchImpl,clock})})(req,res);
+  }catch{return res.status(503).json({status:'UNAVAILABLE'});}
+ };
+}
+export default createProductionHandler();
