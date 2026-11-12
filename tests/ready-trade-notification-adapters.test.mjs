@@ -36,10 +36,10 @@ test('notification adapter rejects trading-key writes',async()=>{const h=await r
 test('storage failure isolated, no raw exceptions returned or logged',async()=>{const h=await ready();h.storage.baseline=async()=>{throw Error('SYNTHETIC_SECRET_TOKEN');};const logs=[];const old=console.error;console.error=(...x)=>logs.push(x);try{const r=await h.run();assert.equal(r.status,'UNAVAILABLE');assert(!JSON.stringify([logs,r]).includes('SYNTHETIC_SECRET'));assert.equal(h.sends.length,0);}finally{console.error=old;}});
 test('bounded initial read cannot start delayed sends after deadline',async()=>{const h=await ready();let timer,resolve;h.reader.current=()=>new Promise(r=>resolve=r);const clock={now:()=>h.now,setTimeout:f=>{timer=f;return 1;},clearTimeout:()=>{}};const p=runNotifier({...h.options(),clock});await Promise.resolve();await Promise.resolve();h.now+=5000;timer();assert.equal((await p).status,'BUDGET_EXHAUSTED');resolve?.(h.current);await Promise.resolve();assert.equal(h.sends.length,0);});
 function response(){return {setHeader(){},status(n){this.code=n;return this;},json(body){this.body=body;return this;}};}
-async function request(handler,{method='POST',url='/api/ready-trade-notifications',body='{}',signature='synthetic-signature'}={}){const req={method,url,headers:{'upstash-signature':signature},async *[Symbol.asyncIterator](){yield Buffer.from(body);}};const res=response();await handler(req,res);return res;}
+async function request(handler,{method='POST',url='/api/ready-trade-notifications',body=JSON.stringify({generation:'synthetic-generation-v1'}),signature='synthetic-signature'}={}){const req={method,url,headers:{'upstash-signature':signature},async *[Symbol.asyncIterator](){yield Buffer.from(body);}};const res=response();await handler(req,res);return res;}
 test('default handler is inert without activation',async()=>assert.equal((await request(createProductionHandler({getEnv:()=>({})}))).body.status,'DISABLED'));
-test('signed handler verifies exact body and destination; response is allowlisted',async()=>{let ran=0;const handler=createHandler({enabled:true,signingKeys:{QSTASH_CURRENT_SIGNING_KEY:'fake',QSTASH_NEXT_SIGNING_KEY:'fake-next'},receiverClass:async()=>class{async verify(x){assert.equal(x.url,DESTINATION);assert.equal(x.body,'{}');return true;}},run:async()=>{ran++;return {status:'COMPLETE',secret:'HIDDEN'};}});assert.deepEqual((await request(handler)).body,{status:'COMPLETE'});for(const overrides of [{method:'GET'},{url:'/api/market'},{body:'{"x":1}'},{signature:null}])await request(handler,overrides);assert.equal(ran,1);});
-test('invalid signature never calls worker',async()=>{let calls=0;const handler=createHandler({enabled:true,signingKeys:{QSTASH_CURRENT_SIGNING_KEY:'fake',QSTASH_NEXT_SIGNING_KEY:'fake'},receiverClass:async()=>class{async verify(){return false;}},run:async()=>calls++});assert.equal((await request(handler)).code,401);assert.equal(calls,0);});
+test('signed handler verifies exact body and destination; response is allowlisted',async()=>{let ran=0;const handler=createHandler({enabled:true,generation:'synthetic-generation-v1',signingKeys:{QSTASH_CURRENT_SIGNING_KEY:'fake',QSTASH_NEXT_SIGNING_KEY:'fake-next'},receiverClass:async()=>class{async verify(x){assert.equal(x.url,DESTINATION);assert.equal(x.body,JSON.stringify({generation:'synthetic-generation-v1'}));return true;}},run:async()=>{ran++;return {status:'COMPLETE',secret:'HIDDEN'};}});assert.deepEqual((await request(handler)).body,{status:'COMPLETE'});for(const overrides of [{method:'GET'},{url:'/api/market'},{body:'{"x":1}'},{signature:null}])await request(handler,overrides);assert.equal(ran,1);});
+test('invalid signature never calls worker',async()=>{let calls=0;const handler=createHandler({enabled:true,generation:'synthetic-generation-v1',signingKeys:{QSTASH_CURRENT_SIGNING_KEY:'fake',QSTASH_NEXT_SIGNING_KEY:'fake'},receiverClass:async()=>class{async verify(){return false;}},run:async()=>calls++});assert.equal((await request(handler)).code,401);assert.equal(calls,0);});
 test('frozen market bytes and isolated imports; no real transport or trading calls',()=>{const hash=createHash('sha256').update(readFileSync(new URL('../api/market.js',import.meta.url))).digest('hex');assert.equal(hash,'992e1ffd1fb51cd55a597723977aea20bd3e242e9e3f51f74cf2c058b0563d41');for(const path of ['../lib/ready-trade-notification-adapters.js','../api/ready-trade-notifications.js']){const s=readFileSync(new URL(path,import.meta.url),'utf8');assert.doesNotMatch(s,/import.*market\.js|evaluateTradeLifecycle|registerTrade|mode=scanner/);}assert.equal(network,0);});
 
 test('ineligible candidates do not starve later valid identities',async()=>{const h=await ready();h.current=[];h.archive={};for(let i=0;i<25;i++){const t=trade('expired-'+i);t.initialPlan.expiresAt=new Date(start+1500).toISOString();h.add(t);}h.add(trade('valid'));assert.equal((await h.run()).sent,1);assert.equal(h.sends.length,1);});
@@ -110,7 +110,7 @@ test('E2E claim storage error prevents any Telegram request',async()=>{const h=a
 test('E2E final CAS false after delivery reports FINALIZE_FAILED without resend',async()=>{const h=await e2eReady();const execute=h.execute;h.execute=async(c,o)=>c[0]==='EVAL'?0:execute(c,o);assert.equal((await h.run()).status,'FINALIZE_FAILED');assert.equal(h.state('synthetic-id').status,'CLAIMED');await h.run();assert.equal(h.calls.length,1);});
 
 const {createProductionRedisIO}=await import('../lib/ready-trade-notification-adapters.js');
-function syntheticEnv(){return {READY_TRADE_NOTIFICATIONS_ENABLED:'true',TELEGRAM_BOT_TOKEN:'SYNTHETIC_TOKEN_ONLY',TELEGRAM_CHAT_ID:'-987654321',QSTASH_CURRENT_SIGNING_KEY:'SYNTHETIC_SIGNING_CURRENT',QSTASH_NEXT_SIGNING_KEY:'SYNTHETIC_SIGNING_NEXT',UPSTASH_REDIS_REST_URL:'https://synthetic-only.upstash.io',UPSTASH_REDIS_REST_TOKEN:'SYNTHETIC_REDIS_TOKEN'};}
+function syntheticEnv(){return {READY_TRADE_NOTIFICATIONS_ENABLED:'true',READY_TRADE_NOTIFICATIONS_GENERATION:'synthetic-generation-v1',TELEGRAM_BOT_TOKEN:'SYNTHETIC_TOKEN_ONLY',TELEGRAM_CHAT_ID:'-987654321',QSTASH_CURRENT_SIGNING_KEY:'SYNTHETIC_SIGNING_CURRENT',QSTASH_NEXT_SIGNING_KEY:'SYNTHETIC_SIGNING_NEXT',UPSTASH_REDIS_REST_URL:'https://synthetic-only.upstash.io',UPSTASH_REDIS_REST_TOKEN:'SYNTHETIC_REDIS_TOKEN'};}
 function productionHarness(){
  const env=syntheticEnv(),f=redisFake();let now=start;const current=[],archive={};const calls=[],sends=[],verified=[];
  const fetchImpl=async(url,opts)=>{
@@ -129,7 +129,7 @@ function productionHarness(){
   clock:{now:()=>now,setTimeout,clearTimeout},add(t){current.push(t);archive[t.tradeId]=archived(t);},advance(){now+=2000;}};
  h.handler=()=>createProductionHandler({getEnv:()=>env,fetchImpl:h.fetchImpl,clock:h.clock,receiverClass:async()=>class{
   constructor(keys){assert.deepEqual(keys,{currentSigningKey:env.QSTASH_CURRENT_SIGNING_KEY,nextSigningKey:env.QSTASH_NEXT_SIGNING_KEY});}
-  async verify(x){verified.push(x);assert.equal(x.body,'{}');assert.equal(x.url,DESTINATION);return h.valid;}
+  async verify(x){verified.push(x);assert.equal(x.url,DESTINATION);return h.valid;}
  }});
  h.run=opts=>request(h.handler(),opts);return h;
 }
@@ -185,3 +185,25 @@ test('production timeout remains bounded when stream cancellation never resolves
  const p=io.readCanonical(OPEN_KEY);await Promise.resolve();timeout();await assert.rejects(p,/REDIS_UNAVAILABLE/);
 });
 test('default production handler import does not read environment or dispatch',()=>{assert.equal(typeof defaultHandler,'function');assert.equal(network,0);});
+
+for(const generation of [undefined,'',null,1,'x'.repeat(257)])test('generation configuration fails closed '+String(generation?.length),async()=>{
+ const h=productionHarness();h.env.READY_TRADE_NOTIFICATIONS_GENERATION=generation;
+ const r=await h.run();assert.equal(r.body.status,'CONFIG_INVALID');assert.equal(h.calls.length,0);assert.equal(h.f.data.size,0);assert.equal(h.sends.length,0);
+});
+for(const body of ['{}','{"other":"value"}','{"generation":"old-generation"}','{"generation":"SYNTHETIC-GENERATION-V1"}','{"generation":" synthetic-generation-v1"}','{"generation":"synthetic-generation-v1 "}','{"generation":null}','{"generation":1}','[]','null','{"generation":"synthetic-generation-v1","extra":true}'])test('signed body generation rejected '+body,async()=>{
+ const h=productionHarness();const r=await h.run({body});assert.equal(r.body.status,'GENERATION_REJECTED');assert.equal(h.verified.length,1);assert.equal(h.verified[0].body,body);assert.equal(h.calls.length,0);assert.equal(h.f.data.size,0);assert.equal(h.sends.length,0);
+});
+test('correct generation verifies actual body, baselines and preserves later at-most-once flow',async()=>{
+ const h=productionHarness();const body=' { "generation" : "synthetic-generation-v1" } ';
+ h.add(trade('historical',start-1000));assert.equal((await h.run({body})).body.status,'BASELINED');assert.equal(h.verified[0].body,body);assert.equal(h.sends.length,0);
+ h.advance();h.add(trade('new'));assert.equal((await h.run({body})).body.status,'COMPLETE');assert.equal(h.sends.length,1);await h.run({body});assert.equal(h.sends.length,1);
+});
+test('generation has no default, trim or query fallback',async()=>{
+ const h=productionHarness();h.env.READY_TRADE_NOTIFICATIONS_GENERATION=' exact ';
+ assert.equal((await h.run({body:'{"generation":"exact"}'})).body.status,'GENERATION_REJECTED');assert.equal(h.calls.length,0);
+ assert.equal((await h.run({body:'{}',url:'/api/ready-trade-notifications?generation=%20exact%20'})).body.status,'DESTINATION_REJECTED');assert.equal(h.calls.length,0);
+ assert.equal((await h.run({body:'{"generation":" exact "}'})).body.status,'BASELINED');assert.equal(h.sends.length,0);
+});
+test('correct generation cannot bypass invalid signature',async()=>{const h=productionHarness();h.valid=false;assert.equal((await h.run()).body.status,'AUTH_REJECTED');assert.equal(h.calls.length,0);assert.equal(h.f.data.size,0);});
+test('generation guard bounds malformed and oversized bodies without I/O',async()=>{for(const body of ['{','x'.repeat(4097)]){const h=productionHarness();assert.equal((await h.run({body})).body.status,'BODY_REJECTED');assert.equal(h.calls.length,0);}});
+test('signature receives BOM unchanged; malformed JSON fails closed',async()=>{const h=productionHarness();const body='\ufeff{"generation":"synthetic-generation-v1"}';assert.equal((await h.run({body})).body.status,'BODY_REJECTED');assert.equal(h.verified[0].body,body);assert.equal(h.calls.length,0);});
