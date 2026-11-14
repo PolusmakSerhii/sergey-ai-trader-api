@@ -3962,7 +3962,24 @@ async function fetchOKXRecentPriceRange(symbol, fromTime, toTime) {
   const windowEnd = Math.min(requestedEnd,
     fromTimestamp + LIFECYCLE_MAX_CANDLES_PER_CHECK * LIFECYCLE_MINUTE_MS);
   const normalizedSymbol = String(symbol || "").toUpperCase().replace(/USDT$/i, "");
+  // Diagnostics are best-effort and never copy provider payloads or exception text.
+  const instrumentId = /^[A-Z0-9]{1,24}$/.test(normalizedSymbol)
+    ? `${normalizedSymbol}-USDT-SWAP` : "INVALID_PUBLIC_SYMBOL";
+  const diagnostic = (failureClass, status = null, error = null) => {
+    try {
+      const event = { event: "okx_candle_fetch_failure", failureClass, instrumentId, bar: "1m",
+        windowStart: new Date(fromTimestamp).toISOString(),
+        windowEnd: new Date(windowEnd).toISOString(), timestamp: new Date().toISOString() };
+      if (Number.isInteger(status) && status >= 100 && status <= 599) event.httpStatus = status;
+      if (["AbortError", "TimeoutError", "TypeError", "Error"].includes(error?.name)) event.errorName = error.name;
+      const code = error?.cause?.code || error?.code;
+      if (["ENOTFOUND", "EAI_AGAIN", "ECONNRESET", "ECONNREFUSED", "EPIPE", "ETIMEDOUT",
+        "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_SOCKET"].includes(code)) event.errorCode = code;
+      console.warn(JSON.stringify(event));
+    } catch { /* Observability must not affect candle evaluation. */ }
+  };
   const candlesByTime = new Map();
+  let invalidData = false;
   let after = windowEnd;
   let requests = 0;
   try {
@@ -3978,7 +3995,16 @@ async function fetchOKXRecentPriceRange(symbol, fromTime, toTime) {
       requests += 1;
       const response = await fetch(url, { signal: requestSignal });
       const payload = await response.json().catch(() => null);
-      if (!response.ok || payload?.code !== "0" || !Array.isArray(payload.data)) return null;
+      if (!response.ok || payload?.code !== "0" || !Array.isArray(payload.data)) {
+        const status = response.status;
+        const failureClass = !response.ok
+          ? status === 403 ? "HTTP_403" : status === 429 ? "HTTP_429"
+            : status >= 500 && status <= 599 ? "HTTP_5XX" : "HTTP_OTHER"
+          : !payload || typeof payload !== "object" || typeof payload.code !== "string"
+            ? "MALFORMED_RESPONSE" : payload.code !== "0" ? "API_REJECTION" : "MALFORMED_RESPONSE";
+        diagnostic(failureClass, status);
+        return null;
+      }
       let oldest = after;
       for (const item of payload.data) {
         const timestamp = Number(item?.[0]);
@@ -3988,18 +4014,33 @@ async function fetchOKXRecentPriceRange(symbol, fromTime, toTime) {
         if (isValidLifecycleCandle(candle) && candle.confirmed &&
             timestamp >= fromTimestamp && timestamp < windowEnd) {
           candlesByTime.set(timestamp, candle);
+        } else if (!isValidLifecycleCandle(candle)) {
+          invalidData = true;
         }
       }
       if (oldest >= after || !payload.data.length) break;
       after = oldest;
     }
     const data = [...candlesByTime.values()].sort((a, b) => a.timestamp - b.timestamp);
+    if (invalidData || data.length !== (windowEnd - fromTimestamp) / LIFECYCLE_MINUTE_MS) {
+      diagnostic("INCOMPLETE_OR_INVALID_DATA");
+    }
     return { source: "OKX 1m candles", fromTime, toTime, requests,
       windowEnd: new Date(windowEnd).toISOString(),
       candles: data.length, data,
       high: data.length ? Math.max(...data.map(candle => candle.high)) : null,
       low: data.length ? Math.min(...data.map(candle => candle.low)) : null };
-  } catch {
+  } catch (error) {
+    let failureClass = "UNKNOWN";
+    try {
+      const code = error?.cause?.code || error?.code;
+      if (["AbortError", "TimeoutError"].includes(error?.name) ||
+          ["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"].includes(code)) failureClass = "TIMEOUT";
+      else if (["ENOTFOUND", "EAI_AGAIN"].includes(code)) failureClass = "DNS";
+      else if (error?.name === "TypeError" ||
+          ["ECONNRESET", "ECONNREFUSED", "EPIPE", "UND_ERR_SOCKET"].includes(code)) failureClass = "NETWORK";
+    } catch { /* Unknown exceptions still retain the original null contract. */ }
+    diagnostic(failureClass, null, error);
     return null;
   }
 }
