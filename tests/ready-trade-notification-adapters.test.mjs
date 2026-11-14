@@ -148,12 +148,12 @@ for(const key of ['TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID','UPSTASH_REDIS_REST_UR
 for(const url of ['http://synthetic-only.upstash.io','https://user:pass@synthetic-only.upstash.io','https://evil.invalid','https://synthetic-only.upstash.io/path','https://synthetic-only.upstash.io/?token=SECRET'])test('production Redis URL fail closed '+url.split(':')[0]+url.length,async()=>{const h=productionHarness();h.env.UPSTASH_REDIS_REST_URL=url;assert.equal((await h.run()).body.status,'CONFIG_INVALID');assert.equal(h.calls.length,0);});
 test('production exact true baselines only, then sends a new identity once through full mocked pipeline',async()=>{
  const h=productionHarness();h.add(trade('historical',start-1000));h.add(trade('historical-future',start+1000));
- assert.equal((await h.run()).body.status,'BASELINED');assert.equal(h.sends.length,0);assert.equal(h.f.data.size,1);
+ assert.equal((await h.run()).body.status,'BASELINED');assert.equal(h.sends.length,0);assert.equal(h.f.data.size,2);
  h.advance();h.add(trade('new'));const before=JSON.stringify([h.current,h.archive]);
  assert.equal((await h.run()).body.status,'COMPLETE');assert.equal(h.sends.length,1);
  assert.equal((await h.run()).body.status,'COMPLETE');assert.equal(h.sends.length,1);
  assert.equal(JSON.stringify([h.current,h.archive]),before);
- assert(h.f.commands.every(c=>(c[0]==='EVAL'?c[3]:c[1]).startsWith(KEY_PREFIX)));
+ assert(h.f.commands.every(c=>[KEY_PREFIX,ACTIVE_KEY_PREFIX].some(p=>(c[0]==='EVAL'?c[3]:c[1]).startsWith(p))));
  assert(h.calls.every(c=>c.url===h.env.UPSTASH_REDIS_REST_URL||c.url.startsWith('https://api.telegram.org/')));
  const record=JSON.parse(h.f.data.get(notificationKey('new')));assert.equal(record.status,'SENT');assert.equal(record.expiresAt,null);
 });
@@ -207,3 +207,107 @@ test('generation has no default, trim or query fallback',async()=>{
 test('correct generation cannot bypass invalid signature',async()=>{const h=productionHarness();h.valid=false;assert.equal((await h.run()).body.status,'AUTH_REJECTED');assert.equal(h.calls.length,0);assert.equal(h.f.data.size,0);});
 test('generation guard bounds malformed and oversized bodies without I/O',async()=>{for(const body of ['{','x'.repeat(4097)]){const h=productionHarness();assert.equal((await h.run({body})).body.status,'BODY_REJECTED');assert.equal(h.calls.length,0);}});
 test('signature receives BOM unchanged; malformed JSON fails closed',async()=>{const h=productionHarness();const body='\ufeff{"generation":"synthetic-generation-v1"}';assert.equal((await h.run({body})).body.status,'BODY_REJECTED');assert.equal(h.verified[0].body,body);assert.equal(h.calls.length,0);});
+
+// ACTIVE tests use the same production handler/Redis/Telegram fakes as READY.
+const {ACTIVE_KEY_PREFIX,activeNotificationKey,formatActiveTradeTelegramMessage}=await import('../lib/ready-trade-notifications.js');
+const {ACTIVE_BASELINE_KEY,createCombinedNotificationWorker}=await import('../lib/ready-trade-notification-adapters.js');
+const activeBaselinePhysical=ACTIVE_KEY_PREFIX+createHash('sha256').update('trade-active-v1:telegram:control:baseline').digest('hex');
+function activate(h,t){
+ t.outcome={...t.outcome,status:'Active',entryPrice:100.25,activatedAt:new Date(h.clock.now()).toISOString(),entryCheck:{source:'OKX 1m candles',rule:'first-complete-candle-touch',timestampPrecision:'1m'}};
+ h.archive[t.tradeId]={...archived(t),stage:1};return t;
+}
+function activeState(h,t){return JSON.parse(h.f.data.get(activeNotificationKey(t.tradeId)));}
+async function activeReady(){const h=productionHarness();h.add(trade('waiting-before-baseline',start-1000));await h.run();h.advance();activate(h,h.current[0]);return h;}
+test('ACTIVE historical baseline captures only existing Active and sends nothing',async()=>{
+ const h=productionHarness();h.add(trade('old-active',start-1000));activate(h,h.current[0]);h.add(trade('waiting',start-1000));
+ await h.run();const b=JSON.parse(h.f.data.get(activeBaselinePhysical));assert.equal(b.version,1);assert.deepEqual(b.identities,[createHash('sha256').update('old-active').digest('hex')]);assert.equal(h.sends.length,0);
+ h.advance();await h.run();assert.equal(h.sends.length,0);
+});
+test('ACTIVE waiting at baseline later Active sends once independently of READY',async()=>{
+ const h=await activeReady(),t=h.current[0],before=JSON.stringify([h.current,h.archive]);
+ await h.run();await h.run();assert.equal(h.sends.length,1);assert.equal(activeState(h,t).status,'SENT');assert.equal(activeState(h,t).expiresAt,null);
+ assert.equal(h.sends[0].text,formatActiveTradeTelegramMessage(t));assert.equal(JSON.stringify([h.current,h.archive]),before);
+ assert(!h.f.data.has(notificationKey(t.tradeId)));assert.deepEqual(Object.keys(h.sends[0]).sort(),['chat_id','text']);
+});
+test('READY SENT does not block independent ACTIVE event',async()=>{
+ const h=productionHarness();await h.run();h.advance();h.add(trade('both'));await h.run();assert.equal(h.sends.length,1);
+ h.advance();activate(h,h.current[0]);await h.run();await h.run();assert.equal(h.sends.length,2);
+ assert.equal(JSON.parse(h.f.data.get(notificationKey('both'))).status,'SENT');assert.equal(activeState(h,h.current[0]).status,'SENT');
+});
+for(const status of ['SENT','FAILED','UNKNOWN','CLAIMED'])test('ACTIVE permanent '+status+' tombstone blocks duplicate',async()=>{
+ const h=await activeReady(),t=h.current[0];await h.run();const r=activeState(h,t);r.status=status;if(status==='CLAIMED'){delete r.reasonCode;delete r.completedAt;}
+ h.f.data.set(activeNotificationKey(t.tradeId),JSON.stringify(r));await h.run();assert.equal(h.sends.length,1);
+});
+for(const [name,change] of [
+ ['nonActive',t=>t.outcome.status='Pending'],['nonAplus',t=>t.opportunityGrade='A'],['missing identity',t=>delete t.tradeId],
+ ['missing entry',t=>delete t.outcome.entryPrice],['missing activation',t=>delete t.outcome.activatedAt],['future activation',t=>t.outcome.activatedAt='2099-01-01T00:00:00.000Z'],
+ ['bad timestamp',t=>t.outcome.activatedAt='bad'],['invalid direction',t=>t.direction='UNKNOWN'],['bad price',t=>t.outcome.entryPrice=0],
+ ['terminal',t=>t.outcome.status='Closed']
+])test('ACTIVE rejects '+name,async()=>{const h=await activeReady();change(h.current[0]);await h.run();assert.equal(h.sends.length,0);});
+for(const [name,change] of [
+ ['origin grade',a=>a.origin.grade='A'],['confirmed evidence',a=>a.origin.confirmedAPlus=false],['stage',a=>a.stage=0],['terminal flag',a=>a.terminal=true],['outcome mismatch',a=>a.outcomeJSON='{}'],['plan mismatch',a=>a.initialPlanJSON='{}']
+])test('ACTIVE archive evidence rejects '+name,async()=>{const h=await activeReady();change(h.archive[h.current[0].tradeId]);await h.run();assert.equal(h.sends.length,0);});
+test('ACTIVE reread Active to Pending before send fails closed permanently',async()=>{
+ const h=await activeReady();const fetch=h.fetchImpl;h.fetchImpl=async(u,o)=>{const c=JSON.parse(o.body);if(Array.isArray(c)&&c[0]==='SET'&&c[1]===activeNotificationKey(h.current[0].tradeId)){h.current[0].outcome.status='Pending';h.archive[h.current[0].tradeId]={...archived(h.current[0]),stage:0};}return fetch(u,o);};
+ await h.run();assert.equal(h.sends.length,0);assert.equal(activeState(h,h.current[0]).status,'FAILED');
+});
+test('ACTIVE 25 concurrent workers exactly one send',async()=>{const h=await activeReady();await Promise.all(Array.from({length:25},()=>h.run()));assert.equal(h.sends.length,1);assert.equal(activeState(h,h.current[0]).status,'SENT');});
+test('ACTIVE baseline creation does not suppress existing READY processing',async()=>{
+ const h=productionHarness();h.f.data.set(KEY_PREFIX+createHash('sha256').update('ready-trade-v1:telegram:control:baseline').digest('hex'),JSON.stringify({version:1,notificationsEnabledAt:start,identities:[]}));h.advance();h.add(trade('ready-during-upgrade'));
+ await h.run();assert.equal(h.sends.length,1);assert.match(h.sends[0].text,/НОВЫЙ SETUP/);assert(h.f.data.has(activeBaselinePhysical));
+});
+test('ACTIVE storage failure does not break READY send',async()=>{
+ const h=productionHarness();await h.run();h.advance();h.add(trade('ready-independent'));const fetch=h.fetchImpl;
+ h.fetchImpl=async(u,o)=>{if(u===h.env.UPSTASH_REDIS_REST_URL){const c=JSON.parse(o.body);if(c[1]?.startsWith(ACTIVE_KEY_PREFIX))throw Error('ACTIVE_ONLY_FAILURE');}return fetch(u,o);};
+ assert.equal((await h.run()).body.status,'COMPLETE');assert.equal(h.sends.length,1);assert.match(h.sends[0].text,/НОВЫЙ SETUP/);
+});
+test('ACTIVE UNKNOWN Telegram leaves permanent tombstone without blind resend',async()=>{
+ const h=await activeReady(),fetch=h.fetchImpl;let attempts=0;
+ h.fetchImpl=async(u,o)=>{if(u.startsWith('https://api.telegram.org/')){attempts++;throw Error('OFFLINE_UNKNOWN');}return fetch(u,o);};
+ await h.run();await h.run();assert.equal(attempts,1);assert.equal(activeState(h,h.current[0]).status,'UNKNOWN');assert.equal(activeState(h,h.current[0]).expiresAt,null);
+});
+test('ACTIVE writes isolated; canonical immutable, no scanner or lifecycle requests',async()=>{
+ const h=await activeReady(),before=JSON.stringify([h.current,h.archive]);h.f.commands.length=0;h.calls.length=0;await h.run();
+ assert.equal(JSON.stringify([h.current,h.archive]),before);
+ const writes=h.f.commands.filter(c=>c[0]!=='GET');assert(writes.length>0);assert(writes.every(c=>(c[0]==='EVAL'?c[3]:c[1]).startsWith(ACTIVE_KEY_PREFIX)));
+ for(const call of h.calls){if(call.url.startsWith('https://api.telegram.org/'))continue;assert.equal(call.url,h.env.UPSTASH_REDIS_REST_URL);const c=JSON.parse(call.opts.body);if([OPEN_KEY,ARCHIVE_KEY].includes(c[1]))assert.equal(c[0],'GET');}
+ const stored=JSON.stringify([...h.f.data]);assert(!stored.includes(h.current[0].tradeId));assert(!stored.includes(h.env.TELEGRAM_BOT_TOKEN));
+});
+test('ACTIVE waiting at baseline with delayed candle activation is still a new saved Active event',async()=>{const h=await activeReady();h.current[0].outcome.activatedAt=new Date(start).toISOString();h.archive[h.current[0].tradeId]={...archived(h.current[0]),stage:1};await h.run();assert.equal(h.sends.length,1);});
+test('ACTIVE formatter labels modeled entry and never claims exchange fill',()=>{
+ const h=productionHarness();h.add(trade('format',start-1000));activate(h,h.current[0]);const text=formatActiveTradeTelegramMessage(h.current[0]);
+ assert.match(text,/Модельный вход: 100.25/);assert.match(text,/Статус: ACTIVE/);assert.match(text,/2026-11-04 12:00:00.000 UTC/);
+ assert.doesNotMatch(text,/Planned Entry|TP2|TP3|leverage|parse_mode/);assert.equal(formatActiveTradeTelegramMessage(h.current[0]),text);
+});
+test('ACTIVE frozen core hash unchanged',()=>assert.equal(createHash('sha256').update(readFileSync(new URL('../api/market.js',import.meta.url))).digest('hex'),'992e1ffd1fb51cd55a597723977aea20bd3e242e9e3f51f74cf2c058b0563d41'));
+test('ACTIVE concurrent first baseline runs never send historical Active',async()=>{
+ const h=productionHarness();h.add(trade('historical-race',start-1000));activate(h,h.current[0]);
+ await Promise.all(Array.from({length:25},()=>h.run()));assert.equal(h.sends.length,0);assert(h.f.data.has(activeBaselinePhysical));
+});
+test('ACTIVE storage rejects READY keys, trading keys and TTL',async()=>{
+ const f=redisFake(),kv=createPersistentNotificationKV(f),storage=createNotificationStorage(kv,{event:'active'});
+ for(const key of [persistentKey,OPEN_KEY,ARCHIVE_KEY])await assert.rejects(storage.claim({key,record:claimRecord(),expiresAt:null}));
+ await assert.rejects(kv.createIfAbsent(ACTIVE_BASELINE_KEY,{version:1,notificationsEnabledAt:start,identities:[]},{expiresAt:start+1}));
+ await assert.rejects(kv.compareAndSet(ACTIVE_BASELINE_KEY,{status:'CLAIMED'},terminal('SENT')));assert.equal(f.commands.length,0);
+});
+test('ACTIVE failed finalize leaves blocking claim and never resends',async()=>{
+ const h=await activeReady(),fetch=h.fetchImpl;h.fetchImpl=async(u,o)=>{const c=JSON.parse(o.body);if(Array.isArray(c)&&c[0]==='EVAL'&&c[3].startsWith(ACTIVE_KEY_PREFIX))throw Error('CAS_FAILURE');return fetch(u,o);};
+ await h.run();await h.run();assert.equal(h.sends.length,1);assert.equal(activeState(h,h.current[0]).status,'CLAIMED');
+});
+test('ACTIVE Telegram failure cannot prevent READY next poll',async()=>{
+ const h=await activeReady(),fetch=h.fetchImpl;h.fetchImpl=async(u,o)=>u.startsWith('https://api.telegram.org/')?reply(500,{ok:false}):fetch(u,o);
+ await h.run();assert.equal(activeState(h,h.current[0]).status,'UNKNOWN');h.fetchImpl=fetch;h.advance();h.add(trade('later-ready'));await h.run();assert.equal(h.sends.length,1);assert.match(h.sends[0].text,/НОВЫЙ SETUP/);
+});
+for(const mode of ['disabled','generation'])test('ACTIVE and READY gates zero I/O with eligible records '+mode,async()=>{
+ const h=await activeReady();h.add(trade('also-ready'));h.calls.length=0;h.sends.length=0;h.f.commands.length=0;
+ if(mode==='disabled')h.env.READY_TRADE_NOTIFICATIONS_ENABLED='false';
+ await h.run(mode==='generation'?{body:'{}'}:{});assert.equal(h.calls.length,0);assert.equal(h.f.commands.length,0);assert.equal(h.sends.length,0);
+});
+test('ACTIVE guard rejects invalid saved status even with matching archive',async()=>{
+ const h=await activeReady();h.current[0].outcome.status='Pending';h.archive[h.current[0].tradeId]={...archived(h.current[0]),stage:1};
+ await h.run();assert.equal(h.sends.length,0);assert(!h.f.data.has(activeNotificationKey(h.current[0].tradeId)));
+});
+test('ACTIVE formatter missing actual modeled entry never substitutes planned entry',()=>{
+ const h=productionHarness();h.add(trade('missing-entry',start-1000));activate(h,h.current[0]);delete h.current[0].outcome.entryPrice;
+ assert.throws(()=>formatActiveTradeTelegramMessage(h.current[0]),/MESSAGE_INVALID/);
+});
