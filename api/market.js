@@ -8286,7 +8286,7 @@ async function readPersistentTradeData() {
 async function readRankingHistory() {
   try {
     const history = [];
-    const chunkSize = 60;
+    const chunkSize = 10;
 
     for (
       let start = 0;

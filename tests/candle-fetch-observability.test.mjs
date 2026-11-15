@@ -38,4 +38,21 @@ test('logger throws on HTTP rejection: remains null',()=>compare(()=>response([]
 test('logger throws on incomplete data: same range',()=>compare(()=>response([]),'INCOMPLETE_OR_INVALID_DATA',{loggerThrows:true}));
 test('secrets, arbitrary error name/code, body, stack and headers never copied',async()=>{const r=await compare(()=>{throw {name:'SECRET_NAME',code:'SECRET_CODE',message:'SECRET_MESSAGE',stack:'SECRET_STACK',headers:{Authorization:'SECRET_HEADER'},body:'SECRET_BODY'}},'UNKNOWN');assert.doesNotMatch(JSON.stringify(r.logs),/SECRET/);});
 test('zero-duration complete window is silent',()=>compare(()=>{throw Error('must not fetch')},null,{minutes:0}));
-test('lifecycle and everything outside fetch function remain byte-identical',()=>{const strip=s=>s.replace(/async function fetchOKXRecentPriceRange\([\s\S]*?(?=\nfunction isValidLifecycleCandle)/,'FETCH');assert.equal(strip(current),strip(original));});
+const approved=execFileSync('git',['show','6ac35e455797ef9bdff148a06a3eedc1fceb7b9e:api/market.js'],{encoding:'utf8'});
+const historyPrefix='async function readRankingHistory() {\n  try {\n    const history = [];\n    const chunkSize = ';
+function assertApprovedSource(source){
+ const allowed=historyPrefix+'10;';
+ assert.equal(source.split(allowed).length-1,1);
+ assert.equal(source.replace(allowed,historyPrefix+'60;'),approved);
+}
+test('approved observability and all core bytes preserved except exact history batch change',()=>assertApprovedSource(current));
+test('source invariant rejects other batch sizes and unrelated changes',()=>{
+ for(const changed of [current.replace(historyPrefix+'10;',historyPrefix+'20;'),current+'\n// unrelated change'])
+  assert.throws(()=>assertApprovedSource(changed));
+});
+test('source invariant rejects candle return, retry, lifecycle and scanner edits',()=>{
+ for(const name of ['async function fetchOKXRecentPriceRange','function isValidLifecycleCandle','async function readRankingHistory','export default async function handler']){
+  assert.ok(current.includes(name));
+  assert.throws(()=>assertApprovedSource(current.replace(name,'/* unapproved */'+name)));
+ }
+});
